@@ -33,7 +33,7 @@ describe("joinSession", () => {
     expect(joinResult.sessionCode).toBe(hostResult.sessionCode);
     expect(joinResult.hostPeerId).toBe(hostResult.peerId);
     expect(joinResult.localPeerId).toBeTruthy();
-    expect(joinResult.passwordProvided).toBe(false);
+    expect(joinResult.authenticated).toBe(false);
     expect(joinResult.node.getState()).toBe("listening");
   }, 30_000);
 
@@ -56,7 +56,7 @@ describe("joinSession", () => {
       networkConfig: { transportMode: "test" },
     });
 
-    expect(joinResult.passwordProvided).toBe(true);
+    expect(joinResult.authenticated).toBe(true);
   }, 30_000);
 
   it("throws on invalid session code", async () => {
