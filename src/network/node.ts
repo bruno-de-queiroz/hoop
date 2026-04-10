@@ -1,4 +1,5 @@
 import type { Libp2p } from "libp2p";
+import type { Stream, Connection } from "@libp2p/interface";
 import { multiaddr } from "@multiformats/multiaddr";
 import { type NetworkConfig, type NodeState, type PeerInfo } from "./types.js";
 import { createLibp2pNode, type NodeFactory } from "./factory.js";
@@ -8,6 +9,7 @@ export class HoopNode {
   private state: NodeState = "stopped";
   private readonly config: NetworkConfig;
   private readonly factory: NodeFactory;
+  private readonly authenticatedPeers = new Set<string>();
 
   constructor(config: NetworkConfig, factory: NodeFactory = createLibp2pNode) {
     this.config = config;
@@ -39,6 +41,7 @@ export class HoopNode {
     await this.node.stop();
     this.node = null;
     this.state = "stopped";
+    this.authenticatedPeers.clear();
   }
 
   getListenAddresses(): string[] {
@@ -111,5 +114,53 @@ export class HoopNode {
     }
 
     this.node.removeEventListener(event, handler as (evt: Event) => void);
+  }
+
+  async handle(
+    protocol: string,
+    handler: (stream: Stream, connection: Connection) => void | Promise<void>
+  ): Promise<void> {
+    if (this.node === null) {
+      throw new Error("HoopNode is not started");
+    }
+
+    await this.node.handle(protocol, handler);
+  }
+
+  async unhandle(protocol: string): Promise<void> {
+    if (this.node === null) {
+      throw new Error("HoopNode is not started");
+    }
+
+    await this.node.unhandle(protocol);
+  }
+
+  async openStream(address: string, protocol: string): Promise<Stream> {
+    if (this.node === null) {
+      throw new Error("HoopNode is not started");
+    }
+
+    return this.node.dialProtocol(multiaddr(address), protocol);
+  }
+
+  async closeConnection(peerId: string): Promise<void> {
+    if (this.node === null) {
+      throw new Error("HoopNode is not started");
+    }
+
+    const connections = this.node.getConnections();
+    for (const conn of connections) {
+      if (conn.remotePeer.toString() === peerId) {
+        await conn.close();
+      }
+    }
+  }
+
+  isPeerAuthenticated(peerId: string): boolean {
+    return this.authenticatedPeers.has(peerId);
+  }
+
+  markPeerAuthenticated(peerId: string): void {
+    this.authenticatedPeers.add(peerId);
   }
 }

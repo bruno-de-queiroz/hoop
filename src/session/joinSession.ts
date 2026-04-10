@@ -1,5 +1,12 @@
 import { HoopNode } from "../network/node.js";
 import type { NetworkConfig } from "../network/types.js";
+import {
+  AUTH_PROTOCOL,
+  readFromStream,
+  writeToStream,
+  type AuthRequest,
+  type AuthResponse,
+} from "../network/protocol.js";
 import { validateSessionCode } from "./sessionCode.js";
 
 export interface JoinSessionParams {
@@ -13,7 +20,7 @@ export interface JoinSessionResult {
   sessionCode: string;
   localPeerId: string;
   hostPeerId: string;
-  passwordProvided: boolean;
+  authenticated: boolean;
   node: HoopNode;
 }
 
@@ -50,11 +57,30 @@ export async function joinSession(
     );
   }
 
+  let authenticated = false;
+  if (params.password) {
+    try {
+      const stream = await node.openStream(params.hostAddress, AUTH_PROTOCOL);
+      await writeToStream(stream, { password: params.password } as AuthRequest);
+      const response = await readFromStream<AuthResponse>(stream);
+      if (!response.accepted) {
+        await node.stop();
+        throw new Error(`Authentication failed: ${response.reason ?? "Invalid password"}`);
+      }
+      authenticated = true;
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("Authentication failed")) {
+        throw err;
+      }
+      // Protocol not supported — host doesn't require a password, proceed
+    }
+  }
+
   return {
     sessionCode: params.sessionCode,
     localPeerId: node.getPeerId(),
     hostPeerId: connectedPeers[0].peerId,
-    passwordProvided: params.password !== undefined,
+    authenticated,
     node,
   };
 }
