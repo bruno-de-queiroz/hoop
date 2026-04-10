@@ -23,6 +23,7 @@ export class HoopNode {
 
     try {
       this.node = await this.factory(this.config);
+      await this.node.start();
       this.state = "listening";
     } catch (err) {
       this.state = "error";
