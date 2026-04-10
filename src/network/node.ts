@@ -1,15 +1,17 @@
-import { createLibp2p, type Libp2p } from "libp2p";
+import type { Libp2p } from "libp2p";
 import { multiaddr } from "@multiformats/multiaddr";
 import { type NetworkConfig, type NodeState, type PeerInfo } from "./types.js";
-import { createTransportConfig } from "./transport.js";
+import { createLibp2pNode, type NodeFactory } from "./factory.js";
 
 export class HoopNode {
   private node: Libp2p | null = null;
   private state: NodeState = "stopped";
-  private config: NetworkConfig;
+  private readonly config: NetworkConfig;
+  private readonly factory: NodeFactory;
 
-  constructor(config: NetworkConfig) {
+  constructor(config: NetworkConfig, factory: NodeFactory = createLibp2pNode) {
     this.config = config;
+    this.factory = factory;
   }
 
   async start(): Promise<void> {
@@ -20,8 +22,7 @@ export class HoopNode {
     this.state = "starting";
 
     try {
-      this.node = await createLibp2p(createTransportConfig(this.config));
-      await this.node.start();
+      this.node = await this.factory(this.config);
       this.state = "listening";
     } catch (err) {
       this.state = "error";
