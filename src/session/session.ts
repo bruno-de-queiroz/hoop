@@ -1,7 +1,10 @@
+export type ExecutionTarget = "host-only" | "proponent-side";
+
 export interface Session {
   sessionCode: string;
   passwordHash?: string;
   hostId: string;
+  executionTarget: ExecutionTarget;
   createdAt: Date;
 }
 
