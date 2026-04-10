@@ -3,6 +3,7 @@ import type { Libp2p } from 'libp2p';
 import { HoopNode } from '../node.js';
 import { createTestNode, createTestRelay, waitForConnection } from './helpers.js';
 import { SessionStore } from '../../session/session.js';
+import { generateSessionCode, validateSessionCode } from '../../session/sessionCode.js';
 
 describe('E2E: network layer', () => {
   describe('Two peers connect directly via TCP', () => {
@@ -78,6 +79,62 @@ describe('E2E: network layer', () => {
 
       expect(host.getConnectedPeers().length).toBeGreaterThan(0);
       expect(peer.getConnectedPeers().length).toBeGreaterThan(0);
+    }, 30_000);
+  });
+
+  describe('Join flow — joiner dials host session', () => {
+    let host: HoopNode;
+    let joiner: HoopNode;
+
+    afterEach(async () => {
+      await Promise.all([host?.stop(), joiner?.stop()]);
+    });
+
+    it('joiner connects to host using session listen address', async () => {
+      // Host creates session and starts node (simulates /hoop-new)
+      const store = new SessionStore();
+      const sessionCode = generateSessionCode();
+      expect(validateSessionCode(sessionCode)).toBe(true);
+
+      store.create({
+        sessionCode,
+        hostId: 'test-host',
+        executionTarget: 'host-only',
+        createdAt: new Date(),
+      });
+
+      host = createTestNode();
+      await host.start();
+
+      store.update(sessionCode, {
+        peerId: host.getPeerId(),
+        listenAddresses: host.getListenAddresses(),
+      });
+
+      // Joiner retrieves host address (simulates /hoop-join prompting for address)
+      const session = store.get(sessionCode);
+      expect(session).toBeDefined();
+      expect(session!.listenAddresses).toBeDefined();
+      expect(session!.listenAddresses!.length).toBeGreaterThan(0);
+
+      const hostAddress = session!.listenAddresses![0];
+
+      // Joiner creates node and dials host
+      joiner = createTestNode();
+      await joiner.start();
+
+      const connectionPromise = waitForConnection(host);
+      await joiner.dial(hostAddress);
+      await connectionPromise;
+
+      // Both sides see the connection
+      const hostPeers = host.getConnectedPeers();
+      const joinerPeers = joiner.getConnectedPeers();
+
+      expect(hostPeers).toHaveLength(1);
+      expect(joinerPeers).toHaveLength(1);
+      expect(joinerPeers[0].peerId).toBe(host.getPeerId());
+      expect(hostPeers[0].peerId).toBe(joiner.getPeerId());
     }, 30_000);
   });
 

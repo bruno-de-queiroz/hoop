@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateSessionCode } from "../sessionCode.js";
+import { generateSessionCode, validateSessionCode } from "../sessionCode.js";
 
 const AMBIGUOUS = /[01OIL]/;
 
@@ -22,5 +22,43 @@ describe("generateSessionCode", () => {
       codes.add(generateSessionCode());
     }
     expect(codes.size).toBe(1000);
+  });
+});
+
+describe("validateSessionCode", () => {
+  it("returns true for a valid code", () => {
+    expect(validateSessionCode("ABC-XYZ")).toBe(true);
+  });
+
+  it("returns true for a code produced by generateSessionCode", () => {
+    const code = generateSessionCode();
+    expect(validateSessionCode(code)).toBe(true);
+  });
+
+  it("returns false for wrong length", () => {
+    expect(validateSessionCode("AB-XYZ")).toBe(false);
+    expect(validateSessionCode("ABCD-XYZ")).toBe(false);
+    expect(validateSessionCode("ABC-XYZW")).toBe(false);
+  });
+
+  it("returns false when the dash is missing", () => {
+    expect(validateSessionCode("ABCXYZ7")).toBe(false);
+  });
+
+  it("returns false for lowercase characters", () => {
+    expect(validateSessionCode("abc-XYZ")).toBe(false);
+    expect(validateSessionCode("ABC-xyz")).toBe(false);
+  });
+
+  it("returns false for ambiguous characters (0, O, 1, I, L)", () => {
+    expect(validateSessionCode("0BC-XYZ")).toBe(false);
+    expect(validateSessionCode("OBC-XYZ")).toBe(false);
+    expect(validateSessionCode("1BC-XYZ")).toBe(false);
+    expect(validateSessionCode("IBC-XYZ")).toBe(false);
+    expect(validateSessionCode("LBC-XYZ")).toBe(false);
+  });
+
+  it("returns false for an empty string", () => {
+    expect(validateSessionCode("")).toBe(false);
   });
 });

@@ -38,14 +38,24 @@ The user may invoke this skill as `/hoop-new` or `/hoop-new <password>`. Extract
 
 6. **Store the session.** Call `SessionStore.create(session)` to register it in the in-memory store.
 
-7. **Display the session code.** Output the session code prominently so the user can share it with peers. Use a format like:
+7. **Start the P2P listener.** Import `HoopNode` from `src/network/node.ts` and `NetworkConfig` from `src/network/types.ts`. Construct a `NetworkConfig` with transport mode `"local"` (production WebRTC requires TURN server configuration). Create a `HoopNode` instance with that config and call `await hoopNode.start()` to bring the node online.
+
+8. **Update session with network info.** After the node starts, call `SessionStore.update(sessionCode, { peerId: hoopNode.getPeerId(), listenAddresses: hoopNode.getListenAddresses() })` to record the node's peer ID and listen addresses on the session.
+
+9. **Display the session details.** Output the session code, peer ID, and listen addresses prominently so the user can share them with peers. Use a format like:
 
    ```
    Session created!
 
    Code: ABC-XYZ
    Target: Host-Only
+   Peer ID: 12D3KooW...
+   Listen addresses:
+     /ip4/0.0.0.0/tcp/12345/p2p/12D3KooW...
 
-   Share this code with peers — they can join with /hoop-join ABC-XYZ
+   Share this code with peers — they can join with:
+     /hoop-join ABC-XYZ
+
+   Provide the listen address above so peers can connect.
    ```
    If the session is password-protected, also note that a password is required to join.
