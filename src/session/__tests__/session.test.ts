@@ -105,4 +105,49 @@ describe("SessionStore", () => {
     expect(retrieved).toBeDefined();
     expect(retrieved?.executionTarget).toBe("proponent-side");
   });
+
+  it("update sets peerId and listenAddresses on an existing session", () => {
+    const session: Session = {
+      sessionCode: "UPD-001",
+      hostId: "host-upd",
+      executionTarget: "host-only",
+      createdAt: new Date(),
+    };
+
+    store.create(session);
+    store.update("UPD-001", {
+      peerId: "12D3KooWExamplePeerId",
+      listenAddresses: ["/ip4/127.0.0.1/tcp/4001", "/ip4/192.168.1.10/tcp/4001"],
+    });
+
+    const retrieved = store.get("UPD-001");
+    expect(retrieved?.peerId).toBe("12D3KooWExamplePeerId");
+    expect(retrieved?.listenAddresses).toEqual([
+      "/ip4/127.0.0.1/tcp/4001",
+      "/ip4/192.168.1.10/tcp/4001",
+    ]);
+  });
+
+  it("update throws an Error when the session code does not exist", () => {
+    expect(() =>
+      store.update("NON-EXI", { peerId: "12D3KooWSomePeer" })
+    ).toThrow(Error);
+  });
+
+  it("creates a session with network fields and retrieves them intact", () => {
+    const session: Session = {
+      sessionCode: "NET-001",
+      hostId: "host-net",
+      executionTarget: "host-only",
+      createdAt: new Date("2024-03-01T10:00:00Z"),
+      peerId: "12D3KooWRoundTripPeer",
+      listenAddresses: ["/ip4/10.0.0.1/tcp/9000"],
+    };
+
+    store.create(session);
+    const retrieved = store.get("NET-001");
+
+    expect(retrieved?.peerId).toBe("12D3KooWRoundTripPeer");
+    expect(retrieved?.listenAddresses).toEqual(["/ip4/10.0.0.1/tcp/9000"]);
+  });
 });
