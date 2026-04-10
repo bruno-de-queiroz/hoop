@@ -6,6 +6,8 @@ export interface Session {
   hostId: string;
   executionTarget: ExecutionTarget;
   createdAt: Date;
+  peerId?: string;
+  listenAddresses?: string[];
 }
 
 export class SessionStore {
@@ -24,5 +26,13 @@ export class SessionStore {
 
   exists(code: string): boolean {
     return this.sessions.has(code);
+  }
+
+  update(code: string, fields: Partial<Pick<Session, 'peerId' | 'listenAddresses'>>): void {
+    const session = this.sessions.get(code);
+    if (!session) {
+      throw new Error(`Session not found: ${code}`);
+    }
+    Object.assign(session, fields);
   }
 }
