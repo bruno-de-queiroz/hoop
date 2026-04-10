@@ -9,7 +9,7 @@
     "test:watch": "vitest"
   },
   "devDependencies": {
-    "@types/bcrypt": "^5.0.2",
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.1.0"
@@ -21,7 +21,7 @@
     "@libp2p/identify": "^4.1.0",
     "@libp2p/tcp": "^11.0.15",
     "@libp2p/webrtc": "^6.0.16",
-    "bcrypt": "^5.1.1",
+    "bcryptjs": "^3.0.3",
     "libp2p": "^3.2.0"
   }
 }

@@ -11,10 +11,10 @@ The user may invoke this skill as `/hoop-join <sessionCode>` or `/hoop-join <ses
 
 ## Steps
 
-1. **Parse and validate the session code.** Extract the session code from the first argument. Use `validateSessionCode()` from `src/session/sessionCode.ts` to verify it matches the `XXX-XXX` format. If invalid, display an error and stop:
+1. **Parse the session code.** Extract the session code from the first argument. If no session code is provided, display an error and stop:
 
    ```
-   Invalid session code format. Expected XXX-XXX (e.g., ABC-XYZ).
+   Usage: /hoop-join <sessionCode> [password]
    ```
 
 2. **Prompt for the host's listen address.** Ask the user to provide the host's multiaddr (listen address). The host displays this when creating a session. Present exactly this prompt:
@@ -25,29 +25,33 @@ The user may invoke this skill as `/hoop-join <sessionCode>` or `/hoop-join <ses
 
    The address should look like `/ip4/x.x.x.x/tcp/PORT/p2p/PEERID`. If the user provides an empty or clearly invalid address, ask again.
 
-3. **Create and start a P2P node.** Create a `HoopNode` from `src/network/node.ts` with a `NetworkConfig` (from `src/network/types.ts`) using transport mode `"local"`. Start the node with `await hoopNode.start()`.
+3. **Join the session.** Call `joinSession()` from `src/session/joinSession.ts`:
 
-4. **Connect to the host.** Call `await hoopNode.dial(hostAddress)` where `hostAddress` is the multiaddr provided by the user. This initiates the libp2p connection to the host's P2P node.
+   ```typescript
+   import { joinSession } from "src/session/joinSession.js";
 
-5. **Verify the connection.** After dialing, call `hoopNode.getConnectedPeers()` to confirm the connection was established. If no peers are connected, display an error:
-
+   const result = await joinSession({
+     sessionCode,    // from args
+     hostAddress,    // from step 2
+     password,       // from args — undefined if not provided
+   });
    ```
-   Failed to connect to host. Check the address and try again.
-   ```
 
-6. **Display connection status.** On successful connection, display:
+   This internally validates the session code, starts a P2P node, dials the host, and verifies the connection. If the session code is invalid or the connection fails, it throws an error — display the error message and stop.
+
+4. **Display connection status.** On success, display:
 
    ```
    Connected to session!
 
-   Session: ABC-XYZ
-   Host peer: 12D3KooW...
-   Local peer: 12D3KooW...
+   Session: <result.sessionCode>
+   Host peer: <result.hostPeerId>
+   Local peer: <result.localPeerId>
 
    You are now connected to the host's P2P node.
    ```
 
-   If a password was provided, also note:
+   If `result.passwordProvided` is true, also note:
    ```
    Password provided — awaiting handshake verification (managed by host).
    ```
