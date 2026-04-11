@@ -1,7 +1,10 @@
 import type { Stream } from "@libp2p/interface";
+import type { StateTree } from "../state/stateTree.js";
 
 export const AUTH_PROTOCOL = "/hoop/auth/1.0.0";
 export const AUTH_TIMEOUT_MS = 10_000;
+
+export const SYNC_PROTOCOL = "/hoop/sync/1.0.0";
 
 export interface AuthRequest {
   password: string;
@@ -10,6 +13,14 @@ export interface AuthRequest {
 export interface AuthResponse {
   accepted: boolean;
   reason?: string;
+}
+
+export interface SyncRequest {
+  type: "state-tree";
+}
+
+export interface SyncResponse {
+  stateTree: StateTree;
 }
 
 function concatBytes(chunks: Uint8Array[]): Uint8Array {
