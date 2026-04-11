@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { createSession, type CreateSessionResult } from '../createSession.js';
+import { createSession, noOpGitOps, type CreateSessionResult } from '../createSession.js';
 import { joinSession, type JoinSessionResult } from '../joinSession.js';
 import { SessionStore } from '../session.js';
 import { createEmptyStateTree, type StateTree } from '../../state/stateTree.js';
@@ -24,6 +24,7 @@ describe('State tree sync', () => {
       {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
+        gitOps: noOpGitOps,
       },
       store,
     );
@@ -51,6 +52,7 @@ describe('State tree sync', () => {
       {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
+        gitOps: noOpGitOps,
         stateTree,
       },
       store,
@@ -75,6 +77,7 @@ describe('State tree sync', () => {
       {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
+        gitOps: noOpGitOps,
         stateTree,
       },
       store,
@@ -101,6 +104,7 @@ describe('State tree sync', () => {
         executionTarget: 'host-only',
         password: 'secret',
         networkConfig: { transportMode: 'test' },
+        gitOps: noOpGitOps,
         stateTree,
       },
       store,
@@ -128,6 +132,7 @@ describe('State tree sync', () => {
         executionTarget: 'host-only',
         password: 'secret',
         networkConfig: { transportMode: 'test' },
+        gitOps: noOpGitOps,
         stateTree,
       },
       store,

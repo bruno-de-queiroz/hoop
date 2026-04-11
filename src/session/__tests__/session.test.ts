@@ -128,6 +128,25 @@ describe("SessionStore", () => {
     ]);
   });
 
+  it("update sets branchName and worktreePath on an existing session", () => {
+    const session: Session = {
+      sessionCode: "WRK-001",
+      hostId: "host-wrk",
+      executionTarget: "host-only",
+      createdAt: new Date(),
+    };
+
+    store.create(session);
+    store.update("WRK-001", {
+      branchName: "hoop/session-WRK-001",
+      worktreePath: "/tmp/repo/.hoop/sessions/WRK-001",
+    });
+
+    const retrieved = store.get("WRK-001");
+    expect(retrieved?.branchName).toBe("hoop/session-WRK-001");
+    expect(retrieved?.worktreePath).toBe("/tmp/repo/.hoop/sessions/WRK-001");
+  });
+
   it("update throws an Error when the session code does not exist", () => {
     expect(() =>
       store.update("NON-EXI", { peerId: "12D3KooWSomePeer" })

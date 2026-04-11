@@ -1,4 +1,5 @@
 import { hostname } from "node:os";
+import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { HoopNode } from "../network/node.js";
@@ -17,12 +18,33 @@ import {
 import { type ExecutionTarget, type Session, SessionStore } from "./session.js";
 import { generateSessionCode } from "./sessionCode.js";
 import { type StateTree, createEmptyStateTree } from "../state/stateTree.js";
+import {
+  getGitRoot as defaultGetGitRoot,
+  createSessionWorktree as defaultCreateSessionWorktree,
+  type GitResult,
+} from "../git/gitBranch.js";
+
+export interface GitOps {
+  getGitRoot: () => Promise<GitResult<string>>;
+  createSessionWorktree: (branchName: string, worktreePath: string) => Promise<GitResult<string>>;
+}
+
+const defaultGitOps: GitOps = {
+  getGitRoot: defaultGetGitRoot,
+  createSessionWorktree: defaultCreateSessionWorktree,
+};
+
+export const noOpGitOps: GitOps = {
+  getGitRoot: async () => ({ ok: false, error: "disabled" }),
+  createSessionWorktree: async () => ({ ok: false, error: "disabled" }),
+};
 
 export interface CreateSessionParams {
   password?: string;
   executionTarget: ExecutionTarget;
   networkConfig?: NetworkConfig;
   stateTree?: StateTree;
+  gitOps?: GitOps;
 }
 
 export interface CreateSessionResult {
@@ -34,6 +56,8 @@ export interface CreateSessionResult {
   listenAddresses: string[];
   node: HoopNode;
   stateTree: StateTree;
+  branchName?: string;
+  worktreePath?: string;
 }
 
 export async function createSession(
@@ -114,6 +138,26 @@ export async function createSession(
     listenAddresses: node.getListenAddresses(),
   });
 
+  let branchName: string | undefined;
+  let worktreePath: string | undefined;
+
+  const gitOps = params.gitOps ?? defaultGitOps;
+  const gitRootResult = await gitOps.getGitRoot();
+  if (gitRootResult.ok) {
+    branchName = `hoop/session-${sessionCode}`;
+    const targetPath = join(gitRootResult.value, ".hoop", "sessions", sessionCode);
+    const worktreeResult = await gitOps.createSessionWorktree(branchName, targetPath);
+    if (worktreeResult.ok) {
+      worktreePath = worktreeResult.value;
+      store.update(sessionCode, { branchName, worktreePath });
+    } else {
+      branchName = undefined;
+      console.warn(`[hoop] Failed to create session worktree: ${worktreeResult.error}`);
+    }
+  } else {
+    console.warn(`[hoop] Not a git repository, skipping worktree creation: ${gitRootResult.error}`);
+  }
+
   return {
     sessionCode,
     hostId,
@@ -123,5 +167,7 @@ export async function createSession(
     listenAddresses: node.getListenAddresses(),
     node,
     stateTree,
+    branchName,
+    worktreePath,
   };
 }

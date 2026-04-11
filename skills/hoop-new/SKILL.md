@@ -34,7 +34,7 @@ The user may invoke this skill as `/hoop-new` or `/hoop-new <password>`. Extract
    });
    ```
 
-   This internally generates a session code, hashes the password (if provided), starts a P2P node, and registers the session. The returned `result` contains `sessionCode`, `peerId`, `listenAddresses`, `executionTarget`, `hostId`, and `passwordProtected`.
+   This internally generates a session code, hashes the password (if provided), starts a P2P node, registers the session, and creates a git worktree for the session. The returned `result` contains `sessionCode`, `peerId`, `listenAddresses`, `executionTarget`, `hostId`, `passwordProtected`, `branchName`, and `worktreePath`.
 
 3. **Display the session details.** Output the result prominently so the user can share with peers:
 
@@ -43,6 +43,8 @@ The user may invoke this skill as `/hoop-new` or `/hoop-new <password>`. Extract
 
    Code: <result.sessionCode>
    Target: <result.executionTarget>
+   Branch: <result.branchName>
+   Worktree: <result.worktreePath>
    Peer ID: <result.peerId>
    Listen addresses:
      <each address from result.listenAddresses>
@@ -54,3 +56,4 @@ The user may invoke this skill as `/hoop-new` or `/hoop-new <password>`. Extract
    ```
 
    If `result.passwordProtected` is true, also note that a password is required to join.
+   If `result.branchName` is undefined, note that git worktree creation was skipped (not a git repository).

@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { joinSession, type JoinSessionResult } from "../joinSession.js";
-import { createSession, type CreateSessionResult } from "../createSession.js";
+import { createSession, noOpGitOps, type CreateSessionResult } from "../createSession.js";
 import { SessionStore } from "../session.js";
 
 describe("joinSession", () => {
@@ -20,6 +20,7 @@ describe("joinSession", () => {
       {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
+        gitOps: noOpGitOps,
       },
       store,
     );
@@ -45,6 +46,7 @@ describe("joinSession", () => {
         password: "secret",
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
+        gitOps: noOpGitOps,
       },
       store,
     );

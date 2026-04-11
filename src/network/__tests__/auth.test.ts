@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { createSession, type CreateSessionResult } from '../../session/createSession.js';
+import { createSession, noOpGitOps, type CreateSessionResult } from '../../session/createSession.js';
 import { joinSession, type JoinSessionResult } from '../../session/joinSession.js';
 import { SessionStore } from '../../session/session.js';
 import { HoopNode } from '../node.js';
@@ -29,6 +29,7 @@ describe('Auth handshake', () => {
         password: 'secret',
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
+        gitOps: noOpGitOps,
       },
       store,
     );
@@ -53,6 +54,7 @@ describe('Auth handshake', () => {
         password: 'secret',
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
+        gitOps: noOpGitOps,
       },
       store,
     );
@@ -75,6 +77,7 @@ describe('Auth handshake', () => {
       {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
+        gitOps: noOpGitOps,
       },
       store,
     );
@@ -97,6 +100,7 @@ describe('Auth handshake', () => {
       {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
+        gitOps: noOpGitOps,
       },
       store,
     );
@@ -121,6 +125,7 @@ describe('Auth handshake', () => {
         password: 'secret',
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
+        gitOps: noOpGitOps,
       },
       store,
     );
