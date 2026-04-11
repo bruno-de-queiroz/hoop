@@ -25,7 +25,7 @@ export interface JoinGitOps {
   checkoutBranch: (branchName: string) => Promise<GitResult>;
 }
 
-const defaultJoinGitOps: JoinGitOps = {
+export const realJoinGitOps: JoinGitOps = {
   getGitRoot: defaultGetGitRoot,
   fetchBranch: defaultFetchBranch,
   checkoutBranch: defaultCheckoutBranch,
@@ -42,7 +42,7 @@ export interface JoinSessionParams {
   hostAddress: string;
   password?: string;
   networkConfig?: NetworkConfig;
-  gitOps?: JoinGitOps;
+  gitOps: JoinGitOps;
 }
 
 export interface JoinSessionResult {
@@ -113,7 +113,7 @@ export async function joinSession(
 
   let branchName: string | undefined;
   if (syncResponse.branchName) {
-    const gitOps = params.gitOps ?? defaultJoinGitOps;
+    const gitOps = params.gitOps;
 
     const gitRootResult = await gitOps.getGitRoot();
     if (!gitRootResult.ok) {

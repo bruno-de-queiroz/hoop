@@ -29,7 +29,7 @@ export interface GitOps {
   createSessionWorktree: (branchName: string, worktreePath: string) => Promise<GitResult<string>>;
 }
 
-const defaultGitOps: GitOps = {
+export const realGitOps: GitOps = {
   getGitRoot: defaultGetGitRoot,
   createSessionWorktree: defaultCreateSessionWorktree,
 };
@@ -44,7 +44,7 @@ export interface CreateSessionParams {
   executionTarget: ExecutionTarget;
   networkConfig?: NetworkConfig;
   stateTree?: StateTree;
-  gitOps?: GitOps;
+  gitOps: GitOps;
 }
 
 export interface CreateSessionResult {
@@ -128,7 +128,7 @@ export async function createSession(
     listenAddresses: node.getListenAddresses(),
   });
 
-  const gitOps = params.gitOps ?? defaultGitOps;
+  const gitOps = params.gitOps;
   const gitRootResult = await gitOps.getGitRoot();
   if (!gitRootResult.ok) {
     await node.stop();
