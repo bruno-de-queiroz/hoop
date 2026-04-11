@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { createSession, noOpGitOps, type CreateSessionResult, type GitOps } from "../createSession.js";
+import { createSession, stubGitOps, type CreateSessionResult, type GitOps } from "../createSession.js";
 import { SessionStore } from "../session.js";
 import { validateSessionCode } from "../sessionCode.js";
 
@@ -18,7 +18,7 @@ describe("createSession", () => {
       {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
-        gitOps: noOpGitOps,
+        gitOps: stubGitOps,
       },
       store,
     );
@@ -44,7 +44,7 @@ describe("createSession", () => {
         password: "secret123",
         executionTarget: "proponent-side",
         networkConfig: { transportMode: "test" },
-        gitOps: noOpGitOps,
+        gitOps: stubGitOps,
       },
       store,
     );
@@ -64,7 +64,7 @@ describe("createSession", () => {
       {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
-        gitOps: noOpGitOps,
+        gitOps: stubGitOps,
       },
       store,
     );
@@ -104,7 +104,7 @@ describe("createSession", () => {
     expect(session!.worktreePath).toBe(result.worktreePath);
   }, 30_000);
 
-  it("still creates session when git root is not available", async () => {
+  it("throws when git root is not available", async () => {
     const mockGitOps: GitOps = {
       getGitRoot: vi.fn().mockResolvedValue({ ok: false, error: "fatal: not a git repository" }),
       createSessionWorktree: vi.fn(),
@@ -112,23 +112,21 @@ describe("createSession", () => {
 
     const store = new SessionStore();
 
-    result = await createSession(
-      {
-        executionTarget: "host-only",
-        networkConfig: { transportMode: "test" },
-        gitOps: mockGitOps,
-      },
-      store,
-    );
+    await expect(
+      createSession(
+        {
+          executionTarget: "host-only",
+          networkConfig: { transportMode: "test" },
+          gitOps: mockGitOps,
+        },
+        store,
+      ),
+    ).rejects.toThrow("Git repository required");
 
-    expect(result.sessionCode).toBeTruthy();
-    expect(result.branchName).toBeUndefined();
-    expect(result.worktreePath).toBeUndefined();
-    expect(result.node.getState()).toBe("listening");
     expect(mockGitOps.createSessionWorktree).not.toHaveBeenCalled();
   }, 30_000);
 
-  it("still creates session when worktree creation fails", async () => {
+  it("throws when worktree creation fails", async () => {
     const mockGitOps: GitOps = {
       getGitRoot: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo" }),
       createSessionWorktree: vi.fn().mockResolvedValue({ ok: false, error: "branch already exists" }),
@@ -136,21 +134,15 @@ describe("createSession", () => {
 
     const store = new SessionStore();
 
-    result = await createSession(
-      {
-        executionTarget: "host-only",
-        networkConfig: { transportMode: "test" },
-        gitOps: mockGitOps,
-      },
-      store,
-    );
-
-    expect(result.sessionCode).toBeTruthy();
-    expect(result.branchName).toBeUndefined();
-    expect(result.worktreePath).toBeUndefined();
-    expect(result.node.getState()).toBe("listening");
-
-    const session = store.get(result.sessionCode);
-    expect(session!.branchName).toBeUndefined();
+    await expect(
+      createSession(
+        {
+          executionTarget: "host-only",
+          networkConfig: { transportMode: "test" },
+          gitOps: mockGitOps,
+        },
+        store,
+      ),
+    ).rejects.toThrow("Failed to create session worktree");
   }, 30_000);
 });

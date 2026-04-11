@@ -21,6 +21,7 @@ export interface SyncRequest {
 
 export interface SyncResponse {
   stateTree: StateTree;
+  branchName?: string;
 }
 
 function concatBytes(chunks: Uint8Array[]): Uint8Array {

@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { createSession, noOpGitOps, type CreateSessionResult } from '../../session/createSession.js';
-import { joinSession, type JoinSessionResult } from '../../session/joinSession.js';
+import { createSession, stubGitOps, type CreateSessionResult } from '../../session/createSession.js';
+import { joinSession, stubJoinGitOps, type JoinSessionResult } from '../../session/joinSession.js';
 import { SessionStore } from '../../session/session.js';
 import { HoopNode } from '../node.js';
 import { AUTH_TIMEOUT_MS } from '../protocol.js';
@@ -29,7 +29,7 @@ describe('Auth handshake', () => {
         password: 'secret',
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
-        gitOps: noOpGitOps,
+        gitOps: stubGitOps,
       },
       store,
     );
@@ -41,6 +41,7 @@ describe('Auth handshake', () => {
       hostAddress,
       password: 'secret',
       networkConfig: { transportMode: 'test' },
+      gitOps: stubJoinGitOps,
     });
 
     expect(joinResult.authenticated).toBe(true);
@@ -54,7 +55,7 @@ describe('Auth handshake', () => {
         password: 'secret',
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
-        gitOps: noOpGitOps,
+        gitOps: stubGitOps,
       },
       store,
     );
@@ -77,7 +78,7 @@ describe('Auth handshake', () => {
       {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
-        gitOps: noOpGitOps,
+        gitOps: stubGitOps,
       },
       store,
     );
@@ -88,6 +89,7 @@ describe('Auth handshake', () => {
       sessionCode: hostResult.sessionCode,
       hostAddress,
       networkConfig: { transportMode: 'test' },
+      gitOps: stubJoinGitOps,
     });
 
     expect(joinResult.authenticated).toBe(false);
@@ -100,7 +102,7 @@ describe('Auth handshake', () => {
       {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
-        gitOps: noOpGitOps,
+        gitOps: stubGitOps,
       },
       store,
     );
@@ -112,6 +114,7 @@ describe('Auth handshake', () => {
       hostAddress,
       password: 'unnecessary',
       networkConfig: { transportMode: 'test' },
+      gitOps: stubJoinGitOps,
     });
 
     expect(joinResult.authenticated).toBe(false);
@@ -125,7 +128,7 @@ describe('Auth handshake', () => {
         password: 'secret',
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
-        gitOps: noOpGitOps,
+        gitOps: stubGitOps,
       },
       store,
     );
