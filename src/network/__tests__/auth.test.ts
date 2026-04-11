@@ -68,6 +68,7 @@ describe('Auth handshake', () => {
         hostAddress,
         password: 'wrong',
         networkConfig: { transportMode: 'test' },
+        gitOps: stubJoinGitOps,
       }),
     ).rejects.toThrow('Authentication failed');
   }, 30_000);

@@ -69,6 +69,7 @@ describe("joinSession", () => {
         sessionCode: "invalid",
         hostAddress: "/ip4/127.0.0.1/tcp/0",
         networkConfig: { transportMode: "test" },
+        gitOps: stubJoinGitOps,
       }),
     ).rejects.toThrow("Invalid session code format");
   });
@@ -79,6 +80,7 @@ describe("joinSession", () => {
         sessionCode: "ABC-XYZ",
         hostAddress: "/ip4/127.0.0.1/tcp/1",
         networkConfig: { transportMode: "test" },
+        gitOps: stubJoinGitOps,
       }),
     ).rejects.toThrow("Failed to connect to host");
   }, 30_000);
