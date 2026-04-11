@@ -2,11 +2,15 @@ import { HoopNode } from "../network/node.js";
 import type { NetworkConfig } from "../network/types.js";
 import {
   AUTH_PROTOCOL,
+  SYNC_PROTOCOL,
   readFromStream,
   writeToStream,
   type AuthRequest,
   type AuthResponse,
+  type SyncRequest,
+  type SyncResponse,
 } from "../network/protocol.js";
+import type { StateTree } from "../state/stateTree.js";
 import { validateSessionCode } from "./sessionCode.js";
 
 export interface JoinSessionParams {
@@ -22,6 +26,7 @@ export interface JoinSessionResult {
   hostPeerId: string;
   authenticated: boolean;
   node: HoopNode;
+  stateTree: StateTree;
 }
 
 export async function joinSession(
@@ -76,11 +81,16 @@ export async function joinSession(
     }
   }
 
+  const syncStream = await node.openStream(params.hostAddress, SYNC_PROTOCOL);
+  await writeToStream(syncStream, { type: "state-tree" } as SyncRequest);
+  const syncResponse = await readFromStream<SyncResponse>(syncStream);
+
   return {
     sessionCode: params.sessionCode,
     localPeerId: node.getPeerId(),
     hostPeerId: connectedPeers[0].peerId,
     authenticated,
     node,
+    stateTree: syncResponse.stateTree,
   };
 }

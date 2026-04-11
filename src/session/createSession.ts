@@ -6,18 +6,23 @@ import type { NetworkConfig } from "../network/types.js";
 import {
   AUTH_PROTOCOL,
   AUTH_TIMEOUT_MS,
+  SYNC_PROTOCOL,
   readFromStream,
   writeToStream,
   type AuthRequest,
   type AuthResponse,
+  type SyncRequest,
+  type SyncResponse,
 } from "../network/protocol.js";
 import { type ExecutionTarget, type Session, SessionStore } from "./session.js";
 import { generateSessionCode } from "./sessionCode.js";
+import { type StateTree, createEmptyStateTree } from "../state/stateTree.js";
 
 export interface CreateSessionParams {
   password?: string;
   executionTarget: ExecutionTarget;
   networkConfig?: NetworkConfig;
+  stateTree?: StateTree;
 }
 
 export interface CreateSessionResult {
@@ -28,6 +33,7 @@ export interface CreateSessionResult {
   peerId: string;
   listenAddresses: string[];
   node: HoopNode;
+  stateTree: StateTree;
 }
 
 export async function createSession(
@@ -35,6 +41,7 @@ export async function createSession(
   store: SessionStore = new SessionStore(),
 ): Promise<CreateSessionResult> {
   const sessionCode = generateSessionCode();
+  const stateTree = params.stateTree ?? createEmptyStateTree();
 
   let passwordHash: string | undefined;
   if (params.password) {
@@ -92,6 +99,16 @@ export async function createSession(
     });
   }
 
+  await node.handle(SYNC_PROTOCOL, async (stream, connection) => {
+    await readFromStream<SyncRequest>(stream);
+    const remotePeerId = connection.remotePeer.toString();
+    if (passwordHash && !node.isPeerAuthenticated(remotePeerId)) {
+      await writeToStream(stream, { stateTree: createEmptyStateTree() } as SyncResponse);
+      return;
+    }
+    await writeToStream(stream, { stateTree } as SyncResponse);
+  });
+
   store.update(sessionCode, {
     peerId: node.getPeerId(),
     listenAddresses: node.getListenAddresses(),
@@ -105,5 +122,6 @@ export async function createSession(
     peerId: node.getPeerId(),
     listenAddresses: node.getListenAddresses(),
     node,
+    stateTree,
   };
 }
