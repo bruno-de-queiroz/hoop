@@ -34,9 +34,9 @@ const defaultGitOps: GitOps = {
   createSessionWorktree: defaultCreateSessionWorktree,
 };
 
-export const noOpGitOps: GitOps = {
-  getGitRoot: async () => ({ ok: false, error: "disabled" }),
-  createSessionWorktree: async () => ({ ok: false, error: "disabled" }),
+export const stubGitOps: GitOps = {
+  getGitRoot: async () => ({ ok: true, value: "/tmp/hoop-stub" }),
+  createSessionWorktree: async (_branch, path) => ({ ok: true, value: path }),
 };
 
 export interface CreateSessionParams {
@@ -56,8 +56,8 @@ export interface CreateSessionResult {
   listenAddresses: string[];
   node: HoopNode;
   stateTree: StateTree;
-  branchName?: string;
-  worktreePath?: string;
+  branchName: string;
+  worktreePath: string;
 }
 
 export async function createSession(
@@ -123,6 +123,29 @@ export async function createSession(
     });
   }
 
+  store.update(sessionCode, {
+    peerId: node.getPeerId(),
+    listenAddresses: node.getListenAddresses(),
+  });
+
+  const gitOps = params.gitOps ?? defaultGitOps;
+  const gitRootResult = await gitOps.getGitRoot();
+  if (!gitRootResult.ok) {
+    await node.stop();
+    throw new Error(`Git repository required: ${gitRootResult.error}`);
+  }
+
+  const branchName = `hoop/session-${sessionCode}`;
+  const targetPath = join(gitRootResult.value, ".hoop", "sessions", sessionCode);
+  const worktreeResult = await gitOps.createSessionWorktree(branchName, targetPath);
+  if (!worktreeResult.ok) {
+    await node.stop();
+    throw new Error(`Failed to create session worktree: ${worktreeResult.error}`);
+  }
+
+  const worktreePath = worktreeResult.value;
+  store.update(sessionCode, { branchName, worktreePath });
+
   await node.handle(SYNC_PROTOCOL, async (stream, connection) => {
     await readFromStream<SyncRequest>(stream);
     const remotePeerId = connection.remotePeer.toString();
@@ -130,33 +153,8 @@ export async function createSession(
       await writeToStream(stream, { stateTree: createEmptyStateTree() } as SyncResponse);
       return;
     }
-    await writeToStream(stream, { stateTree } as SyncResponse);
+    await writeToStream(stream, { stateTree, branchName } as SyncResponse);
   });
-
-  store.update(sessionCode, {
-    peerId: node.getPeerId(),
-    listenAddresses: node.getListenAddresses(),
-  });
-
-  let branchName: string | undefined;
-  let worktreePath: string | undefined;
-
-  const gitOps = params.gitOps ?? defaultGitOps;
-  const gitRootResult = await gitOps.getGitRoot();
-  if (gitRootResult.ok) {
-    branchName = `hoop/session-${sessionCode}`;
-    const targetPath = join(gitRootResult.value, ".hoop", "sessions", sessionCode);
-    const worktreeResult = await gitOps.createSessionWorktree(branchName, targetPath);
-    if (worktreeResult.ok) {
-      worktreePath = worktreeResult.value;
-      store.update(sessionCode, { branchName, worktreePath });
-    } else {
-      branchName = undefined;
-      console.warn(`[hoop] Failed to create session worktree: ${worktreeResult.error}`);
-    }
-  } else {
-    console.warn(`[hoop] Not a git repository, skipping worktree creation: ${gitRootResult.error}`);
-  }
 
   return {
     sessionCode,

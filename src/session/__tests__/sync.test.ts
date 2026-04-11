@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { createSession, noOpGitOps, type CreateSessionResult } from '../createSession.js';
-import { joinSession, type JoinSessionResult } from '../joinSession.js';
+import { createSession, stubGitOps, type CreateSessionResult } from '../createSession.js';
+import { joinSession, stubJoinGitOps, type JoinSessionResult } from '../joinSession.js';
 import { SessionStore } from '../session.js';
 import { createEmptyStateTree, type StateTree } from '../../state/stateTree.js';
 
@@ -24,7 +24,7 @@ describe('State tree sync', () => {
       {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
-        gitOps: noOpGitOps,
+        gitOps: stubGitOps,
       },
       store,
     );
@@ -33,6 +33,7 @@ describe('State tree sync', () => {
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
       networkConfig: { transportMode: 'test' },
+      gitOps: stubJoinGitOps,
     });
 
     expect(joinResult.stateTree.queue).toEqual([]);
@@ -52,7 +53,7 @@ describe('State tree sync', () => {
       {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
-        gitOps: noOpGitOps,
+        gitOps: stubGitOps,
         stateTree,
       },
       store,
@@ -62,6 +63,7 @@ describe('State tree sync', () => {
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
       networkConfig: { transportMode: 'test' },
+      gitOps: stubJoinGitOps,
     });
 
     expect(joinResult.stateTree).toEqual(stateTree);
@@ -77,7 +79,7 @@ describe('State tree sync', () => {
       {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
-        gitOps: noOpGitOps,
+        gitOps: stubGitOps,
         stateTree,
       },
       store,
@@ -87,6 +89,7 @@ describe('State tree sync', () => {
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
       networkConfig: { transportMode: 'test' },
+      gitOps: stubJoinGitOps,
     });
 
     expect(joinResult.authenticated).toBe(false);
@@ -104,7 +107,7 @@ describe('State tree sync', () => {
         executionTarget: 'host-only',
         password: 'secret',
         networkConfig: { transportMode: 'test' },
-        gitOps: noOpGitOps,
+        gitOps: stubGitOps,
         stateTree,
       },
       store,
@@ -115,6 +118,7 @@ describe('State tree sync', () => {
       hostAddress: hostResult.listenAddresses[0],
       password: 'secret',
       networkConfig: { transportMode: 'test' },
+      gitOps: stubJoinGitOps,
     });
 
     expect(joinResult.authenticated).toBe(true);
@@ -132,7 +136,7 @@ describe('State tree sync', () => {
         executionTarget: 'host-only',
         password: 'secret',
         networkConfig: { transportMode: 'test' },
-        gitOps: noOpGitOps,
+        gitOps: stubGitOps,
         stateTree,
       },
       store,
@@ -142,6 +146,7 @@ describe('State tree sync', () => {
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
       networkConfig: { transportMode: 'test' },
+      gitOps: stubJoinGitOps,
     });
 
     expect(joinResult.stateTree.queue).toEqual([]);

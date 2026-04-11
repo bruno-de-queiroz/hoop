@@ -1,6 +1,6 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { joinSession, type JoinSessionResult } from "../joinSession.js";
-import { createSession, noOpGitOps, type CreateSessionResult } from "../createSession.js";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { joinSession, stubJoinGitOps, type JoinSessionResult, type JoinGitOps } from "../joinSession.js";
+import { createSession, stubGitOps, type CreateSessionResult } from "../createSession.js";
 import { SessionStore } from "../session.js";
 
 describe("joinSession", () => {
@@ -20,7 +20,7 @@ describe("joinSession", () => {
       {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
-        gitOps: noOpGitOps,
+        gitOps: stubGitOps,
       },
       store,
     );
@@ -29,6 +29,7 @@ describe("joinSession", () => {
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
       networkConfig: { transportMode: "test" },
+      gitOps: stubJoinGitOps,
     });
 
     expect(joinResult.sessionCode).toBe(hostResult.sessionCode);
@@ -46,7 +47,7 @@ describe("joinSession", () => {
         password: "secret",
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
-        gitOps: noOpGitOps,
+        gitOps: stubGitOps,
       },
       store,
     );
@@ -56,6 +57,7 @@ describe("joinSession", () => {
       hostAddress: hostResult.listenAddresses[0],
       password: "secret",
       networkConfig: { transportMode: "test" },
+      gitOps: stubJoinGitOps,
     });
 
     expect(joinResult.authenticated).toBe(true);
@@ -79,5 +81,124 @@ describe("joinSession", () => {
         networkConfig: { transportMode: "test" },
       }),
     ).rejects.toThrow("Failed to connect to host");
+  }, 30_000);
+
+  it("receives branchName from host and calls git ops", async () => {
+    const store = new SessionStore();
+
+    hostResult = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubGitOps,
+      },
+      store,
+    );
+
+    const mockJoinGitOps: JoinGitOps = {
+      getGitRoot: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/peer-repo" }),
+      fetchBranch: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
+      checkoutBranch: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
+    };
+
+    joinResult = await joinSession({
+      sessionCode: hostResult.sessionCode,
+      hostAddress: hostResult.listenAddresses[0],
+      networkConfig: { transportMode: "test" },
+      gitOps: mockJoinGitOps,
+    });
+
+    expect(joinResult.branchName).toBe(hostResult.branchName);
+    expect(mockJoinGitOps.getGitRoot).toHaveBeenCalled();
+    expect(mockJoinGitOps.fetchBranch).toHaveBeenCalledWith(hostResult.branchName);
+    expect(mockJoinGitOps.checkoutBranch).toHaveBeenCalledWith(hostResult.branchName);
+  }, 30_000);
+
+  it("throws when git root is not available on peer", async () => {
+    const store = new SessionStore();
+
+    hostResult = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubGitOps,
+      },
+      store,
+    );
+
+    const failingGitOps: JoinGitOps = {
+      getGitRoot: vi.fn().mockResolvedValue({ ok: false, error: "fatal: not a git repository" }),
+      fetchBranch: vi.fn(),
+      checkoutBranch: vi.fn(),
+    };
+
+    await expect(
+      joinSession({
+        sessionCode: hostResult.sessionCode,
+        hostAddress: hostResult.listenAddresses[0],
+        networkConfig: { transportMode: "test" },
+        gitOps: failingGitOps,
+      }),
+    ).rejects.toThrow("Git repository required");
+
+    expect(failingGitOps.fetchBranch).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it("throws when fetch fails on peer", async () => {
+    const store = new SessionStore();
+
+    hostResult = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubGitOps,
+      },
+      store,
+    );
+
+    const failingGitOps: JoinGitOps = {
+      getGitRoot: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/peer-repo" }),
+      fetchBranch: vi.fn().mockResolvedValue({ ok: false, error: "could not read from remote repository" }),
+      checkoutBranch: vi.fn(),
+    };
+
+    await expect(
+      joinSession({
+        sessionCode: hostResult.sessionCode,
+        hostAddress: hostResult.listenAddresses[0],
+        networkConfig: { transportMode: "test" },
+        gitOps: failingGitOps,
+      }),
+    ).rejects.toThrow("Failed to fetch session branch");
+
+    expect(failingGitOps.checkoutBranch).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it("throws when checkout fails on peer", async () => {
+    const store = new SessionStore();
+
+    hostResult = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubGitOps,
+      },
+      store,
+    );
+
+    const failingGitOps: JoinGitOps = {
+      getGitRoot: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/peer-repo" }),
+      fetchBranch: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
+      checkoutBranch: vi.fn().mockResolvedValue({ ok: false, error: "checkout conflict" }),
+    };
+
+    await expect(
+      joinSession({
+        sessionCode: hostResult.sessionCode,
+        hostAddress: hostResult.listenAddresses[0],
+        networkConfig: { transportMode: "test" },
+        gitOps: failingGitOps,
+      }),
+    ).rejects.toThrow("Failed to checkout session branch");
   }, 30_000);
 });

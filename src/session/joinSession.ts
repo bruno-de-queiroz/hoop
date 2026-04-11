@@ -12,12 +12,37 @@ import {
 } from "../network/protocol.js";
 import type { StateTree } from "../state/stateTree.js";
 import { validateSessionCode } from "./sessionCode.js";
+import {
+  getGitRoot as defaultGetGitRoot,
+  fetchBranch as defaultFetchBranch,
+  checkoutBranch as defaultCheckoutBranch,
+  type GitResult,
+} from "../git/gitBranch.js";
+
+export interface JoinGitOps {
+  getGitRoot: () => Promise<GitResult<string>>;
+  fetchBranch: (branchName: string, remote?: string) => Promise<GitResult>;
+  checkoutBranch: (branchName: string) => Promise<GitResult>;
+}
+
+const defaultJoinGitOps: JoinGitOps = {
+  getGitRoot: defaultGetGitRoot,
+  fetchBranch: defaultFetchBranch,
+  checkoutBranch: defaultCheckoutBranch,
+};
+
+export const stubJoinGitOps: JoinGitOps = {
+  getGitRoot: async () => ({ ok: true, value: "/tmp/hoop-stub" }),
+  fetchBranch: async () => ({ ok: true, value: undefined as never }),
+  checkoutBranch: async () => ({ ok: true, value: undefined as never }),
+};
 
 export interface JoinSessionParams {
   sessionCode: string;
   hostAddress: string;
   password?: string;
   networkConfig?: NetworkConfig;
+  gitOps?: JoinGitOps;
 }
 
 export interface JoinSessionResult {
@@ -27,6 +52,7 @@ export interface JoinSessionResult {
   authenticated: boolean;
   node: HoopNode;
   stateTree: StateTree;
+  branchName?: string;
 }
 
 export async function joinSession(
@@ -85,6 +111,31 @@ export async function joinSession(
   await writeToStream(syncStream, { type: "state-tree" } as SyncRequest);
   const syncResponse = await readFromStream<SyncResponse>(syncStream);
 
+  let branchName: string | undefined;
+  if (syncResponse.branchName) {
+    const gitOps = params.gitOps ?? defaultJoinGitOps;
+
+    const gitRootResult = await gitOps.getGitRoot();
+    if (!gitRootResult.ok) {
+      await node.stop();
+      throw new Error(`Git repository required: ${gitRootResult.error}`);
+    }
+
+    const fetchResult = await gitOps.fetchBranch(syncResponse.branchName);
+    if (!fetchResult.ok) {
+      await node.stop();
+      throw new Error(`Failed to fetch session branch: ${fetchResult.error}`);
+    }
+
+    const checkoutResult = await gitOps.checkoutBranch(syncResponse.branchName);
+    if (!checkoutResult.ok) {
+      await node.stop();
+      throw new Error(`Failed to checkout session branch: ${checkoutResult.error}`);
+    }
+
+    branchName = syncResponse.branchName;
+  }
+
   return {
     sessionCode: params.sessionCode,
     localPeerId: node.getPeerId(),
@@ -92,5 +143,6 @@ export async function joinSession(
     authenticated,
     node,
     stateTree: syncResponse.stateTree,
+    branchName,
   };
 }

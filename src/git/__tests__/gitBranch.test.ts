@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { getGitRoot, createSessionWorktree } from "../gitBranch.js";
+import { getGitRoot, createSessionWorktree, fetchBranch, checkoutBranch } from "../gitBranch.js";
 import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 
@@ -119,6 +119,87 @@ describe("createSessionWorktree", () => {
     expect(result).toEqual({
       ok: false,
       error: "spawn git ENOENT",
+    });
+  });
+});
+
+describe("fetchBranch", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("fetches branch from remote on success", async () => {
+    simulateExecFile("");
+
+    const result = await fetchBranch("hoop/session-ABC-XYZ");
+
+    expect(result.ok).toBe(true);
+    expect(mockExecFile).toHaveBeenCalledWith(
+      "git",
+      ["fetch", "origin", "hoop/session-ABC-XYZ"],
+      { cwd: undefined },
+      expect.any(Function),
+    );
+  });
+
+  it("uses custom remote when specified", async () => {
+    simulateExecFile("");
+
+    await fetchBranch("hoop/session-ABC-XYZ", "upstream");
+
+    expect(mockExecFile).toHaveBeenCalledWith(
+      "git",
+      ["fetch", "upstream", "hoop/session-ABC-XYZ"],
+      { cwd: undefined },
+      expect.any(Function),
+    );
+  });
+
+  it("returns failure on permission denied", async () => {
+    simulateExecFileError(
+      "exit code 128",
+      "fatal: could not read from remote repository",
+    );
+
+    const result = await fetchBranch("hoop/session-ABC-XYZ");
+
+    expect(result).toEqual({
+      ok: false,
+      error: "fatal: could not read from remote repository",
+    });
+  });
+});
+
+describe("checkoutBranch", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("checks out branch on success", async () => {
+    simulateExecFile("Switched to branch 'hoop/session-ABC-XYZ'");
+
+    const result = await checkoutBranch("hoop/session-ABC-XYZ");
+
+    expect(result.ok).toBe(true);
+    expect(mockExecFile).toHaveBeenCalledWith(
+      "git",
+      ["checkout", "hoop/session-ABC-XYZ"],
+      { cwd: undefined },
+      expect.any(Function),
+    );
+  });
+
+  it("returns failure when branch does not exist", async () => {
+    simulateExecFileError(
+      "exit code 1",
+      "error: pathspec 'hoop/session-ABC-XYZ' did not match any file(s) known to git",
+    );
+
+    const result = await checkoutBranch("hoop/session-ABC-XYZ");
+
+    expect(result).toEqual({
+      ok: false,
+      error: "error: pathspec 'hoop/session-ABC-XYZ' did not match any file(s) known to git",
     });
   });
 });

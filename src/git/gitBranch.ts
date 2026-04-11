@@ -34,6 +34,29 @@ export async function getGitRoot(): Promise<GitResult<string>> {
   }
 }
 
+export async function fetchBranch(
+  branchName: string,
+  remote = "origin",
+): Promise<GitResult> {
+  try {
+    await git(["fetch", remote, branchName]);
+    return { ok: true, value: undefined as never };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+export async function checkoutBranch(
+  branchName: string,
+): Promise<GitResult> {
+  try {
+    await git(["checkout", branchName]);
+    return { ok: true, value: undefined as never };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
 export async function createSessionWorktree(
   branchName: string,
   worktreePath: string,
