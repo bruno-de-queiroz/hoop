@@ -8,6 +8,8 @@ export interface Session {
   createdAt: Date;
   peerId?: string;
   listenAddresses?: string[];
+  branchName?: string;
+  worktreePath?: string;
 }
 
 export class SessionStore {
@@ -28,7 +30,7 @@ export class SessionStore {
     return this.sessions.has(code);
   }
 
-  update(code: string, fields: Partial<Pick<Session, 'peerId' | 'listenAddresses'>>): void {
+  update(code: string, fields: Partial<Pick<Session, 'peerId' | 'listenAddresses' | 'branchName' | 'worktreePath'>>): void {
     const session = this.sessions.get(code);
     if (!session) {
       throw new Error(`Session not found: ${code}`);
