@@ -7,6 +7,8 @@ import type { NetworkConfig } from "../network/types.js";
 import {
   AUTH_PROTOCOL,
   AUTH_TIMEOUT_MS,
+  ADMISSION_PROTOCOL,
+  ADMISSION_COOLDOWN_MS,
   SYNC_PROTOCOL,
   BROADCAST_PROTOCOL,
   UPDATE_PROTOCOL,
@@ -14,6 +16,8 @@ import {
   writeToStream,
   type AuthRequest,
   type AuthResponse,
+  type AdmissionRequest,
+  type AdmissionResponse,
   type SyncRequest,
   type SyncResponse,
   type UpdateResponse,
@@ -49,6 +53,8 @@ export const stubGitOps: GitOps = {
 
 export interface CreateSessionParams {
   password?: string;
+  requireAdmission?: boolean;
+  onAdmissionRequest?: (email: string, peerId: string) => Promise<boolean>;
   executionTarget: ExecutionTarget;
   networkConfig?: NetworkConfig;
   stateTree?: StateTree;
@@ -107,6 +113,51 @@ export async function createSession(
   const node = new HoopNode(networkConfig);
   await node.start();
 
+  const requireAdmission = params.requireAdmission === true && params.onAdmissionRequest !== undefined;
+  const deniedPeers = new Map<string, number>();
+
+  const requiresAuth = (): boolean => passwordHash !== undefined || requireAdmission;
+
+  if (requireAdmission) {
+    await node.handle(ADMISSION_PROTOCOL, async (stream, connection) => {
+      try {
+        const request = await readFromStream<AdmissionRequest>(stream);
+        const remotePeerId = connection.remotePeer.toString();
+
+        const deniedAt = deniedPeers.get(remotePeerId);
+        if (deniedAt !== undefined) {
+          const elapsed = Date.now() - deniedAt;
+          if (elapsed < ADMISSION_COOLDOWN_MS) {
+            const response: AdmissionResponse = {
+              admitted: false,
+              retryAfterMs: ADMISSION_COOLDOWN_MS - elapsed,
+            };
+            await writeToStream(stream, response);
+            await connection.close();
+            return;
+          }
+          deniedPeers.delete(remotePeerId);
+        }
+
+        const admitted = await params.onAdmissionRequest!(request.email, remotePeerId);
+        if (admitted) {
+          node.markPeerAuthenticated(remotePeerId);
+          await writeToStream(stream, { admitted: true } as AdmissionResponse);
+        } else {
+          deniedPeers.set(remotePeerId, Date.now());
+          const response: AdmissionResponse = {
+            admitted: false,
+            retryAfterMs: ADMISSION_COOLDOWN_MS,
+          };
+          await writeToStream(stream, response);
+          await connection.close();
+        }
+      } catch {
+        await connection.close();
+      }
+    });
+  }
+
   if (passwordHash) {
     await node.handle(AUTH_PROTOCOL, async (stream, connection) => {
       try {
@@ -124,6 +175,15 @@ export async function createSession(
       }
     });
 
+    node.addEventListener("peer:connect", (evt: CustomEvent) => {
+      const peerId = evt.detail.toString();
+      setTimeout(async () => {
+        if (node.getState() !== "stopped" && !node.isPeerAuthenticated(peerId)) {
+          await node.closeConnection(peerId);
+        }
+      }, AUTH_TIMEOUT_MS);
+    });
+  } else if (requireAdmission) {
     node.addEventListener("peer:connect", (evt: CustomEvent) => {
       const peerId = evt.detail.toString();
       setTimeout(async () => {
@@ -164,7 +224,7 @@ export async function createSession(
   await node.handle(SYNC_PROTOCOL, async (stream, connection) => {
     const request = await readFromStream<SyncRequest>(stream);
     const remotePeerId = connection.remotePeer.toString();
-    if (passwordHash && !node.isPeerAuthenticated(remotePeerId)) {
+    if (requiresAuth() && !node.isPeerAuthenticated(remotePeerId)) {
       await writeToStream(stream, { stateTree: createEmptyStateTree() } as SyncResponse);
       return;
     }
@@ -186,7 +246,7 @@ export async function createSession(
 
   await node.handle(BROADCAST_PROTOCOL, async (stream, connection) => {
     const remotePeerId = connection.remotePeer.toString();
-    if (passwordHash && !node.isPeerAuthenticated(remotePeerId)) {
+    if (requiresAuth() && !node.isPeerAuthenticated(remotePeerId)) {
       await stream.close();
       return;
     }
@@ -195,7 +255,7 @@ export async function createSession(
 
   await node.handle(UPDATE_PROTOCOL, async (stream, connection) => {
     const remotePeerId = connection.remotePeer.toString();
-    if (passwordHash && !node.isPeerAuthenticated(remotePeerId)) {
+    if (requiresAuth() && !node.isPeerAuthenticated(remotePeerId)) {
       await stream.close();
       return;
     }

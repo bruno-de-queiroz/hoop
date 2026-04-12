@@ -2,6 +2,7 @@ import { HoopNode } from "../network/node.js";
 import type { NetworkConfig } from "../network/types.js";
 import {
   AUTH_PROTOCOL,
+  ADMISSION_PROTOCOL,
   SYNC_PROTOCOL,
   BROADCAST_PROTOCOL,
   UPDATE_PROTOCOL,
@@ -12,6 +13,8 @@ import {
   readEvents,
   type AuthRequest,
   type AuthResponse,
+  type AdmissionRequest,
+  type AdmissionResponse,
   type SyncRequest,
   type SyncResponse,
   type UpdateResponse,
@@ -51,6 +54,7 @@ export interface JoinSessionParams {
   sessionCode: string;
   hostAddress: string;
   password?: string;
+  email?: string;
   networkConfig?: NetworkConfig;
   gitOps: JoinGitOps;
 }
@@ -60,6 +64,7 @@ export interface JoinSessionResult {
   localPeerId: string;
   hostPeerId: string;
   authenticated: boolean;
+  admitted: boolean;
   node: HoopNode;
   stateTree: StateTree;
   branchName?: string;
@@ -122,6 +127,28 @@ export async function joinSession(
         throw err;
       }
       // Protocol not supported — host doesn't require a password, proceed
+    }
+  }
+
+  let admitted = false;
+  if (params.email) {
+    try {
+      const stream = await node.openStream(params.hostAddress, ADMISSION_PROTOCOL);
+      await writeToStream(stream, { email: params.email } as AdmissionRequest);
+      const response = await readFromStream<AdmissionResponse>(stream);
+      if (!response.admitted) {
+        await node.stop();
+        const retryMsg = response.retryAfterMs
+          ? ` Retry after ${Math.ceil(response.retryAfterMs / 1000)}s.`
+          : "";
+        throw new Error(`Admission denied.${retryMsg}`);
+      }
+      admitted = true;
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("Admission denied")) {
+        throw err;
+      }
+      // Protocol not supported — host doesn't require admission, proceed
     }
   }
 
@@ -241,6 +268,7 @@ export async function joinSession(
     localPeerId: node.getPeerId(),
     hostPeerId: connectedPeers[0].peerId,
     authenticated,
+    admitted,
     node,
     stateTree: syncResponse.stateTree,
     branchName,

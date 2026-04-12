@@ -6,6 +6,9 @@ import type { AccumulatedState } from "../state/hostStateAccumulator.js";
 export const AUTH_PROTOCOL = "/hoop/auth/1.0.0";
 export const AUTH_TIMEOUT_MS = 10_000;
 
+export const ADMISSION_PROTOCOL = "/hoop/admission/1.0.0";
+export const ADMISSION_COOLDOWN_MS = 60_000;
+
 export const SYNC_PROTOCOL = "/hoop/sync/1.0.0";
 export const ACK_INTERVAL_MS = 5_000;
 
@@ -16,6 +19,15 @@ export interface AuthRequest {
 export interface AuthResponse {
   accepted: boolean;
   reason?: string;
+}
+
+export interface AdmissionRequest {
+  email: string;
+}
+
+export interface AdmissionResponse {
+  admitted: boolean;
+  retryAfterMs?: number;
 }
 
 export interface SyncRequest {
