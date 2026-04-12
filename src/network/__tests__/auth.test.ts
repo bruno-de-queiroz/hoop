@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { createSession, stubGitOps, type CreateSessionResult } from '../../session/createSession.js';
+import { createSession, stubGitOps, defaultAdmissionHandler, type CreateSessionResult } from '../../session/createSession.js';
 import { joinSession, stubJoinGitOps, type JoinSessionResult } from '../../session/joinSession.js';
 import { SessionStore } from '../../session/session.js';
 import { HoopNode } from '../node.js';
@@ -30,6 +30,7 @@ describe('Auth handshake', () => {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -40,6 +41,7 @@ describe('Auth handshake', () => {
       sessionCode: hostResult.sessionCode,
       hostAddress,
       password: 'secret',
+      email: 'test@example.com',
       networkConfig: { transportMode: 'test' },
       gitOps: stubJoinGitOps,
     });
@@ -56,6 +58,7 @@ describe('Auth handshake', () => {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -67,6 +70,7 @@ describe('Auth handshake', () => {
         sessionCode: hostResult.sessionCode,
         hostAddress,
         password: 'wrong',
+        email: 'test@example.com',
         networkConfig: { transportMode: 'test' },
         gitOps: stubJoinGitOps,
       }),
@@ -80,6 +84,7 @@ describe('Auth handshake', () => {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -89,6 +94,7 @@ describe('Auth handshake', () => {
     joinResult = await joinSession({
       sessionCode: hostResult.sessionCode,
       hostAddress,
+      email: 'test@example.com',
       networkConfig: { transportMode: 'test' },
       gitOps: stubJoinGitOps,
     });
@@ -104,6 +110,7 @@ describe('Auth handshake', () => {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -114,6 +121,7 @@ describe('Auth handshake', () => {
       sessionCode: hostResult.sessionCode,
       hostAddress,
       password: 'unnecessary',
+      email: 'test@example.com',
       networkConfig: { transportMode: 'test' },
       gitOps: stubJoinGitOps,
     });
@@ -130,6 +138,7 @@ describe('Auth handshake', () => {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { createSession, stubGitOps, type CreateSessionResult, type GitOps } from "../createSession.js";
+import { createSession, stubGitOps, defaultAdmissionHandler, type CreateSessionResult, type GitOps } from "../createSession.js";
 import { SessionStore } from "../session.js";
 import { validateSessionCode } from "../sessionCode.js";
 
@@ -19,6 +19,7 @@ describe("createSession", () => {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -45,6 +46,7 @@ describe("createSession", () => {
         executionTarget: "proponent-side",
         networkConfig: { transportMode: "test" },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -65,6 +67,7 @@ describe("createSession", () => {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -88,6 +91,7 @@ describe("createSession", () => {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
         gitOps: mockGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -118,6 +122,7 @@ describe("createSession", () => {
           executionTarget: "host-only",
           networkConfig: { transportMode: "test" },
           gitOps: mockGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
         },
         store,
       ),
@@ -140,6 +145,7 @@ describe("createSession", () => {
           executionTarget: "host-only",
           networkConfig: { transportMode: "test" },
           gitOps: mockGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
         },
         store,
       ),

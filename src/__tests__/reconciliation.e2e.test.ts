@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import {
   createSession,
   stubGitOps,
+  defaultAdmissionHandler,
   type CreateSessionResult,
 } from "../session/createSession.js";
 import {
@@ -57,6 +58,7 @@ describe("State reconciliation and concurrency handling", () => {
           executionTarget: "host-only",
           networkConfig: { transportMode: "test" },
           gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
         },
         store,
       );
@@ -64,6 +66,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -113,6 +116,7 @@ describe("State reconciliation and concurrency handling", () => {
           executionTarget: "host-only",
           networkConfig: { transportMode: "test" },
           gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
         },
         store,
       );
@@ -120,6 +124,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -168,6 +173,7 @@ describe("State reconciliation and concurrency handling", () => {
           executionTarget: "host-only",
           networkConfig: { transportMode: "test" },
           gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
         },
         store,
       );
@@ -176,6 +182,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -210,6 +217,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult2 = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -244,6 +252,7 @@ describe("State reconciliation and concurrency handling", () => {
           executionTarget: "host-only",
           networkConfig: { transportMode: "test" },
           gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
         },
         store,
       );
@@ -251,6 +260,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -276,6 +286,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult2 = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -303,6 +314,7 @@ describe("State reconciliation and concurrency handling", () => {
           executionTarget: "host-only",
           networkConfig: { transportMode: "test" },
           gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
         },
         store,
       );
@@ -310,6 +322,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -331,6 +344,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult2 = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -360,6 +374,7 @@ describe("State reconciliation and concurrency handling", () => {
           executionTarget: "host-only",
           networkConfig: { transportMode: "test" },
           gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
         },
         store,
       );
@@ -367,6 +382,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -374,6 +390,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult2 = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -425,6 +442,7 @@ describe("State reconciliation and concurrency handling", () => {
           executionTarget: "host-only",
           networkConfig: { transportMode: "test" },
           gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
         },
         store,
       );
@@ -432,6 +450,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -439,6 +458,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult2 = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -490,6 +510,7 @@ describe("State reconciliation and concurrency handling", () => {
           executionTarget: "host-only",
           networkConfig: { transportMode: "test" },
           gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
         },
         store,
       );
@@ -497,6 +518,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -533,6 +555,7 @@ describe("State reconciliation and concurrency handling", () => {
           executionTarget: "host-only",
           networkConfig: { transportMode: "test" },
           gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
         },
         store,
       );
@@ -540,6 +563,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -563,6 +587,7 @@ describe("State reconciliation and concurrency handling", () => {
           executionTarget: "host-only",
           networkConfig: { transportMode: "test" },
           gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
         },
         store,
       );
@@ -570,6 +595,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -614,6 +640,7 @@ describe("State reconciliation and concurrency handling", () => {
           executionTarget: "host-only",
           networkConfig: { transportMode: "test" },
           gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
         },
         store,
       );
@@ -621,6 +648,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });
@@ -667,6 +695,7 @@ describe("State reconciliation and concurrency handling", () => {
           executionTarget: "host-only",
           networkConfig: { transportMode: "test" },
           gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
         },
         store,
       );
@@ -674,6 +703,7 @@ describe("State reconciliation and concurrency handling", () => {
       joinResult = await joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       });

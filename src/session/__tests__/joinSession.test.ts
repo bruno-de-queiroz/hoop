@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { joinSession, stubJoinGitOps, type JoinSessionResult, type JoinGitOps } from "../joinSession.js";
-import { createSession, stubGitOps, type CreateSessionResult } from "../createSession.js";
+import { createSession, stubGitOps, defaultAdmissionHandler, type CreateSessionResult } from "../createSession.js";
 import { SessionStore } from "../session.js";
 
 describe("joinSession", () => {
@@ -21,6 +21,7 @@ describe("joinSession", () => {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -28,6 +29,7 @@ describe("joinSession", () => {
     joinResult = await joinSession({
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
+      email: 'test@example.com',
       networkConfig: { transportMode: "test" },
       gitOps: stubJoinGitOps,
     });
@@ -48,6 +50,8 @@ describe("joinSession", () => {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -56,6 +60,7 @@ describe("joinSession", () => {
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
       password: "secret",
+      email: 'test@example.com',
       networkConfig: { transportMode: "test" },
       gitOps: stubJoinGitOps,
     });
@@ -68,6 +73,7 @@ describe("joinSession", () => {
       joinSession({
         sessionCode: "invalid",
         hostAddress: "/ip4/127.0.0.1/tcp/0",
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       }),
@@ -79,6 +85,7 @@ describe("joinSession", () => {
       joinSession({
         sessionCode: "ABC-XYZ",
         hostAddress: "/ip4/127.0.0.1/tcp/1",
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: stubJoinGitOps,
       }),
@@ -93,6 +100,7 @@ describe("joinSession", () => {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -106,6 +114,7 @@ describe("joinSession", () => {
     joinResult = await joinSession({
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
+      email: 'test@example.com',
       networkConfig: { transportMode: "test" },
       gitOps: mockJoinGitOps,
     });
@@ -124,6 +133,7 @@ describe("joinSession", () => {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -138,6 +148,7 @@ describe("joinSession", () => {
       joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: failingGitOps,
       }),
@@ -154,6 +165,7 @@ describe("joinSession", () => {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -168,6 +180,7 @@ describe("joinSession", () => {
       joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: failingGitOps,
       }),
@@ -184,6 +197,7 @@ describe("joinSession", () => {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -198,6 +212,7 @@ describe("joinSession", () => {
       joinSession({
         sessionCode: hostResult.sessionCode,
         hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
         networkConfig: { transportMode: "test" },
         gitOps: failingGitOps,
       }),
