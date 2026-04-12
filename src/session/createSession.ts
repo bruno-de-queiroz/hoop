@@ -53,7 +53,6 @@ export const stubGitOps: GitOps = {
 
 export interface CreateSessionParams {
   password?: string;
-  requireAdmission?: boolean;
   onAdmissionRequest?: (email: string, peerId: string) => Promise<boolean>;
   executionTarget: ExecutionTarget;
   networkConfig?: NetworkConfig;
@@ -113,7 +112,7 @@ export async function createSession(
   const node = new HoopNode(networkConfig);
   await node.start();
 
-  const requireAdmission = params.requireAdmission === true && params.onAdmissionRequest !== undefined;
+  const requireAdmission = params.onAdmissionRequest !== undefined;
   const deniedPeers = new Map<string, number>();
 
   const requiresAuth = (): boolean => passwordHash !== undefined || requireAdmission;
