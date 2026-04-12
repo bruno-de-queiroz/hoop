@@ -113,5 +113,5 @@ export async function applyGitPatch(
 }
 
 export function hashContent(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
+  return createHash("md5").update(content).digest("hex");
 }
