@@ -51,7 +51,6 @@ describe("joinSession", () => {
         networkConfig: { transportMode: "test" },
         gitOps: stubGitOps,
         onAdmissionRequest: defaultAdmissionHandler,
-        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
