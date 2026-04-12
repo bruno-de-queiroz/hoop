@@ -7,14 +7,18 @@ import {
   UPDATE_PROTOCOL,
   readFromStream,
   writeToStream,
+  writeHalf,
   readEvents,
   type AuthRequest,
   type AuthResponse,
   type SyncRequest,
   type SyncResponse,
+  type UpdateResponse,
 } from "../network/protocol.js";
 import type { StateTree } from "../state/stateTree.js";
-import type { StateUpdate, FileChangeUpdate } from "../state/stateUpdate.js";
+import type { AccumulatedState } from "../state/hostStateAccumulator.js";
+import type { StateUpdate, FileChangeUpdate, BroadcastEnvelope, AckMessage } from "../state/stateUpdate.js";
+import { isBroadcastEnvelope } from "../state/stateUpdate.js";
 import { computeFileDiff } from "../diff/computeDiff.js";
 import { validateSessionCode } from "./sessionCode.js";
 import {
@@ -58,9 +62,14 @@ export interface JoinSessionResult {
   node: HoopNode;
   stateTree: StateTree;
   branchName?: string;
-  sendUpdate: (update: StateUpdate) => Promise<void>;
-  sendFileChange: (filePath: string, oldContent: string, newContent: string) => Promise<void>;
+  accumulatedState?: AccumulatedState;
+  sendUpdate: (update: StateUpdate) => Promise<UpdateResponse>;
+  sendFileChange: (filePath: string, oldContent: string, newContent: string) => Promise<UpdateResponse>;
   onBroadcast: (handler: (update: StateUpdate) => void) => void;
+  getLastSeqNo: () => number;
+  requestReplay: (fromSeq: number) => Promise<SyncResponse>;
+  sendAck: () => Promise<void>;
+  stopAckInterval: () => void;
 }
 
 export async function joinSession(
@@ -149,24 +158,33 @@ export async function joinSession(
   }
 
   const broadcastHandlers: Array<(update: StateUpdate) => void> = [];
+  let lastSeqNo = 0;
 
   const broadcastStream = await node.openStream(params.hostAddress, BROADCAST_PROTOCOL);
-  readEvents<StateUpdate>(broadcastStream, (update) => {
+  readEvents<BroadcastEnvelope>(broadcastStream, (envelope) => {
+    if (!isBroadcastEnvelope(envelope)) return;
+    if (envelope.seqNo > lastSeqNo + 1) {
+      console.warn(
+        `[joinSession] Sequence gap detected: expected ${lastSeqNo + 1}, got ${envelope.seqNo}`,
+      );
+    }
+    lastSeqNo = envelope.seqNo;
     for (const handler of broadcastHandlers) {
-      handler(update);
+      handler(envelope.update);
     }
   }).catch(() => {});
 
-  const sendUpdate = async (update: StateUpdate): Promise<void> => {
+  const sendUpdate = async (update: StateUpdate): Promise<UpdateResponse> => {
     const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
-    await writeToStream(stream, update);
+    await writeHalf(stream, update);
+    return readFromStream<UpdateResponse>(stream);
   };
 
   const sendFileChange = async (
     filePath: string,
     oldContent: string,
     newContent: string,
-  ): Promise<void> => {
+  ): Promise<UpdateResponse> => {
     if (!worktreePath) {
       throw new Error("Git repository required to send file changes");
     }
@@ -180,11 +198,41 @@ export async function joinSession(
       resultHash: diff.resultHash,
       timestamp: Date.now(),
     };
-    await sendUpdate(update);
+    return sendUpdate(update);
   };
 
   const onBroadcast = (handler: (update: StateUpdate) => void): void => {
     broadcastHandlers.push(handler);
+  };
+
+  const getLastSeqNo = (): number => lastSeqNo;
+
+  const requestReplay = async (fromSeq: number): Promise<SyncResponse> => {
+    const stream = await node.openStream(params.hostAddress, SYNC_PROTOCOL);
+    await writeToStream(stream, { type: "state-tree", replayFromSeq: fromSeq } as SyncRequest);
+    return readFromStream<SyncResponse>(stream);
+  };
+
+  const sendAck = async (): Promise<void> => {
+    const ack: AckMessage = {
+      type: "ack",
+      peerId: node.getPeerId(),
+      lastSeqNo,
+    };
+    const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
+    await writeToStream(stream, ack);
+  };
+
+  let ackInterval: ReturnType<typeof setInterval> | undefined;
+  ackInterval = setInterval(() => {
+    sendAck().catch(() => {});
+  }, 5000);
+
+  const stopAckInterval = (): void => {
+    if (ackInterval !== undefined) {
+      clearInterval(ackInterval);
+      ackInterval = undefined;
+    }
   };
 
   return {
@@ -195,8 +243,13 @@ export async function joinSession(
     node,
     stateTree: syncResponse.stateTree,
     branchName,
+    accumulatedState: syncResponse.accumulatedState,
     sendUpdate,
     sendFileChange,
     onBroadcast,
+    getLastSeqNo,
+    requestReplay,
+    sendAck,
+    stopAckInterval,
   };
 }

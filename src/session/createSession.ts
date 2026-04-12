@@ -16,9 +16,12 @@ import {
   type AuthResponse,
   type SyncRequest,
   type SyncResponse,
+  type UpdateResponse,
 } from "../network/protocol.js";
 import { BroadcastHub } from "../network/broadcastHub.js";
-import { type StateUpdate, isStateUpdate, type FileChangeUpdate } from "../state/stateUpdate.js";
+import { ReplayBuffer } from "../network/replayBuffer.js";
+import { type StateUpdate, isStateUpdate, isAckMessage, type FileChangeUpdate } from "../state/stateUpdate.js";
+import { HostStateAccumulator } from "../state/hostStateAccumulator.js";
 import { isValidUnifiedDiff } from "../diff/validatePatch.js";
 import { type ExecutionTarget, type Session, SessionStore } from "./session.js";
 import { generateSessionCode } from "./sessionCode.js";
@@ -64,6 +67,8 @@ export interface CreateSessionResult {
   branchName: string;
   worktreePath: string;
   broadcastHub: BroadcastHub;
+  accumulator: HostStateAccumulator;
+  replayBuffer: ReplayBuffer;
 }
 
 export async function createSession(
@@ -152,17 +157,32 @@ export async function createSession(
   const worktreePath = worktreeResult.value;
   store.update(sessionCode, { branchName, worktreePath });
 
+  const broadcastHub = new BroadcastHub();
+  const accumulator = new HostStateAccumulator();
+  const replayBuffer = new ReplayBuffer();
+
   await node.handle(SYNC_PROTOCOL, async (stream, connection) => {
-    await readFromStream<SyncRequest>(stream);
+    const request = await readFromStream<SyncRequest>(stream);
     const remotePeerId = connection.remotePeer.toString();
     if (passwordHash && !node.isPeerAuthenticated(remotePeerId)) {
       await writeToStream(stream, { stateTree: createEmptyStateTree() } as SyncResponse);
       return;
     }
-    await writeToStream(stream, { stateTree, branchName } as SyncResponse);
+    const response: SyncResponse = {
+      stateTree,
+      branchName,
+      accumulatedState: accumulator.getSnapshot(),
+      currentSeqNo: broadcastHub.getCurrentSeqNo(),
+    };
+    if (request.replayFromSeq !== undefined) {
+      const oldest = replayBuffer.getOldestSeqNo();
+      if (oldest !== undefined && request.replayFromSeq >= oldest - 1) {
+        response.replayedUpdates = replayBuffer.replaySince(request.replayFromSeq);
+      }
+      // If gap exceeds buffer, client falls back to full accumulated state (already included)
+    }
+    await writeToStream(stream, response);
   });
-
-  const broadcastHub = new BroadcastHub();
 
   await node.handle(BROADCAST_PROTOCOL, async (stream, connection) => {
     const remotePeerId = connection.remotePeer.toString();
@@ -179,15 +199,60 @@ export async function createSession(
       await stream.close();
       return;
     }
-    const update = await readFromStream<StateUpdate>(stream);
-    if (!isStateUpdate(update)) return;
-    if (update.type === "file-change" && !isValidUnifiedDiff(update.patch)) return;
-    broadcastHub.broadcast(update, remotePeerId);
+    const message = await readFromStream<unknown>(stream);
+
+    // Handle ACK messages (not broadcast to other peers)
+    if (isAckMessage(message)) {
+      broadcastHub.recordAck(remotePeerId, message.lastSeqNo);
+      return;
+    }
+
+    const update = message as StateUpdate;
+
+    if (!isStateUpdate(update)) {
+      const response: UpdateResponse = { accepted: false, reason: "invalid-update" };
+      await writeToStream(stream, response);
+      return;
+    }
+
+    if (update.type === "file-change" && !isValidUnifiedDiff(update.patch)) {
+      const response: UpdateResponse = { accepted: false, reason: "invalid-patch" };
+      await writeToStream(stream, response);
+      return;
+    }
+
+    // Conflict resolution: metadata LWW
+    if (update.type === "metadata-update") {
+      const existing = accumulator.getMetadata(update.key);
+      if (existing && (update.timestamp < existing.timestamp ||
+          (update.timestamp === existing.timestamp && update.peerId <= existing.peerId))) {
+        const response: UpdateResponse = { accepted: false, reason: "stale-metadata" };
+        await writeToStream(stream, response);
+        return;
+      }
+    }
+
+    // Conflict resolution: file-change baseHash check
+    if (update.type === "file-change") {
+      const lastHash = accumulator.getFileHash(update.filePath);
+      if (lastHash !== undefined && update.baseHash !== lastHash) {
+        const response: UpdateResponse = { accepted: false, reason: "base-hash-mismatch" };
+        await writeToStream(stream, response);
+        return;
+      }
+    }
+
+    accumulator.accumulate(update);
+    const seqNo = broadcastHub.broadcast(update, remotePeerId);
+    replayBuffer.push({ seqNo, update });
+    const response: UpdateResponse = { accepted: true, seqNo };
+    await writeToStream(stream, response);
   });
 
   node.addEventListener("peer:disconnect", (evt: CustomEvent) => {
     const peerId = evt.detail.toString();
     broadcastHub.unsubscribe(peerId);
+    accumulator.removePeer(peerId);
   });
 
   return {
@@ -202,5 +267,7 @@ export async function createSession(
     branchName,
     worktreePath,
     broadcastHub,
+    accumulator,
+    replayBuffer,
   };
 }
