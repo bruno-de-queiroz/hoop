@@ -1,5 +1,6 @@
 import type { Stream } from "@libp2p/interface";
 import type { StateTree } from "../state/stateTree.js";
+import type { StateUpdate } from "../state/stateUpdate.js";
 
 export const AUTH_PROTOCOL = "/hoop/auth/1.0.0";
 export const AUTH_TIMEOUT_MS = 10_000;
@@ -51,4 +52,35 @@ export async function readFromStream<T>(stream: Stream): Promise<T> {
   }
   const bytes = concatBytes(chunks);
   return JSON.parse(new TextDecoder().decode(bytes)) as T;
+}
+
+export const BROADCAST_PROTOCOL = "/hoop/broadcast/1.0.0";
+export const UPDATE_PROTOCOL = "/hoop/update/1.0.0";
+
+export function writeEvent(stream: Stream, message: unknown): void {
+  const bytes = new TextEncoder().encode(JSON.stringify(message) + "\n");
+  stream.send(bytes);
+}
+
+export async function readEvents<T>(
+  stream: Stream,
+  onEvent: (event: T) => void
+): Promise<void> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for await (const chunk of stream) {
+    const data = chunk instanceof Uint8Array ? chunk : chunk.subarray();
+    buffer += decoder.decode(data, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop()!; // last element is incomplete line or empty string
+    for (const line of lines) {
+      if (line.length > 0) {
+        onEvent(JSON.parse(line) as T);
+      }
+    }
+  }
+  // Handle any remaining data
+  if (buffer.length > 0) {
+    onEvent(JSON.parse(buffer) as T);
+  }
 }

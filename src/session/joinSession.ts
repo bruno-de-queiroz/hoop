@@ -3,14 +3,18 @@ import type { NetworkConfig } from "../network/types.js";
 import {
   AUTH_PROTOCOL,
   SYNC_PROTOCOL,
+  BROADCAST_PROTOCOL,
+  UPDATE_PROTOCOL,
   readFromStream,
   writeToStream,
+  readEvents,
   type AuthRequest,
   type AuthResponse,
   type SyncRequest,
   type SyncResponse,
 } from "../network/protocol.js";
 import type { StateTree } from "../state/stateTree.js";
+import type { StateUpdate } from "../state/stateUpdate.js";
 import { validateSessionCode } from "./sessionCode.js";
 import {
   getGitRoot as defaultGetGitRoot,
@@ -53,6 +57,8 @@ export interface JoinSessionResult {
   node: HoopNode;
   stateTree: StateTree;
   branchName?: string;
+  sendUpdate: (update: StateUpdate) => Promise<void>;
+  onBroadcast: (handler: (update: StateUpdate) => void) => void;
 }
 
 export async function joinSession(
@@ -136,6 +142,24 @@ export async function joinSession(
     branchName = syncResponse.branchName;
   }
 
+  const broadcastHandlers: Array<(update: StateUpdate) => void> = [];
+
+  const broadcastStream = await node.openStream(params.hostAddress, BROADCAST_PROTOCOL);
+  readEvents<StateUpdate>(broadcastStream, (update) => {
+    for (const handler of broadcastHandlers) {
+      handler(update);
+    }
+  }).catch(() => {});
+
+  const sendUpdate = async (update: StateUpdate): Promise<void> => {
+    const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
+    await writeToStream(stream, update);
+  };
+
+  const onBroadcast = (handler: (update: StateUpdate) => void): void => {
+    broadcastHandlers.push(handler);
+  };
+
   return {
     sessionCode: params.sessionCode,
     localPeerId: node.getPeerId(),
@@ -144,5 +168,7 @@ export async function joinSession(
     node,
     stateTree: syncResponse.stateTree,
     branchName,
+    sendUpdate,
+    onBroadcast,
   };
 }
