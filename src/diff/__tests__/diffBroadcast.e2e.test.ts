@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import {
   createSession,
   stubGitOps,
+  defaultAdmissionHandler,
   type CreateSessionResult,
 } from "../../session/createSession.js";
 import {
@@ -45,6 +46,7 @@ describe("Diff broadcast", () => {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -52,6 +54,7 @@ describe("Diff broadcast", () => {
     joinResult = await joinSession({
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
+      email: 'test@example.com',
       networkConfig: { transportMode: "test" },
       gitOps: stubJoinGitOps,
     });
@@ -91,6 +94,7 @@ describe("Diff broadcast", () => {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -98,6 +102,7 @@ describe("Diff broadcast", () => {
     joinResult = await joinSession({
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
+      email: 'test@example.com',
       networkConfig: { transportMode: "test" },
       gitOps: stubJoinGitOps,
     });
@@ -105,6 +110,7 @@ describe("Diff broadcast", () => {
     joinResult2 = await joinSession({
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
+      email: 'test@example.com',
       networkConfig: { transportMode: "test" },
       gitOps: stubJoinGitOps,
     });
@@ -146,6 +152,7 @@ describe("Diff broadcast", () => {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -153,6 +160,7 @@ describe("Diff broadcast", () => {
     joinResult = await joinSession({
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
+      email: 'test@example.com',
       networkConfig: { transportMode: "test" },
       gitOps: stubJoinGitOps,
     });
@@ -160,6 +168,7 @@ describe("Diff broadcast", () => {
     joinResult2 = await joinSession({
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
+      email: 'test@example.com',
       networkConfig: { transportMode: "test" },
       gitOps: stubJoinGitOps,
     });
@@ -197,6 +206,7 @@ describe("Diff broadcast", () => {
         executionTarget: "host-only",
         networkConfig: { transportMode: "test" },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -204,6 +214,7 @@ describe("Diff broadcast", () => {
     joinResult = await joinSession({
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
+      email: 'test@example.com',
       networkConfig: { transportMode: "test" },
       gitOps: stubJoinGitOps,
     });

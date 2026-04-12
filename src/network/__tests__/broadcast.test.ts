@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { createSession, stubGitOps, type CreateSessionResult } from '../../session/createSession.js';
+import { createSession, stubGitOps, defaultAdmissionHandler, type CreateSessionResult } from '../../session/createSession.js';
 import { joinSession, stubJoinGitOps, type JoinSessionResult } from '../../session/joinSession.js';
 import { SessionStore } from '../../session/session.js';
 import type { StateUpdate } from '../../state/stateUpdate.js';
@@ -28,6 +28,7 @@ describe('Broadcast', () => {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -35,6 +36,7 @@ describe('Broadcast', () => {
     joinResult = await joinSession({
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
+      email: 'test@example.com',
       networkConfig: { transportMode: 'test' },
       gitOps: stubJoinGitOps,
     });
@@ -50,6 +52,7 @@ describe('Broadcast', () => {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -57,6 +60,7 @@ describe('Broadcast', () => {
     joinResult = await joinSession({
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
+      email: 'test@example.com',
       networkConfig: { transportMode: 'test' },
       gitOps: stubJoinGitOps,
     });
@@ -92,6 +96,7 @@ describe('Broadcast', () => {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -99,6 +104,7 @@ describe('Broadcast', () => {
     joinResult = await joinSession({
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
+      email: 'test@example.com',
       networkConfig: { transportMode: 'test' },
       gitOps: stubJoinGitOps,
     });
@@ -106,6 +112,7 @@ describe('Broadcast', () => {
     joinResult2 = await joinSession({
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
+      email: 'test@example.com',
       networkConfig: { transportMode: 'test' },
       gitOps: stubJoinGitOps,
     });
@@ -144,6 +151,7 @@ describe('Broadcast', () => {
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
         gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
       },
       store,
     );
@@ -151,6 +159,7 @@ describe('Broadcast', () => {
     joinResult = await joinSession({
       sessionCode: hostResult.sessionCode,
       hostAddress: hostResult.listenAddresses[0],
+      email: 'test@example.com',
       networkConfig: { transportMode: 'test' },
       gitOps: stubJoinGitOps,
     });

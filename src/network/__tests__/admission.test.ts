@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { createSession, stubGitOps, type CreateSessionResult } from '../../session/createSession.js';
+import { createSession, stubGitOps, defaultAdmissionHandler, type CreateSessionResult } from '../../session/createSession.js';
 import { joinSession, stubJoinGitOps, type JoinSessionResult } from '../../session/joinSession.js';
 import { SessionStore } from '../../session/session.js';
 import { ADMISSION_COOLDOWN_MS } from '../protocol.js';
@@ -161,10 +161,11 @@ describe('Admission handshake', () => {
     vi.useRealTimers();
   }, 30_000);
 
-  it('session without onAdmissionRequest allows peers freely', async () => {
+  it('defaultAdmissionHandler auto-admits all peers', async () => {
     const store = new SessionStore();
     hostResult = await createSession(
       {
+        onAdmissionRequest: defaultAdmissionHandler,
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
         gitOps: stubGitOps,
@@ -182,7 +183,7 @@ describe('Admission handshake', () => {
       gitOps: stubJoinGitOps,
     });
 
-    expect(joinResult.admitted).toBe(false);
+    expect(joinResult.admitted).toBe(true);
     expect(joinResult.stateTree).toBeDefined();
     expect(joinResult.node.getConnectedPeers()).toHaveLength(1);
   }, 30_000);
