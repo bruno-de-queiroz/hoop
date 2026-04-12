@@ -7,7 +7,7 @@ description: Join an existing Hoop P2P collaborative session by session code
 
 ## Arguments
 
-The user may invoke this skill as `/hoop-join <sessionCode>` or `/hoop-join <sessionCode> <password>`. Parse the session code (first argument, required) and optional password (second argument) from the args string.
+The user may invoke this skill as `/hoop-join <sessionCode>` or `/hoop-join <sessionCode> <password>`. Parse the session code (first argument, required) and optional password (second argument) from the args string. The user's email will be prompted for during the join flow.
 
 ## Steps
 
@@ -25,7 +25,13 @@ The user may invoke this skill as `/hoop-join <sessionCode>` or `/hoop-join <ses
 
    The address should look like `/ip4/x.x.x.x/tcp/PORT/p2p/PEERID`. If the user provides an empty or clearly invalid address, ask again.
 
-3. **Join the session.** Call `joinSession()` from `src/session/joinSession.ts`:
+3. **Prompt for email.** Ask the user for their email address so the host can identify them during the admission process:
+
+   ```
+   Enter your email (for host admission):
+   ```
+
+4. **Join the session.** Call `joinSession()` from `src/session/joinSession.ts`:
 
    ```typescript
    import { joinSession } from "src/session/joinSession.js";
@@ -34,12 +40,13 @@ The user may invoke this skill as `/hoop-join <sessionCode>` or `/hoop-join <ses
      sessionCode,    // from args
      hostAddress,    // from step 2
      password,       // from args — undefined if not provided
+     email,          // from step 3
    });
    ```
 
-   This internally validates the session code, starts a P2P node, dials the host, and verifies the connection. If the session code is invalid or the connection fails, it throws an error — display the error message and stop.
+   This internally validates the session code, starts a P2P node, dials the host, sends an admission request with the email, and waits for the host to admit the peer. If the session code is invalid, the connection fails, or the host denies admission, it throws an error — display the error message and stop. If denied, the peer must wait 60 seconds before retrying.
 
-4. **Display connection status.** On success, display:
+5. **Display connection status.** On success, display:
 
    ```
    Connected to session!
