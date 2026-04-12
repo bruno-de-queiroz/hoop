@@ -113,11 +113,11 @@ describe("applyGitPatch", () => {
 });
 
 describe("hashContent", () => {
-  it("returns consistent SHA-256 hash for same content", () => {
+  it("returns consistent MD5 hash for same content", () => {
     const hash1 = hashContent("hello world");
     const hash2 = hashContent("hello world");
     expect(hash1).toBe(hash2);
-    expect(hash1).toHaveLength(64);
+    expect(hash1).toHaveLength(32);
   });
 
   it("returns different hashes for different content", () => {
@@ -126,6 +126,6 @@ describe("hashContent", () => {
 
   it("handles empty string", () => {
     const hash = hashContent("");
-    expect(hash).toHaveLength(64);
+    expect(hash).toHaveLength(32);
   });
 });
