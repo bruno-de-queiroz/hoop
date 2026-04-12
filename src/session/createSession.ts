@@ -18,7 +18,8 @@ import {
   type SyncResponse,
 } from "../network/protocol.js";
 import { BroadcastHub } from "../network/broadcastHub.js";
-import { type StateUpdate, isStateUpdate } from "../state/stateUpdate.js";
+import { type StateUpdate, isStateUpdate, type FileChangeUpdate } from "../state/stateUpdate.js";
+import { isValidUnifiedDiff } from "../diff/validatePatch.js";
 import { type ExecutionTarget, type Session, SessionStore } from "./session.js";
 import { generateSessionCode } from "./sessionCode.js";
 import { type StateTree, createEmptyStateTree } from "../state/stateTree.js";
@@ -180,6 +181,7 @@ export async function createSession(
     }
     const update = await readFromStream<StateUpdate>(stream);
     if (!isStateUpdate(update)) return;
+    if (update.type === "file-change" && !isValidUnifiedDiff(update.patch)) return;
     broadcastHub.broadcast(update, remotePeerId);
   });
 

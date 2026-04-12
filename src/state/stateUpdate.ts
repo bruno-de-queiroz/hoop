@@ -25,7 +25,17 @@ export interface MetadataUpdate {
   timestamp: number;
 }
 
-export type StateUpdate = CursorUpdate | BufferUpdate | MetadataUpdate;
+export interface FileChangeUpdate {
+  type: "file-change";
+  peerId: string;
+  filePath: string;
+  patch: string;
+  baseHash: string;
+  resultHash: string;
+  timestamp: number;
+}
+
+export type StateUpdate = CursorUpdate | BufferUpdate | MetadataUpdate | FileChangeUpdate;
 
 export function isStateUpdate(value: unknown): value is StateUpdate {
   if (typeof value !== "object" || value === null) return false;
@@ -50,6 +60,13 @@ export function isStateUpdate(value: unknown): value is StateUpdate {
       );
     case "metadata-update":
       return typeof v["key"] === "string" && "value" in v;
+    case "file-change":
+      return (
+        typeof v["filePath"] === "string" &&
+        typeof v["patch"] === "string" &&
+        typeof v["baseHash"] === "string" &&
+        typeof v["resultHash"] === "string"
+      );
     default:
       return false;
   }

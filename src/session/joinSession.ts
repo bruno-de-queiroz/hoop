@@ -14,7 +14,8 @@ import {
   type SyncResponse,
 } from "../network/protocol.js";
 import type { StateTree } from "../state/stateTree.js";
-import type { StateUpdate } from "../state/stateUpdate.js";
+import type { StateUpdate, FileChangeUpdate } from "../state/stateUpdate.js";
+import { computeFileDiff } from "../diff/computeDiff.js";
 import { validateSessionCode } from "./sessionCode.js";
 import {
   getGitRoot as defaultGetGitRoot,
@@ -58,6 +59,7 @@ export interface JoinSessionResult {
   stateTree: StateTree;
   branchName?: string;
   sendUpdate: (update: StateUpdate) => Promise<void>;
+  sendFileChange: (filePath: string, oldContent: string, newContent: string) => Promise<void>;
   onBroadcast: (handler: (update: StateUpdate) => void) => void;
 }
 
@@ -118,22 +120,26 @@ export async function joinSession(
   const syncResponse = await readFromStream<SyncResponse>(syncStream);
 
   let branchName: string | undefined;
-  if (syncResponse.branchName) {
-    const gitOps = params.gitOps;
+  let worktreePath: string | undefined;
 
-    const gitRootResult = await gitOps.getGitRoot();
+  const gitRootResult = await params.gitOps.getGitRoot();
+  if (gitRootResult.ok) {
+    worktreePath = gitRootResult.value;
+  }
+
+  if (syncResponse.branchName) {
     if (!gitRootResult.ok) {
       await node.stop();
       throw new Error(`Git repository required: ${gitRootResult.error}`);
     }
 
-    const fetchResult = await gitOps.fetchBranch(syncResponse.branchName);
+    const fetchResult = await params.gitOps.fetchBranch(syncResponse.branchName);
     if (!fetchResult.ok) {
       await node.stop();
       throw new Error(`Failed to fetch session branch: ${fetchResult.error}`);
     }
 
-    const checkoutResult = await gitOps.checkoutBranch(syncResponse.branchName);
+    const checkoutResult = await params.gitOps.checkoutBranch(syncResponse.branchName);
     if (!checkoutResult.ok) {
       await node.stop();
       throw new Error(`Failed to checkout session branch: ${checkoutResult.error}`);
@@ -156,6 +162,27 @@ export async function joinSession(
     await writeToStream(stream, update);
   };
 
+  const sendFileChange = async (
+    filePath: string,
+    oldContent: string,
+    newContent: string,
+  ): Promise<void> => {
+    if (!worktreePath) {
+      throw new Error("Git repository required to send file changes");
+    }
+    const diff = await computeFileDiff(worktreePath, filePath, oldContent, newContent);
+    const update: FileChangeUpdate = {
+      type: "file-change",
+      peerId: node.getPeerId(),
+      filePath,
+      patch: diff.patch,
+      baseHash: diff.baseHash,
+      resultHash: diff.resultHash,
+      timestamp: Date.now(),
+    };
+    await sendUpdate(update);
+  };
+
   const onBroadcast = (handler: (update: StateUpdate) => void): void => {
     broadcastHandlers.push(handler);
   };
@@ -169,6 +196,7 @@ export async function joinSession(
     stateTree: syncResponse.stateTree,
     branchName,
     sendUpdate,
+    sendFileChange,
     onBroadcast,
   };
 }
