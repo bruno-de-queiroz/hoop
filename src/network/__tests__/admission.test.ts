@@ -21,7 +21,7 @@ describe('Admission handshake', () => {
     const store = new SessionStore();
     hostResult = await createSession(
       {
-        requireAdmission: true,
+
         onAdmissionRequest: async () => true,
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
@@ -49,7 +49,7 @@ describe('Admission handshake', () => {
     const store = new SessionStore();
     hostResult = await createSession(
       {
-        requireAdmission: true,
+
         onAdmissionRequest: async () => false,
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
@@ -75,7 +75,7 @@ describe('Admission handshake', () => {
     const store = new SessionStore();
     hostResult = await createSession(
       {
-        requireAdmission: true,
+
         onAdmissionRequest: async () => false,
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
@@ -119,7 +119,7 @@ describe('Admission handshake', () => {
     const store = new SessionStore();
     hostResult = await createSession(
       {
-        requireAdmission: true,
+
         onAdmissionRequest: onAdmission,
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
@@ -161,7 +161,7 @@ describe('Admission handshake', () => {
     vi.useRealTimers();
   }, 30_000);
 
-  it('session without requireAdmission allows peers freely', async () => {
+  it('session without onAdmissionRequest allows peers freely', async () => {
     const store = new SessionStore();
     hostResult = await createSession(
       {
@@ -193,7 +193,7 @@ describe('Admission handshake', () => {
     const store = new SessionStore();
     hostResult = await createSession(
       {
-        requireAdmission: true,
+
         onAdmissionRequest: onAdmission,
         executionTarget: 'host-only',
         networkConfig: { transportMode: 'test' },
