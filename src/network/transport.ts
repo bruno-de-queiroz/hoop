@@ -1,5 +1,4 @@
 import { tcp } from "@libp2p/tcp";
-import { webRTC } from "@libp2p/webrtc";
 import { circuitRelayTransport } from "@libp2p/circuit-relay-v2";
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
@@ -7,7 +6,7 @@ import { identify } from "@libp2p/identify";
 import type { Libp2pOptions } from "libp2p";
 import { type NetworkConfig, DEFAULT_STUN_SERVERS } from "./types.js";
 
-export function createTransportConfig(config: NetworkConfig): Libp2pOptions {
+export async function createTransportConfig(config: NetworkConfig): Promise<Libp2pOptions> {
   const stunServers = config.stunServers ?? DEFAULT_STUN_SERVERS;
 
   const sharedConfig = {
@@ -21,6 +20,7 @@ export function createTransportConfig(config: NetworkConfig): Libp2pOptions {
 
   switch (config.transportMode) {
     case "production": {
+      const { webRTC } = await import("@libp2p/webrtc");
       const iceServers = stunServers.map((s) => ({
         urls: s.urls,
         ...(s.username !== undefined ? { username: s.username } : {}),

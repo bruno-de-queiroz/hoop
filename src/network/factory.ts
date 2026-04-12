@@ -7,5 +7,5 @@ export type NodeFactory = (config: NetworkConfig) => Promise<Libp2p>;
 export const createLibp2pNode: NodeFactory = async (
   config: NetworkConfig
 ): Promise<Libp2p> => {
-  return createLibp2p(createTransportConfig(config));
+  return createLibp2p(await createTransportConfig(config));
 };
