@@ -71,3 +71,26 @@ export function isStateUpdate(value: unknown): value is StateUpdate {
       return false;
   }
 }
+
+export interface BroadcastEnvelope {
+  seqNo: number;
+  update: StateUpdate;
+}
+
+export function isBroadcastEnvelope(value: unknown): value is BroadcastEnvelope {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v["seqNo"] === "number" && isStateUpdate(v["update"]);
+}
+
+export interface AckMessage {
+  type: "ack";
+  peerId: string;
+  lastSeqNo: number;
+}
+
+export function isAckMessage(value: unknown): value is AckMessage {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return v["type"] === "ack" && typeof v["peerId"] === "string" && typeof v["lastSeqNo"] === "number";
+}
