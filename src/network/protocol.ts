@@ -7,6 +7,7 @@ export const AUTH_PROTOCOL = "/hoop/auth/1.0.0";
 export const AUTH_TIMEOUT_MS = 10_000;
 
 export const SYNC_PROTOCOL = "/hoop/sync/1.0.0";
+export const ACK_INTERVAL_MS = 5_000;
 
 export interface AuthRequest {
   password: string;

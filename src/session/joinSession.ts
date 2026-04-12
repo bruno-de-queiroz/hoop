@@ -5,6 +5,7 @@ import {
   SYNC_PROTOCOL,
   BROADCAST_PROTOCOL,
   UPDATE_PROTOCOL,
+  ACK_INTERVAL_MS,
   readFromStream,
   writeToStream,
   writeHalf,
@@ -226,7 +227,7 @@ export async function joinSession(
   let ackInterval: ReturnType<typeof setInterval> | undefined;
   ackInterval = setInterval(() => {
     sendAck().catch(() => {});
-  }, 5000);
+  }, ACK_INTERVAL_MS);
 
   const stopAckInterval = (): void => {
     if (ackInterval !== undefined) {
