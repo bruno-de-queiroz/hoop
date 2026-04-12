@@ -1,6 +1,7 @@
 import type { Stream } from "@libp2p/interface";
 import type { StateTree } from "../state/stateTree.js";
-import type { StateUpdate } from "../state/stateUpdate.js";
+import type { StateUpdate, BroadcastEnvelope } from "../state/stateUpdate.js";
+import type { AccumulatedState } from "../state/hostStateAccumulator.js";
 
 export const AUTH_PROTOCOL = "/hoop/auth/1.0.0";
 export const AUTH_TIMEOUT_MS = 10_000;
@@ -18,11 +19,21 @@ export interface AuthResponse {
 
 export interface SyncRequest {
   type: "state-tree";
+  replayFromSeq?: number;
 }
 
 export interface SyncResponse {
   stateTree: StateTree;
   branchName?: string;
+  accumulatedState?: AccumulatedState;
+  currentSeqNo?: number;
+  replayedUpdates?: BroadcastEnvelope[];
+}
+
+export interface UpdateResponse {
+  accepted: boolean;
+  seqNo?: number;
+  reason?: string;
 }
 
 function concatBytes(chunks: Uint8Array[]): Uint8Array {
@@ -52,6 +63,19 @@ export async function readFromStream<T>(stream: Stream): Promise<T> {
   }
   const bytes = concatBytes(chunks);
   return JSON.parse(new TextDecoder().decode(bytes)) as T;
+}
+
+/**
+ * Send a message and half-close the write side of the stream, allowing the
+ * remote end to write a response back before fully closing.
+ *
+ * In libp2p, `stream.close()` closes only the write side (half-close). The
+ * stream remains readable until the remote end also closes its write side.
+ */
+export async function writeHalf(stream: Stream, message: unknown): Promise<void> {
+  const bytes = new TextEncoder().encode(JSON.stringify(message));
+  stream.send(bytes);
+  await stream.close();
 }
 
 export const BROADCAST_PROTOCOL = "/hoop/broadcast/1.0.0";
