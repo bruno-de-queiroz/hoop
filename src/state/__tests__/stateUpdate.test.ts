@@ -135,6 +135,20 @@ describe("isStateUpdate", () => {
     ).toBe(false);
   });
 
+  it("returns true for a valid file-change", () => {
+    expect(
+      isStateUpdate({
+        type: "file-change",
+        peerId: "peer-4",
+        filePath: "src/index.ts",
+        patch: "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new",
+        baseHash: "abc123",
+        resultHash: "def456",
+        timestamp: 1700000000005,
+      })
+    ).toBe(true);
+  });
+
   // --- type-specific missing fields ---
 
   it("returns false for cursor-update missing line", () => {
@@ -169,6 +183,32 @@ describe("isStateUpdate", () => {
         peerId: "peer-3",
         key: "theme",
         timestamp: 1700000000002,
+      })
+    ).toBe(false);
+  });
+
+  it("returns false for file-change missing patch", () => {
+    expect(
+      isStateUpdate({
+        type: "file-change",
+        peerId: "peer-4",
+        filePath: "src/index.ts",
+        baseHash: "abc123",
+        resultHash: "def456",
+        timestamp: 1700000000005,
+      })
+    ).toBe(false);
+  });
+
+  it("returns false for file-change missing baseHash", () => {
+    expect(
+      isStateUpdate({
+        type: "file-change",
+        peerId: "peer-4",
+        filePath: "src/index.ts",
+        patch: "--- a/f\n+++ b/f\n@@ -1 +1 @@",
+        resultHash: "def456",
+        timestamp: 1700000000005,
       })
     ).toBe(false);
   });

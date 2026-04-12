@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 
 export interface GitSuccess<T = void> {
@@ -22,6 +23,19 @@ function git(args: string[], cwd?: string): Promise<string> {
         resolve(stdout.trim());
       }
     });
+  });
+}
+
+function gitWithStdin(args: string[], stdin: string, cwd?: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile("git", args, { cwd }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr.trim() || error.message));
+      } else {
+        resolve(stdout.trim());
+      }
+    });
+    child.stdin!.end(stdin);
   });
 }
 
@@ -68,4 +82,36 @@ export async function createSessionWorktree(
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }
+}
+
+export async function computeGitDiff(
+  worktreePath: string,
+  filePath: string,
+): Promise<GitResult<string>> {
+  try {
+    const diff = await git(["diff", "--no-color", "--", filePath], worktreePath);
+    return { ok: true, value: diff };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+export async function applyGitPatch(
+  worktreePath: string,
+  patch: string,
+  check = false,
+): Promise<GitResult> {
+  try {
+    const args = ["apply", "--whitespace=nowarn"];
+    if (check) args.push("--check");
+    args.push("-");
+    await gitWithStdin(args, patch, worktreePath);
+    return { ok: true, value: undefined as never };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+export function hashContent(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
 }
