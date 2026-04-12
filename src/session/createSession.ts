@@ -8,6 +8,8 @@ import {
   AUTH_PROTOCOL,
   AUTH_TIMEOUT_MS,
   SYNC_PROTOCOL,
+  BROADCAST_PROTOCOL,
+  UPDATE_PROTOCOL,
   readFromStream,
   writeToStream,
   type AuthRequest,
@@ -15,6 +17,8 @@ import {
   type SyncRequest,
   type SyncResponse,
 } from "../network/protocol.js";
+import { BroadcastHub } from "../network/broadcastHub.js";
+import { type StateUpdate, isStateUpdate } from "../state/stateUpdate.js";
 import { type ExecutionTarget, type Session, SessionStore } from "./session.js";
 import { generateSessionCode } from "./sessionCode.js";
 import { type StateTree, createEmptyStateTree } from "../state/stateTree.js";
@@ -58,6 +62,7 @@ export interface CreateSessionResult {
   stateTree: StateTree;
   branchName: string;
   worktreePath: string;
+  broadcastHub: BroadcastHub;
 }
 
 export async function createSession(
@@ -156,6 +161,33 @@ export async function createSession(
     await writeToStream(stream, { stateTree, branchName } as SyncResponse);
   });
 
+  const broadcastHub = new BroadcastHub();
+
+  await node.handle(BROADCAST_PROTOCOL, async (stream, connection) => {
+    const remotePeerId = connection.remotePeer.toString();
+    if (passwordHash && !node.isPeerAuthenticated(remotePeerId)) {
+      await stream.close();
+      return;
+    }
+    broadcastHub.subscribe(remotePeerId, stream);
+  });
+
+  await node.handle(UPDATE_PROTOCOL, async (stream, connection) => {
+    const remotePeerId = connection.remotePeer.toString();
+    if (passwordHash && !node.isPeerAuthenticated(remotePeerId)) {
+      await stream.close();
+      return;
+    }
+    const update = await readFromStream<StateUpdate>(stream);
+    if (!isStateUpdate(update)) return;
+    broadcastHub.broadcast(update, remotePeerId);
+  });
+
+  node.addEventListener("peer:disconnect", (evt: CustomEvent) => {
+    const peerId = evt.detail.toString();
+    broadcastHub.unsubscribe(peerId);
+  });
+
   return {
     sessionCode,
     hostId,
@@ -167,5 +199,6 @@ export async function createSession(
     stateTree,
     branchName,
     worktreePath,
+    broadcastHub,
   };
 }
