@@ -1,0 +1,439 @@
+import { McpServer } from "@modelcontextprotocol/server";
+import * as z from "zod/v4";
+import {
+  createSession,
+  realGitOps,
+  stubGitOps,
+  type GitOps,
+  type CreateSessionResult,
+} from "../session/createSession.js";
+import {
+  joinSession,
+  realJoinGitOps,
+  stubJoinGitOps,
+  type JoinGitOps,
+  type JoinSessionResult,
+} from "../session/joinSession.js";
+import type { StateUpdate } from "../state/stateUpdate.js";
+
+// ── Types ───────────────────────────────────────────────────────────
+
+interface PendingAdmission {
+  email: string;
+  peerId: string;
+  resolve: (admitted: boolean) => void;
+  requestedAt: number;
+}
+
+interface ServerState {
+  role: "host" | "peer" | null;
+  hostSession: CreateSessionResult | null;
+  peerSession: JoinSessionResult | null;
+  origAccumulate: ((update: StateUpdate) => void) | null;
+  pendingUpdates: StateUpdate[];
+  pendingAdmissions: Map<string, PendingAdmission>;
+}
+
+export interface HoopMcpDeps {
+  gitOps?: GitOps;
+  joinGitOps?: JoinGitOps;
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────
+
+function errorResult(message: string) {
+  return { content: [{ type: "text" as const, text: message }], isError: true as const };
+}
+
+function jsonResult(data: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(data) }] };
+}
+
+// ── Server factory ──────────────────────────────────────────────────
+
+export function createHoopMcpServer(deps?: HoopMcpDeps) {
+  const gitOps = deps?.gitOps ?? realGitOps;
+  const joinGitOps = deps?.joinGitOps ?? realJoinGitOps;
+
+  const state: ServerState = {
+    role: null,
+    hostSession: null,
+    peerSession: null,
+    origAccumulate: null,
+    pendingUpdates: [],
+    pendingAdmissions: new Map(),
+  };
+
+  const server = new McpServer({ name: "hoop", version: "0.1.0" });
+
+  // ── 1. hoop_create_session ──────────────────────────────────────
+
+  server.registerTool(
+    "hoop_create_session",
+    {
+      description:
+        "Start a P2P node, create a git worktree, and begin hosting a collaborative session. Returns the session code and listen addresses for peers to connect.",
+      inputSchema: z.object({
+        password: z.string().optional(),
+        executionTarget: z.enum(["host-only", "proponent-side"]),
+      }),
+    },
+    async ({ password, executionTarget }) => {
+      if (state.role !== null) {
+        return errorResult("Session already active. Leave current session first.");
+      }
+
+      try {
+        const result = await createSession({
+          password,
+          executionTarget,
+          gitOps,
+          onAdmissionRequest: (email, peerId) =>
+            new Promise<boolean>((resolve) => {
+              state.pendingAdmissions.set(peerId, {
+                email,
+                peerId,
+                resolve,
+                requestedAt: Date.now(),
+              });
+            }),
+        });
+
+        state.hostSession = result;
+        state.role = "host";
+
+        // Intercept peer updates so hoop_check_updates can drain them
+        state.origAccumulate = result.accumulator.accumulate.bind(result.accumulator);
+        result.accumulator.accumulate = (update: StateUpdate) => {
+          state.origAccumulate!(update);
+          state.pendingUpdates.push(update);
+        };
+
+        return jsonResult({
+          sessionCode: result.sessionCode,
+          hostId: result.hostId,
+          peerId: result.peerId,
+          executionTarget: result.executionTarget,
+          passwordProtected: result.passwordProtected,
+          listenAddresses: result.listenAddresses,
+          branchName: result.branchName,
+          worktreePath: result.worktreePath,
+        });
+      } catch (e) {
+        return errorResult(
+          `Failed to create session: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    },
+  );
+
+  // ── 2. hoop_join_session ────────────────────────────────────────
+
+  server.registerTool(
+    "hoop_join_session",
+    {
+      description:
+        "Connect to an existing session hosted by another peer. Authenticates, requests admission, and syncs state.",
+      inputSchema: z.object({
+        sessionCode: z.string(),
+        hostAddress: z.string(),
+        password: z.string().optional(),
+        email: z.string().optional(),
+      }),
+    },
+    async ({ sessionCode, hostAddress, password, email }) => {
+      if (state.role !== null) {
+        return errorResult("Session already active. Leave current session first.");
+      }
+
+      try {
+        const result = await joinSession({
+          sessionCode,
+          hostAddress,
+          password,
+          email,
+          gitOps: joinGitOps,
+        });
+
+        state.peerSession = result;
+        state.role = "peer";
+
+        // Queue incoming broadcasts for hoop_check_updates
+        result.onBroadcast((update) => {
+          state.pendingUpdates.push(update);
+        });
+
+        return jsonResult({
+          sessionCode: result.sessionCode,
+          localPeerId: result.localPeerId,
+          hostPeerId: result.hostPeerId,
+          authenticated: result.authenticated,
+          admitted: result.admitted,
+          branchName: result.branchName,
+        });
+      } catch (e) {
+        return errorResult(
+          `Failed to join session: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    },
+  );
+
+  // ── 3. hoop_check_updates ──────────────────────────────────────
+
+  server.registerTool(
+    "hoop_check_updates",
+    {
+      description:
+        "Return and drain pending incoming changes from peers. Called by the PreToolUse hook to inject peer updates.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      if (state.role === null) {
+        return errorResult("No active session.");
+      }
+      const updates = state.pendingUpdates.splice(0);
+      return jsonResult({ count: updates.length, updates });
+    },
+  );
+
+  // ── 4. hoop_check_admissions ───────────────────────────────────
+
+  server.registerTool(
+    "hoop_check_admissions",
+    {
+      description:
+        "Return pending admission requests from peers waiting to join. Host only. Called by the UserPromptSubmit hook.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      if (state.role !== "host") {
+        return errorResult("Only the host can check admissions.");
+      }
+      const requests = Array.from(state.pendingAdmissions.values()).map(
+        ({ email, peerId, requestedAt }) => ({ email, peerId, requestedAt }),
+      );
+      return jsonResult({ count: requests.length, requests });
+    },
+  );
+
+  // ── 5. hoop_admit_peer ─────────────────────────────────────────
+
+  server.registerTool(
+    "hoop_admit_peer",
+    {
+      description: "Approve a pending admission request. Host only.",
+      inputSchema: z.object({ peerId: z.string() }),
+    },
+    async ({ peerId }) => {
+      if (state.role !== "host") {
+        return errorResult("Only the host can admit peers.");
+      }
+      const pending = state.pendingAdmissions.get(peerId);
+      if (!pending) return errorResult(`No pending admission for peer: ${peerId}`);
+
+      pending.resolve(true);
+      state.pendingAdmissions.delete(peerId);
+      return jsonResult({ admitted: true, peerId, email: pending.email });
+    },
+  );
+
+  // ── 6. hoop_deny_peer ──────────────────────────────────────────
+
+  server.registerTool(
+    "hoop_deny_peer",
+    {
+      description: "Deny a pending admission request. Host only.",
+      inputSchema: z.object({ peerId: z.string() }),
+    },
+    async ({ peerId }) => {
+      if (state.role !== "host") {
+        return errorResult("Only the host can deny peers.");
+      }
+      const pending = state.pendingAdmissions.get(peerId);
+      if (!pending) return errorResult(`No pending admission for peer: ${peerId}`);
+
+      pending.resolve(false);
+      state.pendingAdmissions.delete(peerId);
+      return jsonResult({ denied: true, peerId, email: pending.email });
+    },
+  );
+
+  // ── 7. hoop_send_update ────────────────────────────────────────
+
+  server.registerTool(
+    "hoop_send_update",
+    {
+      description:
+        "Send a state update (file change, cursor position, buffer state, or metadata) to peers.",
+      inputSchema: z.discriminatedUnion("type", [
+        z.object({
+          type: z.literal("cursor-update"),
+          filePath: z.string(),
+          line: z.number(),
+          column: z.number(),
+        }),
+        z.object({
+          type: z.literal("buffer-update"),
+          filePath: z.string(),
+          contentHash: z.string(),
+          version: z.number(),
+          dirty: z.boolean(),
+        }),
+        z.object({
+          type: z.literal("metadata-update"),
+          key: z.string(),
+          value: z.unknown(),
+        }),
+        z.object({
+          type: z.literal("file-change"),
+          filePath: z.string(),
+          patch: z.string(),
+          baseHash: z.string(),
+          resultHash: z.string(),
+        }),
+      ]),
+    },
+    async (input) => {
+      if (state.role === null) {
+        return errorResult("No active session.");
+      }
+
+      try {
+        if (state.role === "host" && state.hostSession) {
+          const update = {
+            ...input,
+            peerId: state.hostSession.peerId,
+            timestamp: Date.now(),
+          } as StateUpdate;
+          // Bypass the interceptor so host's own updates don't queue
+          state.origAccumulate!(update);
+          const seqNo = state.hostSession.broadcastHub.broadcast(update);
+          state.hostSession.replayBuffer.push({ seqNo, update });
+          return jsonResult({ accepted: true, seqNo });
+        }
+
+        if (state.role === "peer" && state.peerSession) {
+          const update = {
+            ...input,
+            peerId: state.peerSession.localPeerId,
+            timestamp: Date.now(),
+          } as StateUpdate;
+          const response = await state.peerSession.sendUpdate(update);
+          return jsonResult(response);
+        }
+
+        return errorResult("Unexpected state.");
+      } catch (e) {
+        return errorResult(
+          `Failed to send update: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    },
+  );
+
+  // ── 8. hoop_get_status ─────────────────────────────────────────
+
+  server.registerTool(
+    "hoop_get_status",
+    {
+      description:
+        "Get current session status including role, connected peers, branch name, and execution target.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      if (state.role === null) {
+        return jsonResult({ active: false });
+      }
+
+      if (state.role === "host" && state.hostSession) {
+        const s = state.hostSession;
+        return jsonResult({
+          active: true,
+          role: "host",
+          sessionCode: s.sessionCode,
+          hostId: s.hostId,
+          peerId: s.peerId,
+          executionTarget: s.executionTarget,
+          passwordProtected: s.passwordProtected,
+          connectedPeers: s.broadcastHub.getSubscribers(),
+          peerCount: s.broadcastHub.getSubscriberCount(),
+          branchName: s.branchName,
+          worktreePath: s.worktreePath,
+          pendingAdmissions: state.pendingAdmissions.size,
+          pendingUpdates: state.pendingUpdates.length,
+        });
+      }
+
+      if (state.role === "peer" && state.peerSession) {
+        const s = state.peerSession;
+        return jsonResult({
+          active: true,
+          role: "peer",
+          sessionCode: s.sessionCode,
+          localPeerId: s.localPeerId,
+          hostPeerId: s.hostPeerId,
+          authenticated: s.authenticated,
+          admitted: s.admitted,
+          branchName: s.branchName,
+          lastSeqNo: s.getLastSeqNo(),
+          pendingUpdates: state.pendingUpdates.length,
+        });
+      }
+
+      return errorResult("Unexpected state.");
+    },
+  );
+
+  // ── 9. hoop_leave_session ──────────────────────────────────────
+
+  server.registerTool(
+    "hoop_leave_session",
+    {
+      description:
+        "Disconnect from the current session, stop the P2P node, and clean up all state.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      if (state.role === null) {
+        return errorResult("No active session.");
+      }
+
+      try {
+        const previousRole = state.role;
+        const sessionCode =
+          state.role === "host"
+            ? state.hostSession?.sessionCode
+            : state.peerSession?.sessionCode;
+
+        if (state.role === "host" && state.hostSession) {
+          for (const pending of state.pendingAdmissions.values()) {
+            pending.resolve(false);
+          }
+          state.hostSession.broadcastHub.close();
+          await state.hostSession.node.stop();
+        }
+
+        if (state.role === "peer" && state.peerSession) {
+          state.peerSession.stopAckInterval();
+          await state.peerSession.node.stop();
+        }
+
+        state.role = null;
+        state.hostSession = null;
+        state.peerSession = null;
+        state.origAccumulate = null;
+        state.pendingUpdates.length = 0;
+        state.pendingAdmissions.clear();
+
+        return jsonResult({ left: true, previousRole, sessionCode });
+      } catch (e) {
+        return errorResult(
+          `Failed to leave session: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    },
+  );
+
+  return { server, state };
+}
