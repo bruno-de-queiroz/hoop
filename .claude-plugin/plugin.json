@@ -1,4 +1,19 @@
 {
   "name": "hoop",
-  "description": "P2P collaborative coding harness for agent-augmented development"
+  "version": "0.1.0",
+  "description": "P2P collaborative coding harness for agent-augmented development",
+  "author": {
+    "name": "Bruno de Queiroz",
+    "url": "https://github.com/creativelikeadog"
+  },
+  "repository": "https://github.com/creativelikeadog/hoop",
+  "license": "MIT",
+  "keywords": ["p2p", "collaboration", "mcp", "hooks", "session"],
+  "mcpServers": {
+    "hoop": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/mcp/main.js"]
+    }
+  },
+  "skills": "./skills/"
 }
