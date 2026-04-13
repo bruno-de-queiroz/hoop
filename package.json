@@ -9,19 +9,23 @@
     "test:watch": "vitest"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.1.0"
   },
   "dependencies": {
+    "@cfworker/json-schema": "^4.1.1",
     "@chainsafe/libp2p-noise": "^17.0.0",
     "@chainsafe/libp2p-yamux": "^8.0.1",
     "@libp2p/circuit-relay-v2": "^4.2.0",
     "@libp2p/identify": "^4.1.0",
     "@libp2p/tcp": "^11.0.15",
     "@libp2p/webrtc": "^6.0.16",
+    "@modelcontextprotocol/server": "^2.0.0-alpha.2",
     "bcryptjs": "^3.0.3",
-    "libp2p": "^3.2.0"
+    "libp2p": "^3.2.0",
+    "zod": "^4.3.6"
   }
 }
