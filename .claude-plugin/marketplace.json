@@ -1,0 +1,24 @@
+{
+  "name": "hoop",
+  "owner": {
+    "name": "Bruno de Queiroz",
+    "email": "bruno@creativelikeadog.com"
+  },
+  "metadata": {
+    "description": "Claude Code plugins by Bruno de Queiroz",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "hoop",
+      "source": "./",
+      "description": "P2P collaborative coding harness for agent-augmented development",
+      "version": "0.1.0",
+      "author": {
+        "name": "Bruno de Queiroz"
+      },
+      "category": "collaboration",
+      "keywords": ["p2p", "collaboration", "mcp", "hooks", "session"]
+    }
+  ]
+}
