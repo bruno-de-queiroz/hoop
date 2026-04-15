@@ -15,6 +15,7 @@ import {
   type JoinSessionResult,
 } from "../session/joinSession.js";
 import type { StateUpdate } from "../state/stateUpdate.js";
+import { ActiveEditsTracker } from "../state/activeEditsTracker.js";
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -32,11 +33,13 @@ interface ServerState {
   origAccumulate: ((update: StateUpdate) => void) | null;
   pendingUpdates: StateUpdate[];
   pendingAdmissions: Map<string, PendingAdmission>;
+  activeEditsTracker: ActiveEditsTracker | null;
 }
 
 export interface HoopMcpDeps {
   gitOps?: GitOps;
   joinGitOps?: JoinGitOps;
+  conflictRegistryPath?: string;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -55,6 +58,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
   const gitOps = deps?.gitOps ?? realGitOps;
   const joinGitOps = deps?.joinGitOps ?? realJoinGitOps;
 
+  const conflictRegistryPath = deps?.conflictRegistryPath;
+
   const state: ServerState = {
     role: null,
     hostSession: null,
@@ -62,6 +67,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     origAccumulate: null,
     pendingUpdates: [],
     pendingAdmissions: new Map(),
+    activeEditsTracker: null,
   };
 
   const server = new McpServer({ name: "hoop", version: "0.1.0" });
@@ -101,12 +107,17 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
         state.hostSession = result;
         state.role = "host";
+        state.activeEditsTracker = new ActiveEditsTracker(
+          result.peerId,
+          conflictRegistryPath,
+        );
 
         // Intercept peer updates so hoop_check_updates can drain them
         state.origAccumulate = result.accumulator.accumulate.bind(result.accumulator);
         result.accumulator.accumulate = (update: StateUpdate) => {
           state.origAccumulate!(update);
           state.pendingUpdates.push(update);
+          state.activeEditsTracker?.handleUpdate(update);
         };
 
         return jsonResult({
@@ -157,10 +168,15 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
         state.peerSession = result;
         state.role = "peer";
+        state.activeEditsTracker = new ActiveEditsTracker(
+          result.localPeerId,
+          conflictRegistryPath,
+        );
 
         // Queue incoming broadcasts for hoop_check_updates
         result.onBroadcast((update) => {
           state.pendingUpdates.push(update);
+          state.activeEditsTracker?.handleUpdate(update);
         });
 
         return jsonResult({
@@ -194,6 +210,25 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       }
       const updates = state.pendingUpdates.splice(0);
       return jsonResult({ count: updates.length, updates });
+    },
+  );
+
+  // ── 3b. hoop_check_conflicts ─────────────────────────────────
+
+  server.registerTool(
+    "hoop_check_conflicts",
+    {
+      description:
+        "Check if a file is being actively edited by a peer. Returns conflict info if another peer has a dirty buffer or recent file change on the path.",
+      inputSchema: z.object({
+        filePath: z.string().describe("The file path to check for conflicts"),
+      }),
+    },
+    async ({ filePath }) => {
+      if (state.role === null || !state.activeEditsTracker) {
+        return jsonResult({ hasConflict: false, conflict: null });
+      }
+      return jsonResult(state.activeEditsTracker.checkConflict(filePath));
     },
   );
 
@@ -419,6 +454,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           await state.peerSession.node.stop();
         }
 
+        state.activeEditsTracker?.clear();
+        state.activeEditsTracker = null;
         state.role = null;
         state.hostSession = null;
         state.peerSession = null;
