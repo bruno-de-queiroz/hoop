@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { unlinkSync } from "node:fs";
+import { unlinkSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHoopMcpServer, type HoopMcpDeps } from "../server.js";
@@ -11,12 +11,14 @@ import { PendingUpdatesWriter } from "../../state/pendingUpdatesWriter.js";
 
 const CONFLICT_REGISTRY = join(tmpdir(), "hoop-conflict-test.json");
 const PENDING_UPDATES_REGISTRY = join(tmpdir(), "hoop-pending-updates-test.json");
+const SESSION_STATUS_FILE = join(tmpdir(), "hoop-session-status-test.json");
 
 const TEST_DEPS: HoopMcpDeps = {
   gitOps: stubGitOps,
   joinGitOps: stubJoinGitOps,
   conflictRegistryPath: CONFLICT_REGISTRY,
   pendingUpdatesRegistryPath: PENDING_UPDATES_REGISTRY,
+  sessionStatusPath: SESSION_STATUS_FILE,
 };
 
 async function setup(deps = TEST_DEPS) {
@@ -58,6 +60,7 @@ describe("hoop MCP server", () => {
     state = undefined;
     try { unlinkSync(CONFLICT_REGISTRY); } catch { /* ignore */ }
     try { unlinkSync(PENDING_UPDATES_REGISTRY); } catch { /* ignore */ }
+    try { unlinkSync(SESSION_STATUS_FILE); } catch { /* ignore */ }
   });
 
   it("registers all 10 tools", async () => {
@@ -623,4 +626,46 @@ describe("hoop MCP server", () => {
     expect(registry).not.toBeNull();
     expect(registry!.updates).toHaveLength(0);
   }, 30_000);
+
+  it("hoop_create_session writes session status file", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    expect(existsSync(SESSION_STATUS_FILE)).toBe(true);
+    const status = JSON.parse(readFileSync(SESSION_STATUS_FILE, "utf-8"));
+    expect(status.active).toBe(true);
+    expect(status.role).toBe("host");
+    expect(status.sessionCode).toMatch(/^[A-Z0-9]{3}-[A-Z0-9]{3}$/);
+    expect(status.branchName).toMatch(/^hoop\/session-/);
+    expect(status.executionTarget).toBe("host-only");
+    expect(status.pid).toBe(process.pid);
+    expect(status.startedAt).toBeGreaterThan(0);
+  }, 30_000);
+
+  it("hoop_leave_session clears session status file", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+    expect(existsSync(SESSION_STATUS_FILE)).toBe(true);
+
+    await client!.callTool({
+      name: "hoop_leave_session",
+      arguments: {},
+    });
+    expect(existsSync(SESSION_STATUS_FILE)).toBe(false);
+  }, 30_000);
+
+  it("gracefulShutdown clears session status file when no active session", async () => {
+    const { gracefulShutdown } = createHoopMcpServer(TEST_DEPS);
+    // No session active — gracefulShutdown should not throw
+    await gracefulShutdown();
+    expect(existsSync(SESSION_STATUS_FILE)).toBe(false);
+  });
 });

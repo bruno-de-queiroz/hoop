@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
+import { writeSessionStatus, clearSessionStatus } from "./sessionStatusFile.js";
 import {
   createSession,
   realGitOps,
@@ -43,6 +44,7 @@ export interface HoopMcpDeps {
   joinGitOps?: JoinGitOps;
   conflictRegistryPath?: string;
   pendingUpdatesRegistryPath?: string;
+  sessionStatusPath?: string;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -112,6 +114,14 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
         state.hostSession = result;
         state.role = "host";
+        writeSessionStatus({
+          role: "host",
+          sessionCode: result.sessionCode,
+          branchName: result.branchName,
+          executionTarget: result.executionTarget,
+          worktreePath: result.worktreePath,
+          passwordProtected: result.passwordProtected,
+        }, deps?.sessionStatusPath);
         state.activeEditsTracker = new ActiveEditsTracker(
           result.peerId,
           conflictRegistryPath,
@@ -178,6 +188,14 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
         state.peerSession = result;
         state.role = "peer";
+        if (result.branchName) {
+          writeSessionStatus({
+            role: "peer",
+            sessionCode: result.sessionCode,
+            branchName: result.branchName,
+            hostPeerId: result.hostPeerId,
+          }, deps?.sessionStatusPath);
+        }
         state.activeEditsTracker = new ActiveEditsTracker(
           result.localPeerId,
           conflictRegistryPath,
@@ -437,6 +455,41 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
   // ── 9. hoop_leave_session ──────────────────────────────────────
 
+  async function gracefulShutdown(): Promise<{ left: boolean; previousRole: string | null; sessionCode: string | undefined }> {
+    const previousRole = state.role;
+    const sessionCode =
+      state.role === "host"
+        ? state.hostSession?.sessionCode
+        : state.peerSession?.sessionCode;
+
+    if (state.role === "host" && state.hostSession) {
+      for (const pending of state.pendingAdmissions.values()) {
+        pending.resolve(false);
+      }
+      state.hostSession.broadcastHub.close();
+      await state.hostSession.node.stop();
+    }
+
+    if (state.role === "peer" && state.peerSession) {
+      state.peerSession.stopAckInterval();
+      await state.peerSession.node.stop();
+    }
+
+    state.activeEditsTracker?.clear();
+    state.activeEditsTracker = null;
+    state.pendingUpdatesWriter?.clear();
+    state.pendingUpdatesWriter = null;
+    clearSessionStatus(deps?.sessionStatusPath);
+    state.role = null;
+    state.hostSession = null;
+    state.peerSession = null;
+    state.origAccumulate = null;
+    state.pendingUpdates.length = 0;
+    state.pendingAdmissions.clear();
+
+    return { left: true, previousRole, sessionCode };
+  }
+
   server.registerTool(
     "hoop_leave_session",
     {
@@ -450,37 +503,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       }
 
       try {
-        const previousRole = state.role;
-        const sessionCode =
-          state.role === "host"
-            ? state.hostSession?.sessionCode
-            : state.peerSession?.sessionCode;
-
-        if (state.role === "host" && state.hostSession) {
-          for (const pending of state.pendingAdmissions.values()) {
-            pending.resolve(false);
-          }
-          state.hostSession.broadcastHub.close();
-          await state.hostSession.node.stop();
-        }
-
-        if (state.role === "peer" && state.peerSession) {
-          state.peerSession.stopAckInterval();
-          await state.peerSession.node.stop();
-        }
-
-        state.activeEditsTracker?.clear();
-        state.activeEditsTracker = null;
-        state.pendingUpdatesWriter?.clear();
-        state.pendingUpdatesWriter = null;
-        state.role = null;
-        state.hostSession = null;
-        state.peerSession = null;
-        state.origAccumulate = null;
-        state.pendingUpdates.length = 0;
-        state.pendingAdmissions.clear();
-
-        return jsonResult({ left: true, previousRole, sessionCode });
+        const result = await gracefulShutdown();
+        return jsonResult(result);
       } catch (e) {
         return errorResult(
           `Failed to leave session: ${e instanceof Error ? e.message : String(e)}`,
@@ -489,5 +513,5 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  return { server, state };
+  return { server, state, gracefulShutdown };
 }
