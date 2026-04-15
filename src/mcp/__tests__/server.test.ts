@@ -7,13 +7,16 @@ import { tmpdir } from "node:os";
 import { createHoopMcpServer, type HoopMcpDeps } from "../server.js";
 import { stubGitOps } from "../../session/createSession.js";
 import { stubJoinGitOps } from "../../session/joinSession.js";
+import { PendingUpdatesWriter } from "../../state/pendingUpdatesWriter.js";
 
 const CONFLICT_REGISTRY = join(tmpdir(), "hoop-conflict-test.json");
+const PENDING_UPDATES_REGISTRY = join(tmpdir(), "hoop-pending-updates-test.json");
 
 const TEST_DEPS: HoopMcpDeps = {
   gitOps: stubGitOps,
   joinGitOps: stubJoinGitOps,
   conflictRegistryPath: CONFLICT_REGISTRY,
+  pendingUpdatesRegistryPath: PENDING_UPDATES_REGISTRY,
 };
 
 async function setup(deps = TEST_DEPS) {
@@ -54,6 +57,7 @@ describe("hoop MCP server", () => {
     server = undefined;
     state = undefined;
     try { unlinkSync(CONFLICT_REGISTRY); } catch { /* ignore */ }
+    try { unlinkSync(PENDING_UPDATES_REGISTRY); } catch { /* ignore */ }
   });
 
   it("registers all 10 tools", async () => {
@@ -539,5 +543,84 @@ describe("hoop MCP server", () => {
 
     const data = parseJson(result) as { hasConflict: boolean };
     expect(data.hasConflict).toBe(false);
+  }, 30_000);
+
+  it("pending updates writer tracks peer file changes via accumulator", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    // Simulate a peer file-change arriving through the accumulator
+    state!.hostSession!.accumulator.accumulate({
+      type: "file-change",
+      peerId: "peer-alice",
+      filePath: "src/main.ts",
+      patch: "@@ -1,3 +1,4 @@\n+new line",
+      baseHash: "aaa",
+      resultHash: "bbb",
+      timestamp: Date.now(),
+    });
+
+    const registry = PendingUpdatesWriter.readRegistry(PENDING_UPDATES_REGISTRY);
+    expect(registry).not.toBeNull();
+    expect(registry!.updates).toHaveLength(1);
+    expect(registry!.updates[0].peerId).toBe("peer-alice");
+    expect(registry!.updates[0].filePath).toBe("src/main.ts");
+    expect(registry!.updates[0].patch).toContain("+new line");
+  }, 30_000);
+
+  it("pending updates writer ignores host's own file changes", async () => {
+    ({ server, state, client } = await setup());
+
+    const createResult = await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+    const hostPeerId = (parseJson(createResult) as { peerId: string }).peerId;
+
+    // Host's own file-change should NOT be written to registry
+    state!.hostSession!.accumulator.accumulate({
+      type: "file-change",
+      peerId: hostPeerId,
+      filePath: "src/main.ts",
+      patch: "+self change",
+      baseHash: "aaa",
+      resultHash: "bbb",
+      timestamp: Date.now(),
+    });
+
+    const registry = PendingUpdatesWriter.readRegistry(PENDING_UPDATES_REGISTRY);
+    expect(registry).toBeNull();
+  }, 30_000);
+
+  it("pending updates writer clears on leave", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    state!.hostSession!.accumulator.accumulate({
+      type: "file-change",
+      peerId: "peer-alice",
+      filePath: "src/main.ts",
+      patch: "+change",
+      baseHash: "aaa",
+      resultHash: "bbb",
+      timestamp: Date.now(),
+    });
+
+    await client!.callTool({
+      name: "hoop_leave_session",
+      arguments: {},
+    });
+
+    const registry = PendingUpdatesWriter.readRegistry(PENDING_UPDATES_REGISTRY);
+    expect(registry).not.toBeNull();
+    expect(registry!.updates).toHaveLength(0);
   }, 30_000);
 });

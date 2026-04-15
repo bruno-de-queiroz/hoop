@@ -16,6 +16,7 @@ import {
 } from "../session/joinSession.js";
 import type { StateUpdate } from "../state/stateUpdate.js";
 import { ActiveEditsTracker } from "../state/activeEditsTracker.js";
+import { PendingUpdatesWriter } from "../state/pendingUpdatesWriter.js";
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -34,12 +35,14 @@ interface ServerState {
   pendingUpdates: StateUpdate[];
   pendingAdmissions: Map<string, PendingAdmission>;
   activeEditsTracker: ActiveEditsTracker | null;
+  pendingUpdatesWriter: PendingUpdatesWriter | null;
 }
 
 export interface HoopMcpDeps {
   gitOps?: GitOps;
   joinGitOps?: JoinGitOps;
   conflictRegistryPath?: string;
+  pendingUpdatesRegistryPath?: string;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -59,6 +62,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
   const joinGitOps = deps?.joinGitOps ?? realJoinGitOps;
 
   const conflictRegistryPath = deps?.conflictRegistryPath;
+  const pendingUpdatesRegistryPath = deps?.pendingUpdatesRegistryPath;
 
   const state: ServerState = {
     role: null,
@@ -68,6 +72,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     pendingUpdates: [],
     pendingAdmissions: new Map(),
     activeEditsTracker: null,
+    pendingUpdatesWriter: null,
   };
 
   const server = new McpServer({ name: "hoop", version: "0.1.0" });
@@ -111,6 +116,10 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           result.peerId,
           conflictRegistryPath,
         );
+        state.pendingUpdatesWriter = new PendingUpdatesWriter(
+          result.peerId,
+          pendingUpdatesRegistryPath,
+        );
 
         // Intercept peer updates so hoop_check_updates can drain them
         state.origAccumulate = result.accumulator.accumulate.bind(result.accumulator);
@@ -118,6 +127,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           state.origAccumulate!(update);
           state.pendingUpdates.push(update);
           state.activeEditsTracker?.handleUpdate(update);
+          state.pendingUpdatesWriter?.handleUpdate(update);
         };
 
         return jsonResult({
@@ -172,11 +182,16 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           result.localPeerId,
           conflictRegistryPath,
         );
+        state.pendingUpdatesWriter = new PendingUpdatesWriter(
+          result.localPeerId,
+          pendingUpdatesRegistryPath,
+        );
 
         // Queue incoming broadcasts for hoop_check_updates
         result.onBroadcast((update) => {
           state.pendingUpdates.push(update);
           state.activeEditsTracker?.handleUpdate(update);
+          state.pendingUpdatesWriter?.handleUpdate(update);
         });
 
         return jsonResult({
@@ -456,6 +471,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
         state.activeEditsTracker?.clear();
         state.activeEditsTracker = null;
+        state.pendingUpdatesWriter?.clear();
+        state.pendingUpdatesWriter = null;
         state.role = null;
         state.hostSession = null;
         state.peerSession = null;
