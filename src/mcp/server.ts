@@ -18,6 +18,7 @@ import {
 import type { StateUpdate } from "../state/stateUpdate.js";
 import { ActiveEditsTracker } from "../state/activeEditsTracker.js";
 import { PendingUpdatesWriter } from "../state/pendingUpdatesWriter.js";
+import { PendingAdmissionsWriter } from "../state/pendingAdmissionsWriter.js";
 import { OutboundUpdatesReader } from "../state/outboundUpdatesReader.js";
 
 // ── Types ───────────────────────────────────────────────────────────
@@ -36,6 +37,7 @@ interface ServerState {
   origAccumulate: ((update: StateUpdate) => void) | null;
   pendingUpdates: StateUpdate[];
   pendingAdmissions: Map<string, PendingAdmission>;
+  pendingAdmissionsWriter: PendingAdmissionsWriter | null;
   activeEditsTracker: ActiveEditsTracker | null;
   pendingUpdatesWriter: PendingUpdatesWriter | null;
   outboundUpdatesReader: OutboundUpdatesReader | null;
@@ -46,6 +48,7 @@ export interface HoopMcpDeps {
   joinGitOps?: JoinGitOps;
   conflictRegistryPath?: string;
   pendingUpdatesRegistryPath?: string;
+  pendingAdmissionsRegistryPath?: string;
   outboundUpdatesRegistryPath?: string;
   sessionStatusPath?: string;
 }
@@ -68,6 +71,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
   const conflictRegistryPath = deps?.conflictRegistryPath;
   const pendingUpdatesRegistryPath = deps?.pendingUpdatesRegistryPath;
+  const pendingAdmissionsRegistryPath = deps?.pendingAdmissionsRegistryPath;
   const outboundUpdatesRegistryPath = deps?.outboundUpdatesRegistryPath;
 
   const state: ServerState = {
@@ -77,12 +81,23 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     origAccumulate: null,
     pendingUpdates: [],
     pendingAdmissions: new Map(),
+    pendingAdmissionsWriter: null,
     activeEditsTracker: null,
     pendingUpdatesWriter: null,
     outboundUpdatesReader: null,
   };
 
   const server = new McpServer({ name: "hoop", version: "0.1.0" });
+
+  function listPendingAdmissions() {
+    return Array.from(state.pendingAdmissions.values()).map(
+      ({ email, peerId, requestedAt }) => ({ email, peerId, requestedAt }),
+    );
+  }
+
+  function syncPendingAdmissions(): void {
+    state.pendingAdmissionsWriter?.sync(listPendingAdmissions());
+  }
 
   // ── 1. hoop_create_session ──────────────────────────────────────
 
@@ -114,6 +129,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
                 resolve,
                 requestedAt: Date.now(),
               });
+              syncPendingAdmissions();
             }),
         });
 
@@ -127,6 +143,10 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           worktreePath: result.worktreePath,
           passwordProtected: result.passwordProtected,
         }, deps?.sessionStatusPath);
+        state.pendingAdmissionsWriter = new PendingAdmissionsWriter(
+          pendingAdmissionsRegistryPath,
+        );
+        syncPendingAdmissions();
         state.activeEditsTracker = new ActiveEditsTracker(
           result.peerId,
           conflictRegistryPath,
@@ -318,9 +338,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       if (state.role !== "host") {
         return errorResult("Only the host can check admissions.");
       }
-      const requests = Array.from(state.pendingAdmissions.values()).map(
-        ({ email, peerId, requestedAt }) => ({ email, peerId, requestedAt }),
-      );
+      const requests = listPendingAdmissions();
+      syncPendingAdmissions();
       return jsonResult({ count: requests.length, requests });
     },
   );
@@ -342,6 +361,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
       pending.resolve(true);
       state.pendingAdmissions.delete(peerId);
+      syncPendingAdmissions();
       return jsonResult({ admitted: true, peerId, email: pending.email });
     },
   );
@@ -363,6 +383,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
       pending.resolve(false);
       state.pendingAdmissions.delete(peerId);
+      syncPendingAdmissions();
       return jsonResult({ denied: true, peerId, email: pending.email });
     },
   );
@@ -521,13 +542,15 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.activeEditsTracker = null;
     state.pendingUpdatesWriter?.clear();
     state.pendingUpdatesWriter = null;
+    state.pendingAdmissions.clear();
+    state.pendingAdmissionsWriter?.clear();
+    state.pendingAdmissionsWriter = null;
     clearSessionStatus(deps?.sessionStatusPath);
     state.role = null;
     state.hostSession = null;
     state.peerSession = null;
     state.origAccumulate = null;
     state.pendingUpdates.length = 0;
-    state.pendingAdmissions.clear();
 
     return { left: true, previousRole, sessionCode };
   }

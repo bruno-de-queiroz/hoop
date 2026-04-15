@@ -36,6 +36,7 @@ fi
 # Belt-and-suspenders: clean up temp files
 rm -f "$STATUS_FILE"
 rm -f "${TMPDIR:-/tmp}/hoop-active-edits.json"
+rm -f "${TMPDIR:-/tmp}/hoop-pending-admissions.json"
 rm -f "${TMPDIR:-/tmp}/hoop-pending-updates.json"
 rm -f "${TMPDIR:-/tmp}/hoop-outbound-updates.json"
 rm -f "${TMPDIR:-/tmp}/hoop-outbound-updates.json.lock"
