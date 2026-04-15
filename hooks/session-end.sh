@@ -37,5 +37,8 @@ fi
 rm -f "$STATUS_FILE"
 rm -f "${TMPDIR:-/tmp}/hoop-active-edits.json"
 rm -f "${TMPDIR:-/tmp}/hoop-pending-updates.json"
+rm -f "${TMPDIR:-/tmp}/hoop-outbound-updates.json"
+rm -f "${TMPDIR:-/tmp}/hoop-outbound-updates.json.lock"
+rm -f "${TMPDIR:-/tmp}/hoop-first-broadcast.flag"
 
 exit 0

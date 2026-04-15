@@ -18,6 +18,7 @@ import {
 import type { StateUpdate } from "../state/stateUpdate.js";
 import { ActiveEditsTracker } from "../state/activeEditsTracker.js";
 import { PendingUpdatesWriter } from "../state/pendingUpdatesWriter.js";
+import { OutboundUpdatesReader } from "../state/outboundUpdatesReader.js";
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ interface ServerState {
   pendingAdmissions: Map<string, PendingAdmission>;
   activeEditsTracker: ActiveEditsTracker | null;
   pendingUpdatesWriter: PendingUpdatesWriter | null;
+  outboundUpdatesReader: OutboundUpdatesReader | null;
 }
 
 export interface HoopMcpDeps {
@@ -44,6 +46,7 @@ export interface HoopMcpDeps {
   joinGitOps?: JoinGitOps;
   conflictRegistryPath?: string;
   pendingUpdatesRegistryPath?: string;
+  outboundUpdatesRegistryPath?: string;
   sessionStatusPath?: string;
 }
 
@@ -65,6 +68,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
   const conflictRegistryPath = deps?.conflictRegistryPath;
   const pendingUpdatesRegistryPath = deps?.pendingUpdatesRegistryPath;
+  const outboundUpdatesRegistryPath = deps?.outboundUpdatesRegistryPath;
 
   const state: ServerState = {
     role: null,
@@ -75,6 +79,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     pendingAdmissions: new Map(),
     activeEditsTracker: null,
     pendingUpdatesWriter: null,
+    outboundUpdatesReader: null,
   };
 
   const server = new McpServer({ name: "hoop", version: "0.1.0" });
@@ -139,6 +144,24 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           state.activeEditsTracker?.handleUpdate(update);
           state.pendingUpdatesWriter?.handleUpdate(update);
         };
+
+        // Watch for outbound updates from PostToolUse hook
+        state.outboundUpdatesReader = new OutboundUpdatesReader((outbound) => {
+          const update: StateUpdate = {
+            type: "file-change",
+            peerId: result.peerId,
+            filePath: outbound.filePath,
+            patch: outbound.patch,
+            baseHash: outbound.baseHash,
+            resultHash: outbound.resultHash,
+            timestamp: outbound.timestamp,
+          };
+          // Bypass the interceptor so host's own updates don't queue
+          state.origAccumulate!(update);
+          const seqNo = result.broadcastHub.broadcast(update);
+          result.replayBuffer.push({ seqNo, update });
+        }, outboundUpdatesRegistryPath);
+        state.outboundUpdatesReader.start();
 
         return jsonResult({
           sessionCode: result.sessionCode,
@@ -211,6 +234,23 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           state.activeEditsTracker?.handleUpdate(update);
           state.pendingUpdatesWriter?.handleUpdate(update);
         });
+
+        // Watch for outbound updates from PostToolUse hook
+        state.outboundUpdatesReader = new OutboundUpdatesReader((outbound) => {
+          const update: StateUpdate = {
+            type: "file-change",
+            peerId: result.localPeerId,
+            filePath: outbound.filePath,
+            patch: outbound.patch,
+            baseHash: outbound.baseHash,
+            resultHash: outbound.resultHash,
+            timestamp: outbound.timestamp,
+          };
+          result.sendUpdate(update).catch(() => {
+            // Best-effort: fire-and-forget
+          });
+        }, outboundUpdatesRegistryPath);
+        state.outboundUpdatesReader.start();
 
         return jsonResult({
           sessionCode: result.sessionCode,
@@ -475,6 +515,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       await state.peerSession.node.stop();
     }
 
+    state.outboundUpdatesReader?.stop();
+    state.outboundUpdatesReader = null;
     state.activeEditsTracker?.clear();
     state.activeEditsTracker = null;
     state.pendingUpdatesWriter?.clear();
