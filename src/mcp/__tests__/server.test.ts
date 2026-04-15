@@ -1,13 +1,19 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { unlinkSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { createHoopMcpServer, type HoopMcpDeps } from "../server.js";
 import { stubGitOps } from "../../session/createSession.js";
 import { stubJoinGitOps } from "../../session/joinSession.js";
 
+const CONFLICT_REGISTRY = join(tmpdir(), "hoop-conflict-test.json");
+
 const TEST_DEPS: HoopMcpDeps = {
   gitOps: stubGitOps,
   joinGitOps: stubJoinGitOps,
+  conflictRegistryPath: CONFLICT_REGISTRY,
 };
 
 async function setup(deps = TEST_DEPS) {
@@ -47,9 +53,10 @@ describe("hoop MCP server", () => {
     client = undefined;
     server = undefined;
     state = undefined;
+    try { unlinkSync(CONFLICT_REGISTRY); } catch { /* ignore */ }
   });
 
-  it("registers all 9 tools", async () => {
+  it("registers all 10 tools", async () => {
     ({ server, state, client } = await setup());
 
     const { tools } = await client!.listTools();
@@ -58,6 +65,7 @@ describe("hoop MCP server", () => {
     expect(names).toEqual([
       "hoop_admit_peer",
       "hoop_check_admissions",
+      "hoop_check_conflicts",
       "hoop_check_updates",
       "hoop_create_session",
       "hoop_deny_peer",
@@ -423,5 +431,113 @@ describe("hoop MCP server", () => {
     });
     const data2 = parseJson(result2) as { count: number; updates: unknown[] };
     expect(data2.count).toBe(0);
+  }, 30_000);
+
+  it("hoop_check_conflicts returns no conflict when no session", async () => {
+    ({ server, state, client } = await setup());
+
+    const result = await client!.callTool({
+      name: "hoop_check_conflicts",
+      arguments: { filePath: "src/main.ts" },
+    });
+
+    const data = parseJson(result) as { hasConflict: boolean };
+    expect(data.hasConflict).toBe(false);
+  });
+
+  it("hoop_check_conflicts detects peer edit via accumulator", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    // Simulate a peer's dirty buffer arriving through the accumulator interceptor
+    const hostSession = state!.hostSession!;
+    hostSession.accumulator.accumulate({
+      type: "buffer-update",
+      peerId: "peer-alice",
+      filePath: "src/main.ts",
+      contentHash: "abc",
+      version: 1,
+      dirty: true,
+      timestamp: Date.now(),
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_check_conflicts",
+      arguments: { filePath: "src/main.ts" },
+    });
+
+    const data = parseJson(result) as {
+      hasConflict: boolean;
+      conflict: { peerId: string; type: string };
+    };
+    expect(data.hasConflict).toBe(true);
+    expect(data.conflict.peerId).toBe("peer-alice");
+    expect(data.conflict.type).toBe("dirty-buffer");
+  }, 30_000);
+
+  it("hoop_check_conflicts ignores host's own edits", async () => {
+    ({ server, state, client } = await setup());
+
+    const createResult = await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+    const hostPeerId = (parseJson(createResult) as { peerId: string }).peerId;
+
+    // Host's own buffer update should NOT be tracked as a conflict
+    state!.hostSession!.accumulator.accumulate({
+      type: "buffer-update",
+      peerId: hostPeerId,
+      filePath: "src/main.ts",
+      contentHash: "abc",
+      version: 1,
+      dirty: true,
+      timestamp: Date.now(),
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_check_conflicts",
+      arguments: { filePath: "src/main.ts" },
+    });
+
+    const data = parseJson(result) as { hasConflict: boolean };
+    expect(data.hasConflict).toBe(false);
+  }, 30_000);
+
+  it("hoop_check_conflicts clears on leave", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    state!.hostSession!.accumulator.accumulate({
+      type: "buffer-update",
+      peerId: "peer-alice",
+      filePath: "src/main.ts",
+      contentHash: "abc",
+      version: 1,
+      dirty: true,
+      timestamp: Date.now(),
+    });
+
+    await client!.callTool({
+      name: "hoop_leave_session",
+      arguments: {},
+    });
+
+    // After leaving, no conflicts should be reported
+    const result = await client!.callTool({
+      name: "hoop_check_conflicts",
+      arguments: { filePath: "src/main.ts" },
+    });
+
+    const data = parseJson(result) as { hasConflict: boolean };
+    expect(data.hasConflict).toBe(false);
   }, 30_000);
 });
