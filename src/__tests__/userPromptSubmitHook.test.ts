@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdtempSync,
   readFileSync,
@@ -10,6 +10,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = join(process.cwd(), "hooks/user-prompt-submit.sh");
+const hasJq = spawnSync("jq", ["--version"], { stdio: "ignore" }).status === 0;
+const itWithJq = hasJq ? it : it.skip;
 
 const tempDirs: string[] = [];
 
@@ -42,7 +44,7 @@ describe("user-prompt-submit hook", () => {
     }
   });
 
-  it("surfaces pending admissions and drains pending peer changes", () => {
+  itWithJq("surfaces pending admissions and drains pending peer changes", () => {
     const tempDir = makeTempDir();
 
     writeJson(join(tempDir, "hoop-session-status.json"), {
@@ -96,7 +98,7 @@ describe("user-prompt-submit hook", () => {
     expect(admissionsAfter.requests).toHaveLength(1);
   });
 
-  it("ignores pending admissions for peers but still surfaces peer changes", () => {
+  itWithJq("ignores pending admissions for peers but still surfaces peer changes", () => {
     const tempDir = makeTempDir();
 
     writeJson(join(tempDir, "hoop-session-status.json"), {

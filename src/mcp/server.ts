@@ -117,6 +117,13 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       }
 
       try {
+        // Initialize before createSession resolves so admission requests that
+        // arrive during startup are mirrored to disk immediately for hooks.
+        state.pendingAdmissionsWriter = new PendingAdmissionsWriter(
+          pendingAdmissionsRegistryPath,
+        );
+        syncPendingAdmissions();
+
         const result = await createSession({
           password,
           executionTarget,
@@ -143,10 +150,6 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           worktreePath: result.worktreePath,
           passwordProtected: result.passwordProtected,
         }, deps?.sessionStatusPath);
-        state.pendingAdmissionsWriter = new PendingAdmissionsWriter(
-          pendingAdmissionsRegistryPath,
-        );
-        syncPendingAdmissions();
         state.activeEditsTracker = new ActiveEditsTracker(
           result.peerId,
           conflictRegistryPath,
@@ -194,6 +197,9 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           worktreePath: result.worktreePath,
         });
       } catch (e) {
+        state.pendingAdmissions.clear();
+        state.pendingAdmissionsWriter?.clear();
+        state.pendingAdmissionsWriter = null;
         return errorResult(
           `Failed to create session: ${e instanceof Error ? e.message : String(e)}`,
         );

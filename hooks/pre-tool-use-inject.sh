@@ -8,6 +8,8 @@
 
 set -euo pipefail
 
+source "$(dirname "$0")/_format-peer-changes.sh"
+
 REGISTRY_FILE="${TMPDIR:-/tmp}/hoop-pending-updates.json"
 
 # No registry file means no active session or no peer changes
@@ -15,42 +17,27 @@ if [ ! -f "$REGISTRY_FILE" ]; then
   exit 0
 fi
 
-# Single jq pass: check for updates, format output, or produce nothing.
-# Using jq `empty` to produce no output when there are zero updates.
 MAX_PATCH_LINES=20
 MAX_FILES=5
 
-OUTPUT=$(jq -r --argjson maxLines "$MAX_PATCH_LINES" --argjson maxFiles "$MAX_FILES" '
-  if (.updates | length) == 0 then empty
-  else
-    # Group by filePath, keep only the most recent per file
-    [.updates | group_by(.filePath)[] | sort_by(.timestamp) | last] |
-    .[:$maxFiles] |
-    length as $count |
-    (map(
-      "Peer " + .peerId + " changed " + .filePath + ":\n```diff\n" +
-      ((.patch | split("\n")) as $lines |
-        if ($lines | length) > $maxLines then
-          ($lines[:$maxLines] | join("\n")) + "\n... (" + ($lines | length | tostring) + " total lines, truncated)"
-        else
-          .patch
-        end
-      ) + "\n```"
-    ) | join("\n\n")) as $summary |
-    {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        additionalContext: (($count | tostring) + " pending peer change(s):\n\n" + $summary)
-      }
-    }
-  end
-' "$REGISTRY_FILE" 2>/dev/null) || exit 0
+PEER_CHANGES_CONTEXT=$(format_peer_changes_context "$REGISTRY_FILE" "$MAX_PATCH_LINES" "$MAX_FILES")
+if [ -z "$PEER_CHANGES_CONTEXT" ]; then
+  exit 0
+fi
+
+OUTPUT=$(jq -n --arg context "$PEER_CHANGES_CONTEXT" '{
+  hookSpecificOutput: {
+    hookEventName: "PreToolUse",
+    additionalContext: $context
+  }
+}')
 
 if [ -z "$OUTPUT" ]; then
   exit 0
 fi
 
-# Drain the file after successful read
-echo '{"updates":[],"updatedAt":'"$(date +%s000)"'}' > "$REGISTRY_FILE"
+# Note: user-prompt-submit.sh also drains this file. Both hooks are valid
+# consumers — one surfaces changes on user messages, the other on tool calls.
+drain_peer_changes_registry "$REGISTRY_FILE"
 
 printf '%s\n' "$OUTPUT"

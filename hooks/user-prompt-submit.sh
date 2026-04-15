@@ -7,6 +7,8 @@
 
 set -euo pipefail
 
+source "$(dirname "$0")/_format-peer-changes.sh"
+
 STATUS_FILE="${TMPDIR:-/tmp}/hoop-session-status.json"
 ADMISSIONS_FILE="${TMPDIR:-/tmp}/hoop-pending-admissions.json"
 UPDATES_FILE="${TMPDIR:-/tmp}/hoop-pending-updates.json"
@@ -46,28 +48,12 @@ if [ "$ROLE" = "host" ] && [ -f "$ADMISSIONS_FILE" ]; then
   ' "$ADMISSIONS_FILE" 2>/dev/null) || ADMISSIONS_CONTEXT=""
 fi
 
-UPDATES_CONTEXT=$(jq -r --argjson maxLines "$MAX_PATCH_LINES" --argjson maxFiles "$MAX_FILES" '
-  if (.updates // [] | length) == 0 then empty
-  else
-    [(.updates // []) | group_by(.filePath)[] | sort_by(.timestamp) | last] |
-    .[:$maxFiles] |
-    length as $count |
-    (map(
-      "Peer " + .peerId + " changed " + .filePath + ":\n```diff\n" +
-      ((.patch | split("\n")) as $lines |
-        if ($lines | length) > $maxLines then
-          ($lines[:$maxLines] | join("\n")) + "\n... (" + ($lines | length | tostring) + " total lines, truncated)"
-        else
-          .patch
-        end
-      ) + "\n```"
-    ) | join("\n\n")) as $summary |
-    (($count | tostring) + " pending peer change(s):\n\n" + $summary)
-  end
-' "$UPDATES_FILE" 2>/dev/null) || UPDATES_CONTEXT=""
+UPDATES_CONTEXT=$(format_peer_changes_context "$UPDATES_FILE" "$MAX_PATCH_LINES" "$MAX_FILES")
 
 if [ -n "$UPDATES_CONTEXT" ]; then
-  echo '{"updates":[],"updatedAt":'"$(date +%s000)"'}' > "$UPDATES_FILE"
+  # Note: pre-tool-use-inject.sh also drains this file. Both hooks are valid
+  # consumers — one surfaces changes on user messages, the other on tool calls.
+  drain_peer_changes_registry "$UPDATES_FILE"
 fi
 
 CONTEXT=""
