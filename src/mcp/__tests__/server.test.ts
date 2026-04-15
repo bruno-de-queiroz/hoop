@@ -11,6 +11,7 @@ import { PendingUpdatesWriter } from "../../state/pendingUpdatesWriter.js";
 
 const CONFLICT_REGISTRY = join(tmpdir(), "hoop-conflict-test.json");
 const PENDING_UPDATES_REGISTRY = join(tmpdir(), "hoop-pending-updates-test.json");
+const PENDING_ADMISSIONS_REGISTRY = join(tmpdir(), "hoop-pending-admissions-test.json");
 const SESSION_STATUS_FILE = join(tmpdir(), "hoop-session-status-test.json");
 
 const TEST_DEPS: HoopMcpDeps = {
@@ -18,6 +19,7 @@ const TEST_DEPS: HoopMcpDeps = {
   joinGitOps: stubJoinGitOps,
   conflictRegistryPath: CONFLICT_REGISTRY,
   pendingUpdatesRegistryPath: PENDING_UPDATES_REGISTRY,
+  pendingAdmissionsRegistryPath: PENDING_ADMISSIONS_REGISTRY,
   sessionStatusPath: SESSION_STATUS_FILE,
 };
 
@@ -60,6 +62,7 @@ describe("hoop MCP server", () => {
     state = undefined;
     try { unlinkSync(CONFLICT_REGISTRY); } catch { /* ignore */ }
     try { unlinkSync(PENDING_UPDATES_REGISTRY); } catch { /* ignore */ }
+    try { unlinkSync(PENDING_ADMISSIONS_REGISTRY); } catch { /* ignore */ }
     try { unlinkSync(SESSION_STATUS_FILE); } catch { /* ignore */ }
   });
 
@@ -183,6 +186,41 @@ describe("hoop MCP server", () => {
 
     const data = parseJson(result) as { count: number };
     expect(data.count).toBe(0);
+  }, 30_000);
+
+  it("hoop_check_admissions mirrors pending requests to the hook registry", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    state!.pendingAdmissions.set("peer-123", {
+      email: "test@example.com",
+      peerId: "peer-123",
+      resolve: () => {},
+      requestedAt: 123,
+    });
+
+    await client!.callTool({
+      name: "hoop_check_admissions",
+      arguments: {},
+    });
+
+    const registry = JSON.parse(
+      readFileSync(PENDING_ADMISSIONS_REGISTRY, "utf-8"),
+    ) as {
+      requests: Array<{ email: string; peerId: string; requestedAt: number }>;
+    };
+
+    expect(registry.requests).toEqual([
+      {
+        email: "test@example.com",
+        peerId: "peer-123",
+        requestedAt: 123,
+      },
+    ]);
   }, 30_000);
 
   it("hoop_check_admissions fails for non-host", async () => {
