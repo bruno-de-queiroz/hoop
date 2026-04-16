@@ -36,6 +36,8 @@ The user may invoke this skill as `/hoop-new` or `/hoop-new <password>`. Extract
 
    Do not import or execute TypeScript directly. The MCP server owns the session lifecycle, including admission handling. If the tool returns an error, display the error message and stop. On success, parse the tool response and use it as the source of truth for the session details. The response includes `sessionCode`, `peerId`, `listenAddresses`, `executionTarget`, `hostId`, `passwordProtected`, `branchName`, and `worktreePath`.
 
+   Admission requests from peers are handled asynchronously via hooks. When a peer requests to join, the `UserPromptSubmit` hook surfaces pending admissions. You do not need to handle admission inline — the MCP server queues requests and the hook flow will prompt you to admit or deny.
+
 3. **Display the session details.** Output the result prominently so the user can share with peers:
 
    ```
