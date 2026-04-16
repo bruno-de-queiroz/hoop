@@ -31,20 +31,20 @@ The user may invoke this skill as `/hoop-join <sessionCode>` or `/hoop-join <ses
    Enter your email (for host admission):
    ```
 
-4. **Join the session.** Call `joinSession()` from `src/session/joinSession.ts`:
+4. **Join the session.** Call the `hoop_join_session` MCP tool with the parsed session code, provided host address, optional password, and prompted email.
 
-   ```typescript
-   import { joinSession } from "src/session/joinSession.js";
+   Use these params:
 
-   const result = await joinSession({
-     sessionCode,    // from args
-     hostAddress,    // from step 2
-     password,       // from args — undefined if not provided
-     email,          // from step 3
-   });
+   ```json
+   {
+     "sessionCode": "<sessionCode>",
+     "hostAddress": "<hostAddress>",
+     "password": "<password, omit if not provided>",
+     "email": "<email>"
+   }
    ```
 
-   This internally validates the session code, starts a P2P node, dials the host, sends an admission request with the email, and waits for the host to admit the peer. If the session code is invalid, the connection fails, or the host denies admission, it throws an error — display the error message and stop. If denied, the peer must wait 60 seconds before retrying.
+   Do not import or execute TypeScript directly. The MCP server owns the join lifecycle. If the tool returns an error, display the error message and stop. On success, parse the tool response and use it as the source of truth for the connection details. The response includes `sessionCode`, `hostPeerId`, `localPeerId`, `authenticated`, `admitted`, and `branchName`.
 
 5. **Display connection status.** On success, display:
 
@@ -58,7 +58,7 @@ The user may invoke this skill as `/hoop-join <sessionCode>` or `/hoop-join <ses
    You are now connected to the host's P2P node.
    ```
 
-   If `result.passwordProvided` is true, also note:
+   If a password was provided and `result.authenticated` is true, also note:
    ```
-   Password provided — awaiting handshake verification (managed by host).
+   Password provided — authenticated with host.
    ```
