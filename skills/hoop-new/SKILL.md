@@ -23,25 +23,18 @@ The user may invoke this skill as `/hoop-new` or `/hoop-new <password>`. Extract
 
    If the user enters `2`, set `executionTarget` to `"proponent-side"`. For any other input (including empty/no response), default to `"host-only"`.
 
-2. **Create the session.** Call `createSession()` from `src/session/createSession.ts`, providing an `onAdmissionRequest` callback that presents a dialog to the host user whenever a new peer requests to join:
+2. **Create the session.** Call the `hoop_create_session` MCP tool with the parsed password and selected execution target.
 
-   ```typescript
-   import { createSession } from "src/session/createSession.js";
+   Use these params:
 
-   const result = await createSession({
-     password,            // from args — undefined if not provided
-     executionTarget,     // from step 1
-     onAdmissionRequest: async (email, peerId) => {
-       // Present admission dialog to the host user
-       // Show: "Peer <email> (ID: <peerId>) wants to join. Admit? (yes/no)"
-       // Return true to admit, false to deny (denied peers must wait 60s to retry)
-     },
-   });
+   ```json
+   {
+     "password": "<password, omit if not provided>",
+     "executionTarget": "<executionTarget>"
+   }
    ```
 
-   The `onAdmissionRequest` callback fires each time a new peer requests admission. Present the peer's email to the host user and ask them to admit or deny. If denied, the peer is disconnected and cannot retry for 60 seconds.
-
-   This internally generates a session code, hashes the password (if provided), starts a P2P node, registers the session, and creates a git worktree for the session. The returned `result` contains `sessionCode`, `peerId`, `listenAddresses`, `executionTarget`, `hostId`, `passwordProtected`, `branchName`, and `worktreePath`.
+   Do not import or execute TypeScript directly. The MCP server owns the session lifecycle, including admission handling. If the tool returns an error, display the error message and stop. On success, parse the tool response and use it as the source of truth for the session details. The response includes `sessionCode`, `peerId`, `listenAddresses`, `executionTarget`, `hostId`, `passwordProtected`, `branchName`, and `worktreePath`.
 
 3. **Display the session details.** Output the result prominently so the user can share with peers:
 
