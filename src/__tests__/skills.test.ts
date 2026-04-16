@@ -14,6 +14,8 @@ describe("skill definitions", () => {
     expect(content).not.toContain("import { createSession }");
     expect(content).not.toContain("src/session/createSession");
     expect(content).toContain("Select execution target:");
+    expect(content).toContain("UserPromptSubmit");
+    expect(content).toContain("admit or deny");
     expect(content).toContain("Session created!");
     expect(content).toContain("Share this code with peers");
   });
