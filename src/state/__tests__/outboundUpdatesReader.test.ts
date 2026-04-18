@@ -79,6 +79,9 @@ describe("OutboundUpdatesReader", () => {
     );
     reader.start();
 
+    // Small delay to let watchFile record the initial stat before writing
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
     // Write updates to the outbound file
     writeOutbound(path, [
       makeUpdate("src/main.ts", "+line 1"),
