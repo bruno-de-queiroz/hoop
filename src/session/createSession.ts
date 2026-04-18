@@ -20,7 +20,9 @@ import {
   type AdmissionResponse,
   type SyncRequest,
   type SyncResponse,
-  type UpdateResponse,
+  type StateUpdateResponse,
+  type LockAcquireResponse,
+  type LockReleaseResponse,
 } from "../network/protocol.js";
 import { BroadcastHub } from "../network/broadcastHub.js";
 import { ReplayBuffer } from "../network/replayBuffer.js";
@@ -72,7 +74,6 @@ export interface CreateSessionParams {
 export interface LockAcquireResult {
   acquired: boolean;
   holder: string | null;
-  queuePosition?: number;
   seqNo?: number;
 }
 
@@ -230,26 +231,43 @@ export async function createSession(
   const broadcastHub = new BroadcastHub();
   const accumulator = new HostStateAccumulator();
   const replayBuffer = new ReplayBuffer();
-  const accumulateStateUpdate = accumulator.accumulate.bind(accumulator);
 
-  const applyAndBroadcastUpdate = (
+  const broadcastAppliedUpdate = (
     update: StateUpdate,
     excludePeerId?: string,
   ): number => {
-    accumulateStateUpdate(update);
     const seqNo = broadcastHub.broadcast(update, excludePeerId);
     replayBuffer.push({ seqNo, update });
     return seqNo;
   };
 
-  const getLockStatus = (): HoopLock => accumulator.getLock();
+  const publishUpdate = (
+    update: StateUpdate,
+    excludePeerId?: string,
+  ): number => {
+    accumulator.accumulate(update);
+    return broadcastAppliedUpdate(update, excludePeerId);
+  };
+
+  const expireStaleLock = (timestamp: number = Date.now(), excludePeerId?: string): LockReleaseUpdate | undefined => {
+    const releaseUpdate = accumulator.expireStaleLock(timestamp);
+    if (releaseUpdate) {
+      broadcastAppliedUpdate(releaseUpdate, excludePeerId);
+    }
+    return releaseUpdate;
+  };
+
+  const getLockStatus = (timestamp: number = Date.now()): HoopLock => {
+    return accumulator.getLockSnapshot(timestamp);
+  };
 
   const acquireLock = (
     peerId: string = node.getPeerId(),
     timestamp: number = Date.now(),
     excludePeerId?: string,
   ): LockAcquireResult => {
-    const lock = accumulator.getLock(timestamp);
+    expireStaleLock(timestamp, excludePeerId);
+    const lock = accumulator.getLockSnapshot(timestamp);
     if (lock.status === "busy") {
       if (lock.holderPeerId === peerId) {
         return { acquired: true, holder: peerId };
@@ -262,7 +280,7 @@ export async function createSession(
       peerId,
       timestamp,
     };
-    const seqNo = applyAndBroadcastUpdate(update, excludePeerId);
+    const seqNo = publishUpdate(update, excludePeerId);
     return { acquired: true, holder: peerId, seqNo };
   };
 
@@ -271,9 +289,10 @@ export async function createSession(
     timestamp: number = Date.now(),
     excludePeerId?: string,
   ): LockReleaseResult => {
-    const lock = accumulator.getLock(timestamp);
+    expireStaleLock(timestamp, excludePeerId);
+    const lock = accumulator.getLockSnapshot(timestamp);
     if (lock.status === "free") {
-      return { released: true, holder: null };
+      return { released: false, holder: null };
     }
     if (lock.holderPeerId !== peerId) {
       return { released: false, holder: lock.holderPeerId };
@@ -284,7 +303,7 @@ export async function createSession(
       peerId,
       timestamp,
     };
-    const seqNo = applyAndBroadcastUpdate(update, excludePeerId);
+    const seqNo = publishUpdate(update, excludePeerId);
     return { released: true, holder: null, seqNo };
   };
 
@@ -295,6 +314,7 @@ export async function createSession(
       await writeToStream(stream, { stateTree: createEmptyStateTree() } as SyncResponse);
       return;
     }
+    expireStaleLock(Date.now(), remotePeerId);
     const response: SyncResponse = {
       stateTree,
       branchName,
@@ -337,33 +357,53 @@ export async function createSession(
     const update = message as StateUpdate;
 
     if (!isStateUpdate(update)) {
-      const response: UpdateResponse = { accepted: false, reason: "invalid-update" };
+      const response: StateUpdateResponse = {
+        kind: "state-update",
+        accepted: false,
+        reason: "invalid-update",
+      };
       await writeToStream(stream, response);
       return;
     }
 
     if ((update.type === "lock-acquire" || update.type === "lock-release") && update.peerId !== remotePeerId) {
-      const response: UpdateResponse = { accepted: false, reason: "invalid-peer", lock: accumulator.getLock() };
+      expireStaleLock(update.timestamp, remotePeerId);
+      const lock = getLockStatus(update.timestamp);
+      const response: LockAcquireResponse | LockReleaseResponse = update.type === "lock-acquire"
+        ? {
+            kind: "lock-acquire",
+            acquired: false,
+            holder: lock.holderPeerId,
+            reason: "invalid-peer",
+            lock,
+          }
+        : {
+            kind: "lock-release",
+            released: false,
+            holder: lock.holderPeerId,
+            reason: "invalid-peer",
+            lock,
+          };
       await writeToStream(stream, response);
       return;
     }
 
     if (update.type === "lock-acquire") {
       const result = acquireLock(update.peerId, update.timestamp, remotePeerId);
-      const response: UpdateResponse = result.acquired
+      const response: LockAcquireResponse = result.acquired
         ? {
-            accepted: true,
-            seqNo: result.seqNo,
+            kind: "lock-acquire",
             acquired: true,
             holder: result.holder,
-            lock: accumulator.getLock(),
+            seqNo: result.seqNo,
+            lock: getLockStatus(update.timestamp),
           }
         : {
-            accepted: false,
-            reason: "lock-busy",
+            kind: "lock-acquire",
             acquired: false,
             holder: result.holder,
-            lock: accumulator.getLock(),
+            reason: "lock-busy",
+            lock: getLockStatus(update.timestamp),
           };
       await writeToStream(stream, response);
       return;
@@ -371,66 +411,80 @@ export async function createSession(
 
     if (update.type === "lock-release") {
       const result = releaseLock(update.peerId, update.timestamp, remotePeerId);
-      const response: UpdateResponse = result.released
+      const response: LockReleaseResponse = result.released
         ? {
-            accepted: true,
-            seqNo: result.seqNo,
+            kind: "lock-release",
             released: true,
             holder: result.holder,
-            lock: accumulator.getLock(),
+            seqNo: result.seqNo,
+            lock: getLockStatus(update.timestamp),
           }
         : {
-            accepted: false,
-            reason: "lock-held-by-other-peer",
+            kind: "lock-release",
             released: false,
             holder: result.holder,
-            lock: accumulator.getLock(),
+            reason: result.holder === null ? "lock-not-held" : "lock-held-by-other-peer",
+            lock: getLockStatus(update.timestamp),
           };
       await writeToStream(stream, response);
       return;
     }
 
     if (update.type === "file-change" && !isValidUnifiedDiff(update.patch)) {
-      const response: UpdateResponse = { accepted: false, reason: "invalid-patch" };
+      const response: StateUpdateResponse = {
+        kind: "state-update",
+        accepted: false,
+        reason: "invalid-patch",
+      };
       await writeToStream(stream, response);
       return;
     }
 
+    // Conflict resolution: metadata LWW
     if (update.type === "metadata-update") {
       const existing = accumulator.getMetadata(update.key);
       if (existing && (update.timestamp < existing.timestamp ||
           (update.timestamp === existing.timestamp && update.peerId <= existing.peerId))) {
-        const response: UpdateResponse = { accepted: false, reason: "stale-metadata" };
+        const response: StateUpdateResponse = {
+          kind: "state-update",
+          accepted: false,
+          reason: "stale-metadata",
+        };
         await writeToStream(stream, response);
         return;
       }
     }
 
+    // Conflict resolution: file-change baseHash check
     if (update.type === "file-change") {
       const lastHash = accumulator.getFileHash(update.filePath);
       if (lastHash !== undefined && update.baseHash !== lastHash) {
-        const response: UpdateResponse = { accepted: false, reason: "base-hash-mismatch" };
+        const response: StateUpdateResponse = {
+          kind: "state-update",
+          accepted: false,
+          reason: "base-hash-mismatch",
+        };
         await writeToStream(stream, response);
         return;
       }
     }
 
-    accumulator.accumulate(update);
-    const seqNo = broadcastHub.broadcast(update, remotePeerId);
-    replayBuffer.push({ seqNo, update });
-    const response: UpdateResponse = { accepted: true, seqNo };
+    const seqNo = publishUpdate(update, remotePeerId);
+    const response: StateUpdateResponse = {
+      kind: "state-update",
+      accepted: true,
+      seqNo,
+    };
     await writeToStream(stream, response);
   });
 
   node.addEventListener("peer:disconnect", (evt: CustomEvent) => {
     const peerId = evt.detail.toString();
     broadcastHub.unsubscribe(peerId);
-    accumulator.removePeer(peerId);
 
-    const releaseUpdate = accumulator.releaseLockForPeer(peerId);
+    const releaseUpdate = accumulator.removePeer(peerId);
     if (releaseUpdate) {
-      const seqNo = broadcastHub.broadcast(releaseUpdate);
-      replayBuffer.push({ seqNo, update: releaseUpdate });
+      broadcastAppliedUpdate(releaseUpdate);
     }
   });
 

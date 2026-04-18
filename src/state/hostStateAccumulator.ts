@@ -6,7 +6,9 @@ import type {
   LockReleaseUpdate,
 } from "./stateUpdate.js";
 import {
+  applyHoopLockUpdate,
   createFreeHoopLock,
+  expireHoopLock,
   normalizeHoopLock,
   type HoopLock,
 } from "./hoopLock.js";
@@ -61,22 +63,16 @@ export class HostStateAccumulator {
         this.fileHashes.set(update.filePath, update.resultHash);
         break;
       }
-      case "lock-acquire": {
-        this.lock = {
-          holderPeerId: update.peerId,
-          acquiredAt: update.timestamp,
-          status: "busy",
-        };
-        break;
-      }
+      case "lock-acquire":
       case "lock-release": {
-        this.lock = createFreeHoopLock();
+        this.expireStaleLock(update.timestamp);
+        this.lock = applyHoopLockUpdate(this.lock, update);
         break;
       }
     }
   }
 
-  getSnapshot(): AccumulatedState {
+  getSnapshot(now: number = Date.now()): AccumulatedState {
     const cursors: Record<string, Record<string, CursorUpdate>> = {};
     for (const [peerId, peerCursors] of this.cursors) {
       cursors[peerId] = Object.fromEntries(peerCursors);
@@ -92,7 +88,7 @@ export class HostStateAccumulator {
       buffers,
       metadata: Object.fromEntries(this.metadata),
       fileHashes: Object.fromEntries(this.fileHashes),
-      lock: this.getLock(),
+      lock: this.getLockSnapshot(now),
     };
   }
 
@@ -104,28 +100,39 @@ export class HostStateAccumulator {
     return this.metadata.get(key);
   }
 
-  getLock(now: number = Date.now()): HoopLock {
-    this.lock = normalizeHoopLock(this.lock, now);
-    return { ...this.lock };
+  getLockSnapshot(now: number = Date.now()): HoopLock {
+    return normalizeHoopLock(this.lock, now);
+  }
+
+  expireStaleLock(timestamp: number = Date.now()): LockReleaseUpdate | undefined {
+    const { lock, releaseUpdate } = expireHoopLock(this.lock, timestamp);
+    this.lock = lock;
+    return releaseUpdate;
   }
 
   releaseLockForPeer(peerId: string, timestamp: number = Date.now()): LockReleaseUpdate | undefined {
-    const lock = this.getLock(timestamp);
-    if (lock.status === "busy" && lock.holderPeerId === peerId) {
-      const update: LockReleaseUpdate = {
-        type: "lock-release",
-        peerId,
-        timestamp,
-      };
-      this.accumulate(update);
-      return update;
+    if (this.lock.holderPeerId !== peerId) {
+      return undefined;
     }
-    return undefined;
+
+    const expiredRelease = this.expireStaleLock(timestamp);
+    if (expiredRelease) {
+      return expiredRelease;
+    }
+
+    const update: LockReleaseUpdate = {
+      type: "lock-release",
+      peerId,
+      timestamp,
+    };
+    this.lock = applyHoopLockUpdate(this.lock, update);
+    return update;
   }
 
-  removePeer(peerId: string): void {
+  removePeer(peerId: string, timestamp: number = Date.now()): LockReleaseUpdate | undefined {
     this.cursors.delete(peerId);
     this.buffers.delete(peerId);
+    return this.releaseLockForPeer(peerId, timestamp);
   }
 
   clear(): void {

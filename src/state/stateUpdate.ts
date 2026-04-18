@@ -47,11 +47,14 @@ export interface LockReleaseUpdate {
   timestamp: number;
 }
 
-export type StateUpdate =
+export type NonLockStateUpdate =
   | CursorUpdate
   | BufferUpdate
   | MetadataUpdate
-  | FileChangeUpdate
+  | FileChangeUpdate;
+
+export type StateUpdate =
+  | NonLockStateUpdate
   | LockAcquireUpdate
   | LockReleaseUpdate;
 
