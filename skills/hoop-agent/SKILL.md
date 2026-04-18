@@ -58,7 +58,21 @@ Examples:
    Wait for the lock to be released or ask the holder to release it.
    ```
 
-3. **Spawn the sub-agent.** Use the `Agent` tool with:
+3. **Determine execution path.** Check if this prompt should execute locally or be delegated to the host:
+
+   - **Execute locally** if ANY of these are true:
+     - The role is `host` (the host always executes locally — it IS the host)
+     - The `executionTarget` is `"proponent-side"`
+
+   - **Delegate to host** if ALL of these are true:
+     - The role is `peer`
+     - The `executionTarget` is `"host-only"`
+
+   Proceed to step 3A or 3B accordingly.
+
+### Path A: Local execution (proponent-side or host)
+
+3A. **Spawn the sub-agent.** Use the `Agent` tool with:
 
    - `description`: a short (3-5 word) summary derived from the user's prompt.
    - `model`: the parsed model override if one was provided; omit the parameter entirely if no model was specified (inherits the current session default).
@@ -92,11 +106,43 @@ Examples:
      <user's prompt>
      ```
 
-   Wait for the sub-agent to complete before proceeding.
+   Wait for the sub-agent to complete before proceeding to step 4.
 
-4. **Release the lock.** Call the `hoop_release_lock` MCP tool. This step MUST execute regardless of whether the sub-agent succeeded or failed — treat it as a finally block. If the release fails, warn the user but do not suppress the agent's result.
+### Path B: Host execution (peer in host-only session)
 
-5. **Display the result.** Surface the sub-agent's output to the user. Prefix it with a brief status line:
+3B. **Send the prompt to the host.** Call the `hoop_request_host_execution` MCP tool with:
+   - `prompt`: the user's prompt text
+   - `model`: the parsed model override if one was provided; omit if not specified
+
+   The tool returns a `requestId` and an initial `status` (`"pending-approval"` or `"approved"`).
+
+   If the initial status is `"pending-approval"`, display:
+
+   ```
+   Prompt sent to host for approval. Waiting for the host to approve, reject, or discuss...
+   ```
+
+   If the initial status is `"approved"`, display:
+
+   ```
+   Prompt auto-approved by host. Execution starting...
+   ```
+
+   **Poll for completion.** Repeatedly call `hoop_poll_execution_result` with the `requestId`. Check the returned `status`:
+
+   - `"pending-approval"` or `"approved"` — still waiting. Wait a few seconds and poll again.
+   - `"executing"` — host is actively working. Continue polling.
+   - `"completed"` — host finished successfully. Proceed to step 4.
+   - `"failed"` — host execution failed. Note the error. Proceed to step 4.
+   - `"denied"` — host rejected the prompt. Note the reason. Proceed to step 4.
+
+   Poll at reasonable intervals (every 5-10 seconds). Do NOT poll more than 60 times (roughly 5 minutes). If the poll limit is reached, display a timeout warning and proceed to step 4.
+
+4. **Release the lock.** Call the `hoop_release_lock` MCP tool. This step MUST execute regardless of whether the agent/host succeeded or failed — treat it as a finally block. If the release fails, warn the user but do not suppress the result.
+
+5. **Display the result.**
+
+   **For local execution (Path A):** Surface the sub-agent's output to the user. Prefix it with a brief status line:
 
    ```
    Agent completed. Lock released.
@@ -107,3 +153,27 @@ Examples:
    ```
    Agent encountered an error. Lock released.
    ```
+
+   **For host execution (Path B):** Display the outcome:
+
+   - If completed:
+     ```
+     Host execution completed. Lock released.
+     File changes have been broadcast and applied.
+     ```
+
+   - If failed:
+     ```
+     Host execution failed: <error>. Lock released.
+     ```
+
+   - If denied:
+     ```
+     Host denied the prompt: <reason>. Lock released.
+     ```
+
+   - If timed out:
+     ```
+     Host execution timed out. Lock released.
+     Check with the host for status.
+     ```
