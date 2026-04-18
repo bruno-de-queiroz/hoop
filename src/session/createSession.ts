@@ -315,13 +315,13 @@ export async function createSession(
   ): LockReleaseResult => {
     expireStaleLock(timestamp);
     const lock = accumulator.getLockSnapshot(timestamp);
-    if (lock.status === "free") {
+    if (lock.status === "free" || lock.holderPeerId === null) {
       return { released: false, holder: null };
     }
 
     const update: LockReleaseUpdate = {
       type: "lock-release",
-      peerId: lock.holderPeerId!,
+      peerId: lock.holderPeerId,
       timestamp,
     };
     const seqNo = publishUpdate(update);
