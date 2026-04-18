@@ -78,6 +78,7 @@ export interface JoinSessionParams {
 
 export interface JoinSessionResult {
   sessionCode: string;
+  hostAddress: string;
   localPeerId: string;
   hostPeerId: string;
   authenticated: boolean;
@@ -349,6 +350,7 @@ export async function joinSession(
 
   return {
     sessionCode: params.sessionCode,
+    hostAddress: params.hostAddress,
     localPeerId: node.getPeerId(),
     hostPeerId: connectedPeers[0].peerId,
     authenticated,

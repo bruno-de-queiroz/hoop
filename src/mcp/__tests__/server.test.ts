@@ -66,7 +66,7 @@ describe("hoop MCP server", () => {
     try { unlinkSync(SESSION_STATUS_FILE); } catch { /* ignore */ }
   });
 
-  it("registers all 14 tools", async () => {
+  it("registers all 20 tools", async () => {
     ({ server, state, client } = await setup());
 
     const { tools } = await client!.listTools();
@@ -75,17 +75,23 @@ describe("hoop MCP server", () => {
     expect(names).toEqual([
       "hoop_acquire_lock",
       "hoop_admit_peer",
+      "hoop_approve_prompt_request",
       "hoop_check_admissions",
       "hoop_check_conflicts",
+      "hoop_check_prompt_requests",
       "hoop_check_updates",
+      "hoop_complete_prompt_request",
       "hoop_create_session",
       "hoop_deny_peer",
+      "hoop_deny_prompt_request",
       "hoop_force_unlock",
       "hoop_get_status",
       "hoop_join_session",
       "hoop_leave_session",
       "hoop_lock_status",
+      "hoop_poll_execution_result",
       "hoop_release_lock",
+      "hoop_request_host_execution",
       "hoop_send_update",
     ]);
   });

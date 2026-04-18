@@ -22,6 +22,10 @@ import { PendingUpdatesWriter } from "../state/pendingUpdatesWriter.js";
 import { PendingAdmissionsWriter } from "../state/pendingAdmissionsWriter.js";
 import { OutboundUpdatesReader } from "../state/outboundUpdatesReader.js";
 import { LockStatusWriter } from "../state/lockStatusWriter.js";
+import { PendingPromptRequestsWriter } from "../state/pendingPromptRequestsWriter.js";
+import { PROMPT_PROTOCOL, writeHalf, readFromStream } from "../network/protocol.js";
+import type { PromptRequest, PromptResponse, PromptRequestStatus } from "../state/promptRequest.js";
+import { randomUUID } from "node:crypto";
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -32,6 +36,11 @@ interface PendingAdmission {
   requestedAt: number;
 }
 
+interface PeerPromptRequest {
+  id: string;
+  status: PromptRequestStatus;
+}
+
 interface ServerState {
   role: "host" | "peer" | null;
   hostSession: CreateSessionResult | null;
@@ -40,6 +49,8 @@ interface ServerState {
   pendingUpdates: StateUpdate[];
   pendingAdmissions: Map<string, PendingAdmission>;
   pendingAdmissionsWriter: PendingAdmissionsWriter | null;
+  pendingPromptRequestsWriter: PendingPromptRequestsWriter | null;
+  peerPromptRequests: Map<string, PeerPromptRequest>;
   activeEditsTracker: ActiveEditsTracker | null;
   pendingUpdatesWriter: PendingUpdatesWriter | null;
   outboundUpdatesReader: OutboundUpdatesReader | null;
@@ -54,6 +65,7 @@ export interface HoopMcpDeps {
   pendingAdmissionsRegistryPath?: string;
   outboundUpdatesRegistryPath?: string;
   lockStatusRegistryPath?: string;
+  pendingPromptRequestsRegistryPath?: string;
   sessionStatusPath?: string;
 }
 
@@ -78,6 +90,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
   const pendingAdmissionsRegistryPath = deps?.pendingAdmissionsRegistryPath;
   const outboundUpdatesRegistryPath = deps?.outboundUpdatesRegistryPath;
   const lockStatusRegistryPath = deps?.lockStatusRegistryPath;
+  const pendingPromptRequestsRegistryPath = deps?.pendingPromptRequestsRegistryPath;
 
   const state: ServerState = {
     role: null,
@@ -87,6 +100,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     pendingUpdates: [],
     pendingAdmissions: new Map(),
     pendingAdmissionsWriter: null,
+    pendingPromptRequestsWriter: null,
+    peerPromptRequests: new Map(),
     activeEditsTracker: null,
     pendingUpdatesWriter: null,
     outboundUpdatesReader: null,
@@ -123,6 +138,19 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.lockStatusWriter?.update(getCurrentLockStatus());
   }
 
+  function syncPromptRequests(): void {
+    if (!state.hostSession) return;
+    const entries = state.hostSession.promptRequestQueue.listPending().map((e) => ({
+      id: e.request.id,
+      prompt: e.request.prompt,
+      model: e.request.model,
+      requestedBy: e.request.requestedBy,
+      status: e.status,
+      requestedAt: e.request.timestamp,
+    }));
+    state.pendingPromptRequestsWriter?.sync(entries);
+  }
+
   // ── 1. hoop_create_session ──────────────────────────────────────
 
   server.registerTool(
@@ -133,9 +161,10 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       inputSchema: z.object({
         password: z.string().optional(),
         executionTarget: z.enum(["host-only", "proponent-side"]),
+        autoExecutePrompts: z.boolean().optional(),
       }),
     },
-    async ({ password, executionTarget }) => {
+    async ({ password, executionTarget, autoExecutePrompts }) => {
       if (state.role !== null) {
         return errorResult("Session already active. Leave current session first.");
       }
@@ -148,9 +177,14 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         );
         syncPendingAdmissions();
 
+        state.pendingPromptRequestsWriter = new PendingPromptRequestsWriter(
+          pendingPromptRequestsRegistryPath,
+        );
+
         const result = await createSession({
           password,
           executionTarget,
+          autoExecutePrompts,
           gitOps,
           onAdmissionRequest: (email, peerId) =>
             new Promise<boolean>((resolve) => {
@@ -162,6 +196,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
               });
               syncPendingAdmissions();
             }),
+          onPromptRequest: () => syncPromptRequests(),
           onLockChange: () => flushLockStatus(),
         });
 
@@ -226,6 +261,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           hostId: result.hostId,
           peerId: result.peerId,
           executionTarget: result.executionTarget,
+          autoExecutePrompts: result.autoExecutePrompts,
           passwordProtected: result.passwordProtected,
           listenAddresses: result.listenAddresses,
           branchName: result.branchName,
@@ -235,6 +271,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         state.pendingAdmissions.clear();
         state.pendingAdmissionsWriter?.clear();
         state.pendingAdmissionsWriter = null;
+        state.pendingPromptRequestsWriter?.clear();
+        state.pendingPromptRequestsWriter = null;
         return errorResult(
           `Failed to create session: ${e instanceof Error ? e.message : String(e)}`,
         );
@@ -636,12 +674,14 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           hostId: s.hostId,
           peerId: s.peerId,
           executionTarget: s.executionTarget,
+          autoExecutePrompts: s.autoExecutePrompts,
           passwordProtected: s.passwordProtected,
           connectedPeers: s.broadcastHub.getSubscribers(),
           peerCount: s.broadcastHub.getSubscriberCount(),
           branchName: s.branchName,
           worktreePath: s.worktreePath,
           pendingAdmissions: state.pendingAdmissions.size,
+          pendingPromptRequests: s.promptRequestQueue.listPending().length,
           pendingUpdates: state.pendingUpdates.length,
           lock: s.getLockStatus(),
         });
@@ -668,7 +708,179 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 14. hoop_leave_session ─────────────────────────────────────
+  // ── 13. hoop_request_host_execution ─────────────────────────────
+
+  server.registerTool(
+    "hoop_request_host_execution",
+    {
+      description:
+        "Send a prompt to the host for execution. Peer only. Returns a request ID and initial status. The host must approve the request before execution begins (unless autoExecutePrompts is enabled).",
+      inputSchema: z.object({
+        prompt: z.string().describe("The task for the host to execute"),
+        model: z.string().optional().describe("Optional model override: opus, sonnet, or haiku"),
+      }),
+    },
+    async ({ prompt, model }) => {
+      if (state.role !== "peer" || !state.peerSession) {
+        return errorResult("Only peers can request host execution.");
+      }
+
+      try {
+        const id = randomUUID();
+        const request: PromptRequest = {
+          id,
+          prompt,
+          model,
+          requestedBy: state.peerSession.localPeerId,
+          timestamp: Date.now(),
+        };
+
+        const hostAddress = state.peerSession.hostAddress;
+        const stream = await state.peerSession.node.openStream(hostAddress, PROMPT_PROTOCOL);
+        await writeHalf(stream, request);
+        const response = await readFromStream<PromptResponse>(stream);
+
+        state.peerPromptRequests.set(id, { id, status: response.status });
+        return jsonResult({ requestId: id, status: response.status });
+      } catch (e) {
+        return errorResult(
+          `Failed to send prompt to host: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    },
+  );
+
+  // ── 14. hoop_poll_execution_result ────────────────────────────────
+
+  server.registerTool(
+    "hoop_poll_execution_result",
+    {
+      description:
+        "Poll for the status of a prompt execution request. Peer only. Returns the current status: pending-approval, approved, executing, completed, failed, or denied.",
+      inputSchema: z.object({
+        requestId: z.string().describe("The request ID returned by hoop_request_host_execution"),
+      }),
+    },
+    async ({ requestId }) => {
+      if (state.role !== "peer") {
+        return errorResult("Only peers can poll execution results.");
+      }
+
+      const tracked = state.peerPromptRequests.get(requestId);
+      if (!tracked) {
+        return errorResult(`No prompt request found with ID: ${requestId}`);
+      }
+
+      return jsonResult({ requestId, status: tracked.status });
+    },
+  );
+
+  // ── 15. hoop_check_prompt_requests ────────────────────────────────
+
+  server.registerTool(
+    "hoop_check_prompt_requests",
+    {
+      description:
+        "List pending prompt requests from peers. Host only. Returns requests awaiting approval or execution.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      if (state.role !== "host" || !state.hostSession) {
+        return errorResult("Only the host can check prompt requests.");
+      }
+
+      const pending = state.hostSession.promptRequestQueue.listPending();
+      const requests = pending.map((e) => ({
+        id: e.request.id,
+        prompt: e.request.prompt,
+        model: e.request.model,
+        requestedBy: e.request.requestedBy,
+        status: e.status,
+        requestedAt: e.request.timestamp,
+      }));
+      syncPromptRequests();
+      return jsonResult({ count: requests.length, requests });
+    },
+  );
+
+  // ── 16. hoop_approve_prompt_request ───────────────────────────────
+
+  server.registerTool(
+    "hoop_approve_prompt_request",
+    {
+      description:
+        "Approve a pending prompt request for execution. Host only. Transitions the request from pending-approval to approved.",
+      inputSchema: z.object({
+        requestId: z.string().describe("The prompt request ID to approve"),
+      }),
+    },
+    async ({ requestId }) => {
+      if (state.role !== "host" || !state.hostSession) {
+        return errorResult("Only the host can approve prompt requests.");
+      }
+
+      const response = state.hostSession.promptRequestQueue.approve(requestId);
+      if (!response) {
+        return errorResult(`No pending-approval request found with ID: ${requestId}`);
+      }
+      syncPromptRequests();
+      return jsonResult(response);
+    },
+  );
+
+  // ── 17. hoop_deny_prompt_request ──────────────────────────────────
+
+  server.registerTool(
+    "hoop_deny_prompt_request",
+    {
+      description:
+        "Deny a pending prompt request. Host only. The proponent will be notified of the denial.",
+      inputSchema: z.object({
+        requestId: z.string().describe("The prompt request ID to deny"),
+        reason: z.string().optional().describe("Optional reason for denial"),
+      }),
+    },
+    async ({ requestId, reason }) => {
+      if (state.role !== "host" || !state.hostSession) {
+        return errorResult("Only the host can deny prompt requests.");
+      }
+
+      const response = state.hostSession.promptRequestQueue.deny(requestId, reason);
+      if (!response) {
+        return errorResult(`No pending-approval request found with ID: ${requestId}`);
+      }
+      syncPromptRequests();
+      return jsonResult(response);
+    },
+  );
+
+  // ── 18. hoop_complete_prompt_request ──────────────────────────────
+
+  server.registerTool(
+    "hoop_complete_prompt_request",
+    {
+      description:
+        "Mark an approved prompt request as completed or failed. Host only. Call this after the host has finished executing the prompt.",
+      inputSchema: z.object({
+        requestId: z.string().describe("The prompt request ID to complete"),
+        error: z.string().optional().describe("Error message if execution failed"),
+      }),
+    },
+    async ({ requestId, error }) => {
+      if (state.role !== "host" || !state.hostSession) {
+        return errorResult("Only the host can complete prompt requests.");
+      }
+
+      const response = state.hostSession.promptRequestQueue.complete(requestId, error);
+      if (!response) {
+        return errorResult(`No approved/executing request found with ID: ${requestId}`);
+      }
+      syncPromptRequests();
+      return jsonResult(response);
+    },
+  );
+
+  // ── hoop_leave_session ────────────────────────────────────────────
 
   function cleanupState(): void {
     state.outboundUpdatesReader?.stop();
@@ -682,6 +894,9 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.pendingAdmissions.clear();
     state.pendingAdmissionsWriter?.clear();
     state.pendingAdmissionsWriter = null;
+    state.pendingPromptRequestsWriter?.clear();
+    state.pendingPromptRequestsWriter = null;
+    state.peerPromptRequests.clear();
     clearSessionStatus(deps?.sessionStatusPath);
     state.role = null;
     state.hostSession = null;
@@ -702,6 +917,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         for (const pending of state.pendingAdmissions.values()) {
           pending.resolve(false);
         }
+        state.hostSession.promptRequestQueue.clear();
         state.hostSession.broadcastHub.close();
         await state.hostSession.node.stop();
       }
