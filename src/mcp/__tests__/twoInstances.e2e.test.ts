@@ -35,21 +35,97 @@ function allRegistryPaths(deps: HoopMcpDeps): string[] {
 }
 
 async function createMcpInstance(deps: HoopMcpDeps) {
-  const { server, state, gracefulShutdown } = createHoopMcpServer(deps);
+  const { server, state } = createHoopMcpServer(deps);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
 
   const client = new Client({ name: "test-client", version: "0.1.0" });
   await client.connect(clientTransport);
 
-  return { server, state, client, gracefulShutdown };
+  return { server, state, client };
 }
 
+type McpInstance = Awaited<ReturnType<typeof createMcpInstance>>;
 type CallToolResult = Awaited<ReturnType<Client["callTool"]>>;
 
 function parseJson(result: CallToolResult): unknown {
+  if (result.isError) {
+    const text = (result.content as Array<{ type: string; text: string }>)?.[0]?.text;
+    throw new Error(`Tool returned error: ${text ?? "unknown"}`);
+  }
   const text = (result.content as Array<{ type: string; text: string }>)[0].text;
   return JSON.parse(text);
+}
+
+async function waitFor(
+  condition: () => boolean,
+  message: string,
+  timeoutMs = 5_000,
+): Promise<void> {
+  if (condition()) return;
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      clearInterval(interval);
+      reject(new Error(`Timed out after ${timeoutMs}ms: ${message}`));
+    }, timeoutMs);
+    const interval = setInterval(() => {
+      if (condition()) {
+        clearInterval(interval);
+        clearTimeout(timeout);
+        resolve();
+      }
+    }, 50);
+  });
+}
+
+interface ConnectedSession {
+  host: McpInstance;
+  peer: McpInstance;
+  hostDeps: HoopMcpDeps;
+  peerDeps: HoopMcpDeps;
+  hostData: { sessionCode: string; peerId: string; listenAddresses: string[] };
+  peerData: { localPeerId: string; hostPeerId: string; authenticated: boolean; admitted: boolean };
+}
+
+/** Sets up a fully connected host+peer session with admission completed. */
+async function setupConnectedSession(): Promise<ConnectedSession> {
+  const hostDeps = makeDeps("host");
+  const peerDeps = makeDeps("peer");
+  const host = await createMcpInstance(hostDeps);
+  const peer = await createMcpInstance(peerDeps);
+
+  const createResult = await host.client.callTool({
+    name: "hoop_create_session",
+    arguments: { executionTarget: "host-only" },
+  });
+  const hostData = parseJson(createResult) as ConnectedSession["hostData"];
+
+  const joinPromise = peer.client.callTool({
+    name: "hoop_join_session",
+    arguments: {
+      sessionCode: hostData.sessionCode,
+      hostAddress: hostData.listenAddresses[0],
+      email: "peer@example.com",
+    },
+  });
+
+  await waitFor(
+    () => host.state.pendingAdmissions.size > 0,
+    "waiting for admission request",
+  );
+
+  const admissions = parseJson(
+    await host.client.callTool({ name: "hoop_check_admissions", arguments: {} }),
+  ) as { requests: Array<{ peerId: string }> };
+  await host.client.callTool({
+    name: "hoop_admit_peer",
+    arguments: { peerId: admissions.requests[0].peerId },
+  });
+
+  const joinResult = await joinPromise;
+  const peerData = parseJson(joinResult) as ConnectedSession["peerData"];
+
+  return { host, peer, hostDeps, peerDeps, hostData, peerData };
 }
 
 const VALID_PATCH_A = `--- a/src/moduleA.ts
@@ -71,44 +147,40 @@ const VALID_PATCH_B = `--- a/src/moduleB.ts
 // ── Test suite ─────────────────────────────────────────────────────
 
 describe("E2E: two claude-code instances in a hoop session", () => {
-  const hostDeps = makeDeps("host");
-  const peerDeps = makeDeps("peer");
-
-  let hostClient: Client | undefined;
-  let hostServer: Awaited<ReturnType<typeof createHoopMcpServer>>["server"] | undefined;
-  let hostState: Awaited<ReturnType<typeof createHoopMcpServer>>["state"] | undefined;
-
-  let peerClient: Client | undefined;
-  let peerServer: Awaited<ReturnType<typeof createHoopMcpServer>>["server"] | undefined;
-  let peerState: Awaited<ReturnType<typeof createHoopMcpServer>>["state"] | undefined;
+  let host: McpInstance | undefined;
+  let peer: McpInstance | undefined;
+  let hDeps: HoopMcpDeps | undefined;
+  let pDeps: HoopMcpDeps | undefined;
 
   afterEach(async () => {
-    // Graceful shutdown through MCP tools
-    if (hostState?.role !== null) {
-      try { await hostClient?.callTool({ name: "hoop_leave_session", arguments: {} }); } catch { /* ignore */ }
+    if (host?.state.role !== null) {
+      try { await host?.client.callTool({ name: "hoop_leave_session", arguments: {} }); } catch { /* ignore */ }
     }
-    if (peerState?.role !== null) {
-      try { await peerClient?.callTool({ name: "hoop_leave_session", arguments: {} }); } catch { /* ignore */ }
+    if (peer?.state.role !== null) {
+      try { await peer?.client.callTool({ name: "hoop_leave_session", arguments: {} }); } catch { /* ignore */ }
     }
-    await hostClient?.close();
-    await peerClient?.close();
-    await hostServer?.close();
-    await peerServer?.close();
-    hostClient = hostServer = hostState = undefined;
-    peerClient = peerServer = peerState = undefined;
+    try { await host?.client.close(); } catch { /* ignore */ }
+    try { await peer?.client.close(); } catch { /* ignore */ }
+    try { await host?.server.close(); } catch { /* ignore */ }
+    try { await peer?.server.close(); } catch { /* ignore */ }
+    host = peer = undefined;
 
-    for (const p of [...allRegistryPaths(hostDeps), ...allRegistryPaths(peerDeps)]) {
+    const paths = [...(hDeps ? allRegistryPaths(hDeps) : []), ...(pDeps ? allRegistryPaths(pDeps) : [])];
+    for (const p of paths) {
       try { unlinkSync(p); } catch { /* ignore */ }
     }
+    hDeps = pDeps = undefined;
   });
 
   // ── Full round-trip ──────────────────────────────────────────────
 
   it("full round-trip: create → join → admit → edit → broadcast → receive → leave", async () => {
     // --- Step 1: Host creates session ---
-    ({ server: hostServer, state: hostState, client: hostClient } = await createMcpInstance(hostDeps));
+    hDeps = makeDeps("host");
+    pDeps = makeDeps("peer");
+    host = await createMcpInstance(hDeps);
 
-    const createResult = await hostClient!.callTool({
+    const createResult = await host.client.callTool({
       name: "hoop_create_session",
       arguments: { executionTarget: "host-only" },
     });
@@ -120,12 +192,12 @@ describe("E2E: two claude-code instances in a hoop session", () => {
 
     expect(hostData.sessionCode).toMatch(/^[A-Z0-9]{3}-[A-Z0-9]{3}$/);
     expect(hostData.listenAddresses.length).toBeGreaterThan(0);
-    expect(hostState!.role).toBe("host");
+    expect(host.state.role).toBe("host");
 
-    // --- Step 2: Peer joins in parallel (joinSession blocks until admitted) ---
-    ({ server: peerServer, state: peerState, client: peerClient } = await createMcpInstance(peerDeps));
+    // --- Step 2: Peer joins (joinSession blocks until admitted) ---
+    peer = await createMcpInstance(pDeps);
 
-    const joinPromise = peerClient!.callTool({
+    const joinPromise = peer.client.callTool({
       name: "hoop_join_session",
       arguments: {
         sessionCode: hostData.sessionCode,
@@ -135,17 +207,12 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     });
 
     // --- Step 3: Host checks admissions and admits the peer ---
-    // Wait for the admission request to arrive
-    await new Promise<void>((resolve) => {
-      const interval = setInterval(() => {
-        if (hostState!.pendingAdmissions.size > 0) {
-          clearInterval(interval);
-          resolve();
-        }
-      }, 50);
-    });
+    await waitFor(
+      () => host!.state.pendingAdmissions.size > 0,
+      "waiting for admission request",
+    );
 
-    const admissionsResult = await hostClient!.callTool({
+    const admissionsResult = await host.client.callTool({
       name: "hoop_check_admissions",
       arguments: {},
     });
@@ -158,12 +225,11 @@ describe("E2E: two claude-code instances in a hoop session", () => {
 
     const peerPeerId = admissionsData.requests[0].peerId;
 
-    await hostClient!.callTool({
+    await host.client.callTool({
       name: "hoop_admit_peer",
       arguments: { peerId: peerPeerId },
     });
 
-    // Now the join completes
     const joinResult = await joinPromise;
     const peerData = parseJson(joinResult) as {
       localPeerId: string;
@@ -173,24 +239,24 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     };
     expect(peerData.admitted).toBe(true);
     expect(peerData.hostPeerId).toBe(hostData.peerId);
-    expect(peerState!.role).toBe("peer");
+    expect(peer.state.role).toBe("peer");
 
     // Verify both sides see consistent state
     const hostStatus = parseJson(
-      await hostClient!.callTool({ name: "hoop_get_status", arguments: {} }),
+      await host.client.callTool({ name: "hoop_get_status", arguments: {} }),
     ) as { role: string; peerCount: number; connectedPeers: string[] };
     expect(hostStatus.role).toBe("host");
     expect(hostStatus.peerCount).toBe(1);
     expect(hostStatus.connectedPeers).toContain(peerData.localPeerId);
 
     const peerStatus = parseJson(
-      await peerClient!.callTool({ name: "hoop_get_status", arguments: {} }),
+      await peer.client.callTool({ name: "hoop_get_status", arguments: {} }),
     ) as { role: string; hostPeerId: string };
     expect(peerStatus.role).toBe("peer");
     expect(peerStatus.hostPeerId).toBe(hostData.peerId);
 
     // --- Step 4: Host edits a file → peer receives via hoop_check_updates ---
-    const hostFileChange = await hostClient!.callTool({
+    const hostFileChange = await host.client.callTool({
       name: "hoop_send_update",
       arguments: {
         type: "file-change",
@@ -204,12 +270,14 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     expect(hostChangeData.accepted).toBe(true);
     expect(hostChangeData.seqNo).toBeGreaterThan(0);
 
-    // Wait for broadcast to propagate
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await waitFor(
+      () => peer!.state.pendingUpdates.length > 0,
+      "waiting for host update to reach peer",
+    );
 
     // Peer drains pending updates (simulates PreToolUse hook calling hoop_check_updates)
     const peerUpdates = parseJson(
-      await peerClient!.callTool({ name: "hoop_check_updates", arguments: {} }),
+      await peer.client.callTool({ name: "hoop_check_updates", arguments: {} }),
     ) as { count: number; updates: Array<{ type: string; filePath: string; patch: string }> };
     expect(peerUpdates.count).toBeGreaterThanOrEqual(1);
 
@@ -220,7 +288,7 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     expect(fileChangeFromHost!.patch).toBe(VALID_PATCH_A);
 
     // --- Step 5: Peer edits a different file → host receives ---
-    const peerFileChange = await peerClient!.callTool({
+    const peerFileChange = await peer.client.callTool({
       name: "hoop_send_update",
       arguments: {
         type: "file-change",
@@ -233,12 +301,14 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     const peerChangeData = parseJson(peerFileChange) as { accepted: boolean; seqNo: number };
     expect(peerChangeData.accepted).toBe(true);
 
-    // Wait for broadcast to propagate
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await waitFor(
+      () => host!.state.pendingUpdates.length > 0,
+      "waiting for peer update to reach host",
+    );
 
     // Host drains pending updates
     const hostUpdates = parseJson(
-      await hostClient!.callTool({ name: "hoop_check_updates", arguments: {} }),
+      await host.client.callTool({ name: "hoop_check_updates", arguments: {} }),
     ) as { count: number; updates: Array<{ type: string; filePath: string; patch: string; peerId: string }> };
     expect(hostUpdates.count).toBeGreaterThanOrEqual(1);
 
@@ -251,68 +321,34 @@ describe("E2E: two claude-code instances in a hoop session", () => {
 
     // Second drain is empty (queue was drained)
     const hostUpdates2 = parseJson(
-      await hostClient!.callTool({ name: "hoop_check_updates", arguments: {} }),
+      await host.client.callTool({ name: "hoop_check_updates", arguments: {} }),
     ) as { count: number };
     expect(hostUpdates2.count).toBe(0);
 
     // --- Step 6: Peer leaves gracefully ---
     const peerLeave = parseJson(
-      await peerClient!.callTool({ name: "hoop_leave_session", arguments: {} }),
+      await peer.client.callTool({ name: "hoop_leave_session", arguments: {} }),
     ) as { left: boolean; previousRole: string };
     expect(peerLeave.left).toBe(true);
     expect(peerLeave.previousRole).toBe("peer");
-    expect(peerState!.role).toBeNull();
+    expect(peer.state.role).toBeNull();
 
     // --- Step 7: Host leaves gracefully ---
     const hostLeave = parseJson(
-      await hostClient!.callTool({ name: "hoop_leave_session", arguments: {} }),
+      await host.client.callTool({ name: "hoop_leave_session", arguments: {} }),
     ) as { left: boolean; previousRole: string };
     expect(hostLeave.left).toBe(true);
     expect(hostLeave.previousRole).toBe("host");
-    expect(hostState!.role).toBeNull();
+    expect(host.state.role).toBeNull();
   }, 60_000);
 
   // ── Conflict detection across instances ──────────────────────────
 
   it("peer detects conflict when host is editing the same file", async () => {
-    ({ server: hostServer, state: hostState, client: hostClient } = await createMcpInstance(hostDeps));
-    ({ server: peerServer, state: peerState, client: peerClient } = await createMcpInstance(peerDeps));
-
-    const createResult = await hostClient!.callTool({
-      name: "hoop_create_session",
-      arguments: { executionTarget: "host-only" },
-    });
-    const hostData = parseJson(createResult) as { sessionCode: string; listenAddresses: string[] };
-
-    const joinPromise = peerClient!.callTool({
-      name: "hoop_join_session",
-      arguments: {
-        sessionCode: hostData.sessionCode,
-        hostAddress: hostData.listenAddresses[0],
-        email: "peer@example.com",
-      },
-    });
-
-    // Admit
-    await new Promise<void>((resolve) => {
-      const interval = setInterval(() => {
-        if (hostState!.pendingAdmissions.size > 0) { clearInterval(interval); resolve(); }
-      }, 50);
-    });
-
-    const admissions = parseJson(
-      await hostClient!.callTool({ name: "hoop_check_admissions", arguments: {} }),
-    ) as { requests: Array<{ peerId: string }> };
-    await hostClient!.callTool({
-      name: "hoop_admit_peer",
-      arguments: { peerId: admissions.requests[0].peerId },
-    });
-    await joinPromise;
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    ({ host, peer, hostDeps: hDeps, peerDeps: pDeps } = await setupConnectedSession());
 
     // Host sends a file-change on src/shared.ts
-    await hostClient!.callTool({
+    await host.client.callTool({
       name: "hoop_send_update",
       arguments: {
         type: "file-change",
@@ -323,12 +359,14 @@ describe("E2E: two claude-code instances in a hoop session", () => {
       },
     });
 
-    // Wait for broadcast to propagate
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await waitFor(
+      () => peer!.state.pendingUpdates.length > 0,
+      "waiting for host file-change to reach peer",
+    );
 
     // Peer checks for conflict on the same file (simulates PreToolUse conflict hook)
     const conflictResult = parseJson(
-      await peerClient!.callTool({
+      await peer.client.callTool({
         name: "hoop_check_conflicts",
         arguments: { filePath: "src/shared.ts" },
       }),
@@ -336,72 +374,43 @@ describe("E2E: two claude-code instances in a hoop session", () => {
 
     expect(conflictResult.hasConflict).toBe(true);
     expect(conflictResult.conflict).not.toBeNull();
+    expect(conflictResult.conflict!.type).toBe("file-change");
   }, 60_000);
 
   // ── No orphaned processes after both leave ───────────────────────
 
   it("no active state remains after both instances leave", async () => {
-    ({ server: hostServer, state: hostState, client: hostClient } = await createMcpInstance(hostDeps));
-    ({ server: peerServer, state: peerState, client: peerClient } = await createMcpInstance(peerDeps));
-
-    const createResult = await hostClient!.callTool({
-      name: "hoop_create_session",
-      arguments: { executionTarget: "host-only" },
-    });
-    const hostData = parseJson(createResult) as { sessionCode: string; listenAddresses: string[] };
-
-    const joinPromise = peerClient!.callTool({
-      name: "hoop_join_session",
-      arguments: {
-        sessionCode: hostData.sessionCode,
-        hostAddress: hostData.listenAddresses[0],
-        email: "peer@example.com",
-      },
-    });
-
-    await new Promise<void>((resolve) => {
-      const interval = setInterval(() => {
-        if (hostState!.pendingAdmissions.size > 0) { clearInterval(interval); resolve(); }
-      }, 50);
-    });
-
-    const admissions = parseJson(
-      await hostClient!.callTool({ name: "hoop_check_admissions", arguments: {} }),
-    ) as { requests: Array<{ peerId: string }> };
-    await hostClient!.callTool({
-      name: "hoop_admit_peer",
-      arguments: { peerId: admissions.requests[0].peerId },
-    });
-    await joinPromise;
+    ({ host, peer, hostDeps: hDeps, peerDeps: pDeps } = await setupConnectedSession());
 
     // Both leave
-    await peerClient!.callTool({ name: "hoop_leave_session", arguments: {} });
-    await hostClient!.callTool({ name: "hoop_leave_session", arguments: {} });
+    await peer.client.callTool({ name: "hoop_leave_session", arguments: {} });
+    await host.client.callTool({ name: "hoop_leave_session", arguments: {} });
 
     // Verify all state is cleaned up
-    expect(hostState!.role).toBeNull();
-    expect(hostState!.hostSession).toBeNull();
-    expect(hostState!.pendingUpdates).toHaveLength(0);
-    expect(hostState!.pendingAdmissions.size).toBe(0);
-    expect(hostState!.activeEditsTracker).toBeNull();
-    expect(hostState!.pendingUpdatesWriter).toBeNull();
-    expect(hostState!.outboundUpdatesReader).toBeNull();
+    expect(host.state.role).toBeNull();
+    expect(host.state.hostSession).toBeNull();
+    expect(host.state.pendingUpdates).toHaveLength(0);
+    expect(host.state.pendingAdmissions.size).toBe(0);
+    expect(host.state.activeEditsTracker).toBeNull();
+    expect(host.state.pendingUpdatesWriter).toBeNull();
+    expect(host.state.pendingAdmissionsWriter).toBeNull();
+    expect(host.state.outboundUpdatesReader).toBeNull();
 
-    expect(peerState!.role).toBeNull();
-    expect(peerState!.peerSession).toBeNull();
-    expect(peerState!.pendingUpdates).toHaveLength(0);
-    expect(peerState!.activeEditsTracker).toBeNull();
-    expect(peerState!.pendingUpdatesWriter).toBeNull();
-    expect(peerState!.outboundUpdatesReader).toBeNull();
+    expect(peer.state.role).toBeNull();
+    expect(peer.state.peerSession).toBeNull();
+    expect(peer.state.pendingUpdates).toHaveLength(0);
+    expect(peer.state.activeEditsTracker).toBeNull();
+    expect(peer.state.pendingUpdatesWriter).toBeNull();
+    expect(peer.state.outboundUpdatesReader).toBeNull();
 
     // Both report inactive status
     const hostStatus = parseJson(
-      await hostClient!.callTool({ name: "hoop_get_status", arguments: {} }),
+      await host.client.callTool({ name: "hoop_get_status", arguments: {} }),
     ) as { active: boolean };
     expect(hostStatus.active).toBe(false);
 
     const peerStatus = parseJson(
-      await peerClient!.callTool({ name: "hoop_get_status", arguments: {} }),
+      await peer.client.callTool({ name: "hoop_get_status", arguments: {} }),
     ) as { active: boolean };
     expect(peerStatus.active).toBe(false);
   }, 60_000);
@@ -409,44 +418,11 @@ describe("E2E: two claude-code instances in a hoop session", () => {
   // ── Bidirectional update exchange ────────────────────────────────
 
   it("both instances exchange multiple updates bidirectionally", async () => {
-    ({ server: hostServer, state: hostState, client: hostClient } = await createMcpInstance(hostDeps));
-    ({ server: peerServer, state: peerState, client: peerClient } = await createMcpInstance(peerDeps));
-
-    const createResult = await hostClient!.callTool({
-      name: "hoop_create_session",
-      arguments: { executionTarget: "host-only" },
-    });
-    const hostData = parseJson(createResult) as { sessionCode: string; listenAddresses: string[] };
-
-    const joinPromise = peerClient!.callTool({
-      name: "hoop_join_session",
-      arguments: {
-        sessionCode: hostData.sessionCode,
-        hostAddress: hostData.listenAddresses[0],
-        email: "peer@example.com",
-      },
-    });
-
-    await new Promise<void>((resolve) => {
-      const interval = setInterval(() => {
-        if (hostState!.pendingAdmissions.size > 0) { clearInterval(interval); resolve(); }
-      }, 50);
-    });
-
-    const admissions = parseJson(
-      await hostClient!.callTool({ name: "hoop_check_admissions", arguments: {} }),
-    ) as { requests: Array<{ peerId: string }> };
-    await hostClient!.callTool({
-      name: "hoop_admit_peer",
-      arguments: { peerId: admissions.requests[0].peerId },
-    });
-    await joinPromise;
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    ({ host, peer, hostDeps: hDeps, peerDeps: pDeps } = await setupConnectedSession());
 
     // Host sends 3 cursor updates
     for (let i = 0; i < 3; i++) {
-      await hostClient!.callTool({
+      await host.client.callTool({
         name: "hoop_send_update",
         arguments: {
           type: "cursor-update",
@@ -459,7 +435,7 @@ describe("E2E: two claude-code instances in a hoop session", () => {
 
     // Peer sends 2 metadata updates
     for (let i = 0; i < 2; i++) {
-      await peerClient!.callTool({
+      await peer.client.callTool({
         name: "hoop_send_update",
         arguments: {
           type: "metadata-update",
@@ -469,11 +445,18 @@ describe("E2E: two claude-code instances in a hoop session", () => {
       });
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await waitFor(
+      () => peer!.state.pendingUpdates.length >= 3,
+      "waiting for all host cursor updates to reach peer",
+    );
+    await waitFor(
+      () => host!.state.pendingUpdates.length >= 2,
+      "waiting for all peer metadata updates to reach host",
+    );
 
     // Peer should have received all 3 host cursor updates
     const peerUpdates = parseJson(
-      await peerClient!.callTool({ name: "hoop_check_updates", arguments: {} }),
+      await peer.client.callTool({ name: "hoop_check_updates", arguments: {} }),
     ) as { count: number; updates: Array<{ type: string; filePath?: string }> };
 
     const cursorUpdates = peerUpdates.updates.filter((u) => u.type === "cursor-update");
@@ -486,7 +469,7 @@ describe("E2E: two claude-code instances in a hoop session", () => {
 
     // Host should have received all 2 peer metadata updates
     const hostUpdates = parseJson(
-      await hostClient!.callTool({ name: "hoop_check_updates", arguments: {} }),
+      await host.client.callTool({ name: "hoop_check_updates", arguments: {} }),
     ) as { count: number; updates: Array<{ type: string; key?: string }> };
 
     const metaUpdates = hostUpdates.updates.filter((u) => u.type === "metadata-update");
@@ -497,50 +480,20 @@ describe("E2E: two claude-code instances in a hoop session", () => {
   // ── Peer leave while host continues ──────────────────────────────
 
   it("host continues operating after peer disconnects", async () => {
-    ({ server: hostServer, state: hostState, client: hostClient } = await createMcpInstance(hostDeps));
-    ({ server: peerServer, state: peerState, client: peerClient } = await createMcpInstance(peerDeps));
-
-    const createResult = await hostClient!.callTool({
-      name: "hoop_create_session",
-      arguments: { executionTarget: "host-only" },
-    });
-    const hostData = parseJson(createResult) as { sessionCode: string; listenAddresses: string[] };
-
-    const joinPromise = peerClient!.callTool({
-      name: "hoop_join_session",
-      arguments: {
-        sessionCode: hostData.sessionCode,
-        hostAddress: hostData.listenAddresses[0],
-        email: "peer@example.com",
-      },
-    });
-
-    await new Promise<void>((resolve) => {
-      const interval = setInterval(() => {
-        if (hostState!.pendingAdmissions.size > 0) { clearInterval(interval); resolve(); }
-      }, 50);
-    });
-
-    const admissions = parseJson(
-      await hostClient!.callTool({ name: "hoop_check_admissions", arguments: {} }),
-    ) as { requests: Array<{ peerId: string }> };
-    await hostClient!.callTool({
-      name: "hoop_admit_peer",
-      arguments: { peerId: admissions.requests[0].peerId },
-    });
-    await joinPromise;
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    ({ host, peer, hostDeps: hDeps, peerDeps: pDeps } = await setupConnectedSession());
 
     // Peer leaves
-    await peerClient!.callTool({ name: "hoop_leave_session", arguments: {} });
+    await peer.client.callTool({ name: "hoop_leave_session", arguments: {} });
 
-    // Wait for disconnect to propagate
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Wait for disconnect to propagate to host via broadcastHub subscriber count
+    await waitFor(
+      () => host!.state.hostSession?.broadcastHub.getSubscriberCount() === 0,
+      "waiting for host to detect peer disconnect",
+    );
 
     // Host is still active and can send updates
     const hostStatus = parseJson(
-      await hostClient!.callTool({ name: "hoop_get_status", arguments: {} }),
+      await host.client.callTool({ name: "hoop_get_status", arguments: {} }),
     ) as { active: boolean; role: string; peerCount: number };
     expect(hostStatus.active).toBe(true);
     expect(hostStatus.role).toBe("host");
@@ -548,12 +501,12 @@ describe("E2E: two claude-code instances in a hoop session", () => {
 
     // Host can still send updates (to replay buffer for future peers)
     const sendResult = parseJson(
-      await hostClient!.callTool({
+      await host.client.callTool({
         name: "hoop_send_update",
         arguments: {
           type: "metadata-update",
           key: "still-alive",
-          value: true,
+          value: "true",
         },
       }),
     ) as { accepted: boolean };
