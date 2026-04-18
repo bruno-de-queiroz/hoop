@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { unlinkSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
@@ -877,5 +877,58 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     });
     const statusData = parseJson(getStatus) as { active: boolean };
     expect(statusData.active).toBe(false);
+  }, 60_000);
+
+  // ── TTL expiry: stale file-change lock auto-releases ───────────
+
+  it("file-change conflict auto-releases after TTL expiry", async () => {
+    ({ host, peer, hostDeps: hDeps, peerDeps: pDeps } = await setupConnectedSession());
+
+    // Host sends a file-change on src/shared.ts — creates an active edit lock
+    await host.client.callTool({
+      name: "hoop_send_update",
+      arguments: {
+        type: "file-change",
+        filePath: "src/shared.ts",
+        patch: VALID_PATCH_A,
+        baseHash: hashContent("original"),
+        resultHash: hashContent("modified"),
+      },
+    });
+
+    await waitFor(
+      () => peer!.state.pendingUpdates.length > 0,
+      "waiting for host file-change to reach peer",
+    );
+
+    // Drain the update so it registers in the peer's activeEditsTracker
+    await peer.client.callTool({ name: "hoop_check_updates", arguments: {} });
+
+    // Verify conflict exists NOW
+    const beforeExpiry = parseJson(
+      await peer.client.callTool({
+        name: "hoop_check_conflicts",
+        arguments: { filePath: "src/shared.ts" },
+      }),
+    ) as { hasConflict: boolean; conflict: { peerId: string } | null };
+    expect(beforeExpiry.hasConflict).toBe(true);
+
+    // Advance Date.now() past the 60 s TTL (FILE_CHANGE_TTL_MS)
+    const realNow = Date.now();
+    const spy = vi.spyOn(Date, "now").mockReturnValue(realNow + 61_000);
+
+    try {
+      // Next conflict check should auto-release the stale lock
+      const afterExpiry = parseJson(
+        await peer.client.callTool({
+          name: "hoop_check_conflicts",
+          arguments: { filePath: "src/shared.ts" },
+        }),
+      ) as { hasConflict: boolean; conflict: null };
+      expect(afterExpiry.hasConflict).toBe(false);
+      expect(afterExpiry.conflict).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
   }, 60_000);
 });
