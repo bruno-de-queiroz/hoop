@@ -48,13 +48,15 @@ async function createMcpInstance(deps: HoopMcpDeps) {
 type McpInstance = Awaited<ReturnType<typeof createMcpInstance>>;
 type CallToolResult = Awaited<ReturnType<Client["callTool"]>>;
 
+function resultText(result: CallToolResult): string {
+  return (result.content as Array<{ type: string; text: string }>)?.[0]?.text ?? "";
+}
+
 function parseJson(result: CallToolResult): unknown {
   if (result.isError) {
-    const text = (result.content as Array<{ type: string; text: string }>)?.[0]?.text;
-    throw new Error(`Tool returned error: ${text ?? "unknown"}`);
+    throw new Error(`Tool returned error: ${resultText(result)}`);
   }
-  const text = (result.content as Array<{ type: string; text: string }>)[0].text;
-  return JSON.parse(text);
+  return JSON.parse(resultText(result));
 }
 
 async function waitFor(
@@ -511,5 +513,119 @@ describe("E2E: two claude-code instances in a hoop session", () => {
       }),
     ) as { accepted: boolean };
     expect(sendResult.accepted).toBe(true);
+  }, 60_000);
+
+  // ── Denial flow ─────────────────────────────────────────────────
+
+  it("denied peer receives an error and host state is cleaned up", async () => {
+    hDeps = makeDeps("host");
+    pDeps = makeDeps("peer");
+    host = await createMcpInstance(hDeps);
+    peer = await createMcpInstance(pDeps);
+
+    const createResult = await host.client.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+    const hostData = parseJson(createResult) as { sessionCode: string; listenAddresses: string[] };
+
+    const joinPromise = peer.client.callTool({
+      name: "hoop_join_session",
+      arguments: {
+        sessionCode: hostData.sessionCode,
+        hostAddress: hostData.listenAddresses[0],
+        email: "untrusted@example.com",
+      },
+    });
+
+    await waitFor(
+      () => host!.state.pendingAdmissions.size > 0,
+      "waiting for admission request",
+    );
+
+    const admissions = parseJson(
+      await host.client.callTool({ name: "hoop_check_admissions", arguments: {} }),
+    ) as { requests: Array<{ peerId: string; email: string }> };
+    expect(admissions.requests[0].email).toBe("untrusted@example.com");
+
+    // Host denies the peer
+    const denyResult = parseJson(
+      await host.client.callTool({
+        name: "hoop_deny_peer",
+        arguments: { peerId: admissions.requests[0].peerId },
+      }),
+    ) as { denied: boolean; peerId: string };
+    expect(denyResult.denied).toBe(true);
+
+    // Join should resolve with an error
+    const joinResult = await joinPromise;
+    expect(joinResult.isError).toBe(true);
+    expect(resultText(joinResult)).toContain("Admission denied");
+
+    // Peer state should not be active
+    expect(peer.state.role).toBeNull();
+
+    // Host admission queue should be empty
+    expect(host.state.pendingAdmissions.size).toBe(0);
+  }, 60_000);
+
+  // ── Double-create prevention ────────────────────────────────────
+
+  it("creating a session while one is active returns an error", async () => {
+    hDeps = makeDeps("host");
+    host = await createMcpInstance(hDeps);
+
+    await host.client.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+    expect(host.state.role).toBe("host");
+
+    // Second create should fail
+    const secondCreate = await host.client.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+    expect(secondCreate.isError).toBe(true);
+    expect(resultText(secondCreate)).toContain("Session already active");
+  }, 60_000);
+
+  // ── Double-join prevention ──────────────────────────────────────
+
+  it("joining a session while one is active returns an error", async () => {
+    ({ host, peer, hostDeps: hDeps, peerDeps: pDeps } = await setupConnectedSession());
+
+    // Peer tries to join again while already connected
+    const secondJoin = await peer.client.callTool({
+      name: "hoop_join_session",
+      arguments: {
+        sessionCode: "ABC-123",
+        hostAddress: "/ip4/127.0.0.1/tcp/9999",
+        email: "peer@example.com",
+      },
+    });
+    expect(secondJoin.isError).toBe(true);
+    expect(resultText(secondJoin)).toContain("Session already active");
+  }, 60_000);
+
+  // ── Host leaves first ───────────────────────────────────────────
+
+  it("peer detects host departure and can leave cleanly", async () => {
+    ({ host, peer, hostDeps: hDeps, peerDeps: pDeps } = await setupConnectedSession());
+
+    // Host leaves while peer is still connected
+    const hostLeave = parseJson(
+      await host.client.callTool({ name: "hoop_leave_session", arguments: {} }),
+    ) as { left: boolean; previousRole: string };
+    expect(hostLeave.left).toBe(true);
+    expect(host.state.role).toBeNull();
+
+    // Peer can still leave gracefully (no crash or hang)
+    const peerLeave = parseJson(
+      await peer.client.callTool({ name: "hoop_leave_session", arguments: {} }),
+    ) as { left: boolean; previousRole: string };
+    expect(peerLeave.left).toBe(true);
+    expect(peerLeave.previousRole).toBe("peer");
+    expect(peer.state.role).toBeNull();
   }, 60_000);
 });
