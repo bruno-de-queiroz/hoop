@@ -77,7 +77,10 @@ export class LockStatusWriter {
       writeFileSync(tmpPath, JSON.stringify(registry), "utf-8");
       renameSync(tmpPath, this.registryPath);
     } catch {
-      // Best-effort: if we can't write, the hook will deny (fail-closed)
+      // Write failed — remove stale file so the hook sees "no file"
+      // instead of outdated state. Fail-closed: missing file → deny.
+      try { unlinkSync(this.registryPath); } catch { /* already gone */ }
+      try { unlinkSync(this.registryPath + ".tmp"); } catch { /* already gone */ }
     }
   }
 
