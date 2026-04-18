@@ -30,4 +30,27 @@ describe("skill definitions", () => {
     expect(content).toContain("Enter your email (for host admission):");
     expect(content).toContain("Connected to session!");
   });
+
+  it("/hoop-agent uses MCP status/lock tools and Agent for sub-agent spawning", () => {
+    const content = readSkill("skills", "hoop-agent", "SKILL.md");
+
+    // Uses MCP tools, not internal TypeScript
+    expect(content).toContain("hoop_get_status");
+    expect(content).toContain("hoop_acquire_lock");
+    expect(content).toContain("hoop_release_lock");
+    expect(content).toContain("Agent");
+    expect(content).not.toContain("import {");
+    expect(content).not.toContain("src/session/");
+    expect(content).not.toContain("src/mcp/");
+
+    // Model parsing
+    expect(content).toContain("opus");
+    expect(content).toContain("sonnet");
+    expect(content).toContain("haiku");
+
+    // UX strings
+    expect(content).toContain("Usage: /hoop-agent");
+    expect(content).toContain("No active Hoop session");
+    expect(content).toContain("Agent completed. Lock released.");
+  });
 });
