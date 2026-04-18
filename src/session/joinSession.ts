@@ -71,6 +71,7 @@ export interface JoinSessionParams {
   hostAddress: string;
   password?: string;
   email?: string;
+  onLockChange?: (lock: HoopLock) => void;
   networkConfig?: NetworkConfig;
   gitOps: JoinGitOps;
 }
@@ -208,6 +209,7 @@ export async function joinSession(
 
   const setLockState = (nextLock: HoopLock): HoopLock => {
     lockState = normalizeHoopLock(nextLock);
+    params.onLockChange?.(lockState);
     return { ...lockState };
   };
 
@@ -216,6 +218,7 @@ export async function joinSession(
       return;
     }
     lockState = applyHoopLockUpdate(lockState, update);
+    params.onLockChange?.(lockState);
   };
 
   const broadcastHandlers: Array<(update: StateUpdate) => void> = [];

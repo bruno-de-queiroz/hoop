@@ -267,6 +267,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           hostAddress,
           password,
           email,
+          onLockChange: () => flushLockStatus(),
           gitOps: joinGitOps,
         });
 
