@@ -678,4 +678,81 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     // The update should be attributed to the host's peerId
     expect(hookUpdate!.peerId).toBe(session.hostData.peerId);
   }, 60_000);
+
+  // ── Error paths: unauthorized & invalid actions ─────────────────
+
+  it("peer cannot call host-only tools", async () => {
+    ({ host, peer, hostDeps: hDeps, peerDeps: pDeps } = await setupConnectedSession());
+
+    const checkAdmissions = await peer.client.callTool({
+      name: "hoop_check_admissions",
+      arguments: {},
+    });
+    expect(checkAdmissions.isError).toBe(true);
+    expect(resultText(checkAdmissions)).toContain("Only the host");
+
+    const admitPeer = await peer.client.callTool({
+      name: "hoop_admit_peer",
+      arguments: { peerId: "fake-peer-id" },
+    });
+    expect(admitPeer.isError).toBe(true);
+    expect(resultText(admitPeer)).toContain("Only the host");
+
+    const denyPeer = await peer.client.callTool({
+      name: "hoop_deny_peer",
+      arguments: { peerId: "fake-peer-id" },
+    });
+    expect(denyPeer.isError).toBe(true);
+    expect(resultText(denyPeer)).toContain("Only the host");
+  }, 60_000);
+
+  it("host cannot admit or deny a non-existent peer", async () => {
+    ({ host, peer, hostDeps: hDeps, peerDeps: pDeps } = await setupConnectedSession());
+
+    const admitResult = await host.client.callTool({
+      name: "hoop_admit_peer",
+      arguments: { peerId: "non-existent-peer-id" },
+    });
+    expect(admitResult.isError).toBe(true);
+    expect(resultText(admitResult)).toContain("No pending admission");
+
+    const denyResult = await host.client.callTool({
+      name: "hoop_deny_peer",
+      arguments: { peerId: "non-existent-peer-id" },
+    });
+    expect(denyResult.isError).toBe(true);
+    expect(resultText(denyResult)).toContain("No pending admission");
+  }, 60_000);
+
+  it("tools require an active session", async () => {
+    hDeps = makeDeps("host");
+    host = await createMcpInstance(hDeps);
+
+    // No session created yet — all session tools should fail
+    const sendUpdate = await host.client.callTool({
+      name: "hoop_send_update",
+      arguments: {
+        type: "metadata-update",
+        key: "test",
+        value: "test",
+      },
+    });
+    expect(sendUpdate.isError).toBe(true);
+    expect(resultText(sendUpdate)).toContain("No active session");
+
+    const checkUpdates = await host.client.callTool({
+      name: "hoop_check_updates",
+      arguments: {},
+    });
+    expect(checkUpdates.isError).toBe(true);
+    expect(resultText(checkUpdates)).toContain("No active session");
+
+    const getStatus = await host.client.callTool({
+      name: "hoop_get_status",
+      arguments: {},
+    });
+    // hoop_get_status returns inactive status rather than error when no session
+    const statusData = parseJson(getStatus) as { active: boolean };
+    expect(statusData.active).toBe(false);
+  }, 60_000);
 });
