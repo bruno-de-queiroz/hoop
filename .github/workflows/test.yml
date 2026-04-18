@@ -28,5 +28,5 @@ jobs:
       - name: Install jq
         run: sudo apt-get install -y jq
 
-      - name: Unit tests
-        run: npx vitest run --project unit
+      - name: Test
+        run: npm test
