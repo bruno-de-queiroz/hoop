@@ -10,6 +10,7 @@ import { stubJoinGitOps } from "../../session/joinSession.js";
 import { hashContent } from "../../git/gitBranch.js";
 import { dirname } from "node:path";
 import type { OutboundUpdatesRegistry } from "../../state/outboundUpdatesReader.js";
+import { LockStatusWriter } from "../../state/lockStatusWriter.js";
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ function makeDeps(label: string): HoopMcpDeps {
     pendingUpdatesRegistryPath: `${base}-pending-updates.json`,
     pendingAdmissionsRegistryPath: `${base}-pending-admissions.json`,
     outboundUpdatesRegistryPath: `${base}-outbound-updates.json`,
+    lockStatusRegistryPath: `${base}-lock-status.json`,
     sessionStatusPath: `${base}-session-status.json`,
   };
 }
@@ -32,6 +34,7 @@ function allRegistryPaths(deps: HoopMcpDeps): string[] {
     deps.pendingUpdatesRegistryPath,
     deps.pendingAdmissionsRegistryPath,
     deps.outboundUpdatesRegistryPath,
+    deps.lockStatusRegistryPath,
     deps.sessionStatusPath,
   ].filter(Boolean) as string[];
 }
@@ -383,6 +386,67 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     );
   }, 60_000);
 
+  // ── Lock status file reflects lock state changes ─────────────────
+
+  it("lock status file tracks acquire and release across host and peer", async () => {
+    const session = await setupConnectedSession();
+    ({ host, peer, hostDeps: hDeps, peerDeps: pDeps } = session);
+
+    // Initially both lock status files should show free
+    const hostLockBefore = LockStatusWriter.readRegistry(hDeps!.lockStatusRegistryPath!);
+    expect(hostLockBefore).not.toBeNull();
+    expect(hostLockBefore!.status).toBe("free");
+    expect(hostLockBefore!.selfPeerId).toBe(session.hostData.peerId);
+
+    const peerLockBefore = LockStatusWriter.readRegistry(pDeps!.lockStatusRegistryPath!);
+    expect(peerLockBefore).not.toBeNull();
+    expect(peerLockBefore!.status).toBe("free");
+
+    // Host acquires lock → host file should show busy with self as holder
+    await host.client.callTool({ name: "hoop_acquire_lock", arguments: {} });
+
+    const hostLockAfterAcquire = LockStatusWriter.readRegistry(hDeps!.lockStatusRegistryPath!);
+    expect(hostLockAfterAcquire!.status).toBe("busy");
+    expect(hostLockAfterAcquire!.holderPeerId).toBe(session.hostData.peerId);
+
+    // Wait for lock broadcast to reach peer → peer file should show busy
+    await waitFor(
+      () => LockStatusWriter.readRegistry(pDeps!.lockStatusRegistryPath!)?.status === "busy",
+      "waiting for lock status file on peer to reflect busy",
+    );
+    const peerLockAfterAcquire = LockStatusWriter.readRegistry(pDeps!.lockStatusRegistryPath!);
+    expect(peerLockAfterAcquire!.holderPeerId).toBe(session.hostData.peerId);
+    expect(peerLockAfterAcquire!.selfPeerId).not.toBe(session.hostData.peerId);
+
+    // Host releases lock → both files should show free
+    await host.client.callTool({ name: "hoop_release_lock", arguments: {} });
+
+    const hostLockAfterRelease = LockStatusWriter.readRegistry(hDeps!.lockStatusRegistryPath!);
+    expect(hostLockAfterRelease!.status).toBe("free");
+    expect(hostLockAfterRelease!.holderPeerId).toBeNull();
+
+    await waitFor(
+      () => LockStatusWriter.readRegistry(pDeps!.lockStatusRegistryPath!)?.status === "free",
+      "waiting for lock status file on peer to reflect free",
+    );
+  }, 60_000);
+
+  it("lock status file is cleaned up on session leave", async () => {
+    ({ host, peer, hostDeps: hDeps, peerDeps: pDeps } = await setupConnectedSession());
+
+    // Verify files exist
+    expect(LockStatusWriter.readRegistry(hDeps!.lockStatusRegistryPath!)).not.toBeNull();
+    expect(LockStatusWriter.readRegistry(pDeps!.lockStatusRegistryPath!)).not.toBeNull();
+
+    // Leave sessions
+    await peer.client.callTool({ name: "hoop_leave_session", arguments: {} });
+    await host.client.callTool({ name: "hoop_leave_session", arguments: {} });
+
+    // Files should be removed
+    expect(LockStatusWriter.readRegistry(hDeps!.lockStatusRegistryPath!)).toBeNull();
+    expect(LockStatusWriter.readRegistry(pDeps!.lockStatusRegistryPath!)).toBeNull();
+  }, 60_000);
+
   // ── Conflict detection across instances ──────────────────────────
 
   it("peer detects conflict when host is editing the same file", async () => {
@@ -436,6 +500,7 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     expect(host.state.pendingUpdatesWriter).toBeNull();
     expect(host.state.pendingAdmissionsWriter).toBeNull();
     expect(host.state.outboundUpdatesReader).toBeNull();
+    expect(host.state.lockStatusWriter).toBeNull();
 
     expect(peer.state.role).toBeNull();
     expect(peer.state.peerSession).toBeNull();
@@ -443,6 +508,7 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     expect(peer.state.activeEditsTracker).toBeNull();
     expect(peer.state.pendingUpdatesWriter).toBeNull();
     expect(peer.state.outboundUpdatesReader).toBeNull();
+    expect(peer.state.lockStatusWriter).toBeNull();
 
     // Both report inactive status
     const hostStatus = parseJson(
