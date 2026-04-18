@@ -8,10 +8,12 @@ import { createHoopMcpServer, type HoopMcpDeps } from "../server.js";
 import { stubGitOps } from "../../session/createSession.js";
 import { stubJoinGitOps } from "../../session/joinSession.js";
 import { PendingUpdatesWriter } from "../../state/pendingUpdatesWriter.js";
+import { PendingPromptRequestsWriter } from "../../state/pendingPromptRequestsWriter.js";
 
 const CONFLICT_REGISTRY = join(tmpdir(), "hoop-conflict-test.json");
 const PENDING_UPDATES_REGISTRY = join(tmpdir(), "hoop-pending-updates-test.json");
 const PENDING_ADMISSIONS_REGISTRY = join(tmpdir(), "hoop-pending-admissions-test.json");
+const PENDING_PROMPT_REQUESTS_REGISTRY = join(tmpdir(), "hoop-pending-prompt-requests-test.json");
 const SESSION_STATUS_FILE = join(tmpdir(), "hoop-session-status-test.json");
 
 const TEST_DEPS: HoopMcpDeps = {
@@ -20,6 +22,7 @@ const TEST_DEPS: HoopMcpDeps = {
   conflictRegistryPath: CONFLICT_REGISTRY,
   pendingUpdatesRegistryPath: PENDING_UPDATES_REGISTRY,
   pendingAdmissionsRegistryPath: PENDING_ADMISSIONS_REGISTRY,
+  pendingPromptRequestsRegistryPath: PENDING_PROMPT_REQUESTS_REGISTRY,
   sessionStatusPath: SESSION_STATUS_FILE,
 };
 
@@ -63,6 +66,7 @@ describe("hoop MCP server", () => {
     try { unlinkSync(CONFLICT_REGISTRY); } catch { /* ignore */ }
     try { unlinkSync(PENDING_UPDATES_REGISTRY); } catch { /* ignore */ }
     try { unlinkSync(PENDING_ADMISSIONS_REGISTRY); } catch { /* ignore */ }
+    try { unlinkSync(PENDING_PROMPT_REQUESTS_REGISTRY); } catch { /* ignore */ }
     try { unlinkSync(SESSION_STATUS_FILE); } catch { /* ignore */ }
   });
 
@@ -881,4 +885,391 @@ describe("hoop MCP server", () => {
     await gracefulShutdown();
     expect(existsSync(SESSION_STATUS_FILE)).toBe(false);
   });
+
+  // ── Prompt execution tools ─────────────────────────────────────────
+
+  it("hoop_check_prompt_requests returns empty when no requests pending", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_check_prompt_requests",
+      arguments: {},
+    });
+
+    const data = parseJson(result) as { count: number; requests: unknown[] };
+    expect(data.count).toBe(0);
+    expect(data.requests).toEqual([]);
+  }, 30_000);
+
+  it("hoop_check_prompt_requests fails for non-host", async () => {
+    ({ server, state, client } = await setup());
+
+    const result = await client!.callTool({
+      name: "hoop_check_prompt_requests",
+      arguments: {},
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it("hoop_approve_prompt_request fails for non-host", async () => {
+    ({ server, state, client } = await setup());
+
+    const result = await client!.callTool({
+      name: "hoop_approve_prompt_request",
+      arguments: { requestId: "fake" },
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it("hoop_deny_prompt_request fails for non-host", async () => {
+    ({ server, state, client } = await setup());
+
+    const result = await client!.callTool({
+      name: "hoop_deny_prompt_request",
+      arguments: { requestId: "fake" },
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it("hoop_complete_prompt_request fails for non-host", async () => {
+    ({ server, state, client } = await setup());
+
+    const result = await client!.callTool({
+      name: "hoop_complete_prompt_request",
+      arguments: { requestId: "fake" },
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it("hoop_request_host_execution fails for non-peer", async () => {
+    ({ server, state, client } = await setup());
+
+    // No session
+    const result1 = await client!.callTool({
+      name: "hoop_request_host_execution",
+      arguments: { prompt: "test" },
+    });
+    expect(result1.isError).toBe(true);
+
+    // Host session
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const result2 = await client!.callTool({
+      name: "hoop_request_host_execution",
+      arguments: { prompt: "test" },
+    });
+    expect(result2.isError).toBe(true);
+  }, 30_000);
+
+  it("hoop_poll_execution_result fails for non-peer", async () => {
+    ({ server, state, client } = await setup());
+
+    const result = await client!.callTool({
+      name: "hoop_poll_execution_result",
+      arguments: { requestId: "fake" },
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it("prompt request flow: enqueue, check, approve, complete", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    // Simulate a prompt request arriving via the protocol handler
+    const queue = state!.hostSession!.promptRequestQueue;
+    queue.enqueue(
+      {
+        id: "req-1",
+        prompt: "Fix the auth bug",
+        requestedBy: "peer-abc",
+        timestamp: Date.now(),
+      },
+      () => {},
+      false,
+    );
+
+    // Check shows the pending request
+    const checkResult = await client!.callTool({
+      name: "hoop_check_prompt_requests",
+      arguments: {},
+    });
+    const checkData = parseJson(checkResult) as {
+      count: number;
+      requests: Array<{ id: string; prompt: string; status: string }>;
+    };
+    expect(checkData.count).toBe(1);
+    expect(checkData.requests[0].id).toBe("req-1");
+    expect(checkData.requests[0].prompt).toBe("Fix the auth bug");
+    expect(checkData.requests[0].status).toBe("pending-approval");
+
+    // Approve
+    const approveResult = await client!.callTool({
+      name: "hoop_approve_prompt_request",
+      arguments: { requestId: "req-1" },
+    });
+    const approveData = parseJson(approveResult) as { id: string; status: string };
+    expect(approveData.status).toBe("approved");
+
+    // Complete
+    const completeResult = await client!.callTool({
+      name: "hoop_complete_prompt_request",
+      arguments: { requestId: "req-1" },
+    });
+    const completeData = parseJson(completeResult) as { id: string; status: string };
+    expect(completeData.status).toBe("completed");
+
+    // Queue is now empty
+    const checkResult2 = await client!.callTool({
+      name: "hoop_check_prompt_requests",
+      arguments: {},
+    });
+    expect((parseJson(checkResult2) as { count: number }).count).toBe(0);
+  }, 30_000);
+
+  it("prompt request flow: enqueue and deny", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const queue = state!.hostSession!.promptRequestQueue;
+    queue.enqueue(
+      {
+        id: "req-2",
+        prompt: "Dangerous operation",
+        requestedBy: "peer-xyz",
+        timestamp: Date.now(),
+      },
+      () => {},
+      false,
+    );
+
+    const denyResult = await client!.callTool({
+      name: "hoop_deny_prompt_request",
+      arguments: { requestId: "req-2", reason: "Too risky" },
+    });
+    const denyData = parseJson(denyResult) as { id: string; status: string; reason: string };
+    expect(denyData.status).toBe("denied");
+    expect(denyData.reason).toBe("Too risky");
+
+    // Queue is now empty
+    expect(queue.size()).toBe(0);
+  }, 30_000);
+
+  it("prompt request flow: complete with error marks as failed", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const queue = state!.hostSession!.promptRequestQueue;
+    queue.enqueue(
+      {
+        id: "req-3",
+        prompt: "Task that fails",
+        requestedBy: "peer-fail",
+        timestamp: Date.now(),
+      },
+      () => {},
+      true, // auto-approved
+    );
+
+    const result = await client!.callTool({
+      name: "hoop_complete_prompt_request",
+      arguments: { requestId: "req-3", error: "Compilation failed" },
+    });
+    const data = parseJson(result) as { id: string; status: string; error: string };
+    expect(data.status).toBe("failed");
+    expect(data.error).toBe("Compilation failed");
+  }, 30_000);
+
+  it("hoop_approve_prompt_request fails for unknown request", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_approve_prompt_request",
+      arguments: { requestId: "nonexistent" },
+    });
+    expect(result.isError).toBe(true);
+  }, 30_000);
+
+  it("hoop_deny_prompt_request fails for unknown request", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_deny_prompt_request",
+      arguments: { requestId: "nonexistent" },
+    });
+    expect(result.isError).toBe(true);
+  }, 30_000);
+
+  it("hoop_complete_prompt_request fails for unknown request", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_complete_prompt_request",
+      arguments: { requestId: "nonexistent" },
+    });
+    expect(result.isError).toBe(true);
+  }, 30_000);
+
+  it("autoExecutePrompts flag is returned in create and status", async () => {
+    ({ server, state, client } = await setup());
+
+    const createResult = await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only", autoExecutePrompts: true },
+    });
+    const createData = parseJson(createResult) as { autoExecutePrompts: boolean };
+    expect(createData.autoExecutePrompts).toBe(true);
+
+    const statusResult = await client!.callTool({
+      name: "hoop_get_status",
+      arguments: {},
+    });
+    const statusData = parseJson(statusResult) as { autoExecutePrompts: boolean };
+    expect(statusData.autoExecutePrompts).toBe(true);
+  }, 30_000);
+
+  it("autoExecutePrompts defaults to false", async () => {
+    ({ server, state, client } = await setup());
+
+    const createResult = await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+    const createData = parseJson(createResult) as { autoExecutePrompts: boolean };
+    expect(createData.autoExecutePrompts).toBe(false);
+
+    expect(state!.hostSession!.autoExecutePrompts).toBe(false);
+  }, 30_000);
+
+  it("hoop_check_prompt_requests mirrors pending requests to hook registry", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const queue = state!.hostSession!.promptRequestQueue;
+    queue.enqueue(
+      {
+        id: "req-hook",
+        prompt: "Hook test",
+        model: "sonnet",
+        requestedBy: "peer-hook",
+        timestamp: 1000,
+      },
+      () => {},
+      false,
+    );
+
+    await client!.callTool({
+      name: "hoop_check_prompt_requests",
+      arguments: {},
+    });
+
+    const registry = PendingPromptRequestsWriter.readRegistry(
+      PENDING_PROMPT_REQUESTS_REGISTRY,
+    );
+    expect(registry).not.toBeNull();
+    expect(registry!.requests).toHaveLength(1);
+    expect(registry!.requests[0].id).toBe("req-hook");
+    expect(registry!.requests[0].prompt).toBe("Hook test");
+    expect(registry!.requests[0].model).toBe("sonnet");
+    expect(registry!.requests[0].requestedBy).toBe("peer-hook");
+    expect(registry!.requests[0].status).toBe("pending-approval");
+  }, 30_000);
+
+  it("hoop_leave_session clears prompt request state", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    state!.hostSession!.promptRequestQueue.enqueue(
+      {
+        id: "req-leave",
+        prompt: "Will be cleared",
+        requestedBy: "peer-leave",
+        timestamp: Date.now(),
+      },
+      () => {},
+      false,
+    );
+
+    await client!.callTool({
+      name: "hoop_leave_session",
+      arguments: {},
+    });
+
+    expect(state!.pendingPromptRequestsWriter).toBeNull();
+    expect(state!.peerPromptRequests.size).toBe(0);
+  }, 30_000);
+
+  it("hoop_get_status includes pendingPromptRequests count for host", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    // No pending requests initially
+    const status1 = parseJson(
+      await client!.callTool({ name: "hoop_get_status", arguments: {} }),
+    ) as { pendingPromptRequests: number };
+    expect(status1.pendingPromptRequests).toBe(0);
+
+    // Add a pending request
+    state!.hostSession!.promptRequestQueue.enqueue(
+      {
+        id: "req-count",
+        prompt: "Count me",
+        requestedBy: "peer-count",
+        timestamp: Date.now(),
+      },
+      () => {},
+      false,
+    );
+
+    const status2 = parseJson(
+      await client!.callTool({ name: "hoop_get_status", arguments: {} }),
+    ) as { pendingPromptRequests: number };
+    expect(status2.pendingPromptRequests).toBe(1);
+  }, 30_000);
 });
