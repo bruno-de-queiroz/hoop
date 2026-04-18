@@ -100,6 +100,7 @@ export interface CreateSessionResult {
   replayBuffer: ReplayBuffer;
   acquireLock: (peerId?: string, timestamp?: number) => LockAcquireResult;
   releaseLock: (peerId?: string, timestamp?: number) => LockReleaseResult;
+  forceReleaseLock: (timestamp?: number) => LockReleaseResult;
   getLockStatus: () => HoopLock;
 }
 
@@ -309,6 +310,24 @@ export async function createSession(
     return { released: true, holder: null, seqNo };
   };
 
+  const forceReleaseLock = (
+    timestamp: number = Date.now(),
+  ): LockReleaseResult => {
+    expireStaleLock(timestamp);
+    const lock = accumulator.getLockSnapshot(timestamp);
+    if (lock.status === "free") {
+      return { released: false, holder: null };
+    }
+
+    const update: LockReleaseUpdate = {
+      type: "lock-release",
+      peerId: lock.holderPeerId!,
+      timestamp,
+    };
+    const seqNo = publishUpdate(update);
+    return { released: true, holder: null, seqNo };
+  };
+
   await node.handle(SYNC_PROTOCOL, async (stream, connection) => {
     const request = await readFromStream<SyncRequest>(stream);
     const remotePeerId = connection.remotePeer.toString();
@@ -507,6 +526,7 @@ export async function createSession(
     replayBuffer,
     acquireLock,
     releaseLock,
+    forceReleaseLock,
     getLockStatus,
   };
 }

@@ -151,4 +151,39 @@ describe("createSession", () => {
       ),
     ).rejects.toThrow("Failed to create session worktree");
   }, 30_000);
+
+  it("forceReleaseLock releases another peer's lock", async () => {
+    result = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+    );
+
+    const acquireResult = result.acquireLock("other-peer");
+    expect(acquireResult.acquired).toBe(true);
+
+    const forceResult = result.forceReleaseLock();
+    expect(forceResult).toEqual({ released: true, holder: null, seqNo: expect.any(Number) });
+
+    const lockStatus = result.getLockStatus();
+    expect(lockStatus.status).toBe("free");
+    expect(lockStatus.holderPeerId).toBeNull();
+  }, 30_000);
+
+  it("forceReleaseLock returns released:false when lock is free", async () => {
+    result = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+    );
+
+    const forceResult = result.forceReleaseLock();
+    expect(forceResult).toEqual({ released: false, holder: null });
+  }, 30_000);
 });

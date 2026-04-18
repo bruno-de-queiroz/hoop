@@ -61,4 +61,14 @@ describe("skill definitions", () => {
     expect(content).toContain("Cannot start agent");
     expect(content).toContain("Agent completed. Lock released.");
   });
+
+  it("/hoop-unlock uses the MCP force-unlock tool and includes confirmation UX", () => {
+    const content = readSkill("skills", "hoop-unlock", "SKILL.md");
+
+    expect(content).toContain("hoop_force_unlock");
+    expect(content).toContain("hoop_lock_status");
+    expect(content).not.toContain("import ");
+    expect(content).toContain("Proceed? (y/n)");
+    expect(content).toContain("Lock force-released successfully");
+  });
 });
