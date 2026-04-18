@@ -115,6 +115,7 @@ export async function writeHalf(stream: Stream, message: unknown): Promise<void>
 
 export const BROADCAST_PROTOCOL = "/hoop/broadcast/1.0.0";
 export const UPDATE_PROTOCOL = "/hoop/update/1.0.0";
+export const PROMPT_PROTOCOL = "/hoop/prompt/1.0.0";
 
 export function writeEvent(stream: Stream, message: unknown): void {
   const bytes = new TextEncoder().encode(JSON.stringify(message) + "\n");
