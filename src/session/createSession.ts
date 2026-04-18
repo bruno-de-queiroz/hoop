@@ -12,6 +12,7 @@ import {
   SYNC_PROTOCOL,
   BROADCAST_PROTOCOL,
   UPDATE_PROTOCOL,
+  PROMPT_PROTOCOL,
   readFromStream,
   writeToStream,
   type AuthRequest,
@@ -36,6 +37,12 @@ import {
 import { HostStateAccumulator } from "../state/hostStateAccumulator.js";
 import { type HoopLock } from "../state/hoopLock.js";
 import { isValidUnifiedDiff } from "../diff/validatePatch.js";
+import {
+  PromptRequestQueue,
+  isPromptRequest,
+  type PromptRequest,
+  type PromptResponse,
+} from "../state/promptRequest.js";
 import { type ExecutionTarget, type Session, SessionStore } from "./session.js";
 import { generateSessionCode } from "./sessionCode.js";
 import { type StateTree, createEmptyStateTree } from "../state/stateTree.js";
@@ -66,7 +73,9 @@ export interface CreateSessionParams {
   password?: string;
   onAdmissionRequest: (email: string, peerId: string) => Promise<boolean>;
   onLockChange?: (lock: HoopLock) => void;
+  onPromptRequest?: (request: PromptRequest) => void;
   executionTarget: ExecutionTarget;
+  autoExecutePrompts?: boolean;
   networkConfig?: NetworkConfig;
   stateTree?: StateTree;
   gitOps: GitOps;
@@ -88,6 +97,7 @@ export interface CreateSessionResult {
   sessionCode: string;
   hostId: string;
   executionTarget: ExecutionTarget;
+  autoExecutePrompts: boolean;
   passwordProtected: boolean;
   peerId: string;
   listenAddresses: string[];
@@ -98,6 +108,7 @@ export interface CreateSessionResult {
   broadcastHub: BroadcastHub;
   accumulator: HostStateAccumulator;
   replayBuffer: ReplayBuffer;
+  promptRequestQueue: PromptRequestQueue;
   acquireLock: (peerId?: string, timestamp?: number) => LockAcquireResult;
   releaseLock: (peerId?: string, timestamp?: number) => LockReleaseResult;
   forceReleaseLock: (timestamp?: number) => LockReleaseResult;
@@ -233,6 +244,8 @@ export async function createSession(
   const broadcastHub = new BroadcastHub();
   const accumulator = new HostStateAccumulator();
   const replayBuffer = new ReplayBuffer();
+  const promptRequestQueue = new PromptRequestQueue();
+  const autoExecutePrompts = params.autoExecutePrompts ?? false;
 
   const broadcastAppliedUpdate = (
     update: StateUpdate,
@@ -359,6 +372,47 @@ export async function createSession(
       return;
     }
     broadcastHub.subscribe(remotePeerId, stream);
+  });
+
+  await node.handle(PROMPT_PROTOCOL, async (stream, connection) => {
+    const remotePeerId = connection.remotePeer.toString();
+    if (!node.isPeerAuthenticated(remotePeerId)) {
+      await writeToStream(stream, {
+        id: "",
+        status: "denied",
+        reason: "not-authenticated",
+        timestamp: Date.now(),
+      } as PromptResponse);
+      return;
+    }
+
+    try {
+      const request = await readFromStream<unknown>(stream);
+      if (!isPromptRequest(request)) {
+        await writeToStream(stream, {
+          id: "",
+          status: "failed",
+          error: "invalid-prompt-request",
+          timestamp: Date.now(),
+        } as PromptResponse);
+        return;
+      }
+
+      const response = promptRequestQueue.enqueue(
+        request,
+        () => {},
+        autoExecutePrompts,
+      );
+      params.onPromptRequest?.(request);
+      await writeToStream(stream, response);
+    } catch {
+      await writeToStream(stream, {
+        id: "",
+        status: "failed",
+        error: "internal-error",
+        timestamp: Date.now(),
+      } as PromptResponse);
+    }
   });
 
   await node.handle(UPDATE_PROTOCOL, async (stream, connection) => {
@@ -514,6 +568,7 @@ export async function createSession(
     sessionCode,
     hostId,
     executionTarget: params.executionTarget,
+    autoExecutePrompts,
     passwordProtected: passwordHash !== undefined,
     peerId: node.getPeerId(),
     listenAddresses: node.getListenAddresses(),
@@ -524,6 +579,7 @@ export async function createSession(
     broadcastHub,
     accumulator,
     replayBuffer,
+    promptRequestQueue,
     acquireLock,
     releaseLock,
     forceReleaseLock,
