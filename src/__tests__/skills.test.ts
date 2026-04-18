@@ -56,6 +56,7 @@ describe("skill definitions", () => {
 
     // UX strings — happy path and error paths
     expect(content).toContain("Usage: /hoop-agent");
+    expect(content).toContain("Unknown model:");
     expect(content).toContain("No active Hoop session");
     expect(content).toContain("Cannot start agent");
     expect(content).toContain("Agent completed. Lock released.");

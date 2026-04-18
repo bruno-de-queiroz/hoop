@@ -9,7 +9,13 @@ description: Spawn a sub-agent within an active Hoop session with an optional mo
 
 The user invokes this skill as `/hoop-agent [--model <name>] <prompt>`. Parse the args string as follows:
 
-1. If the args string starts with `--model `, consume the next token as the model override. It must be one of the known model names: `opus`, `sonnet`, `haiku`. Everything after the model token is the prompt.
+1. If the args string starts with `--model `, consume the next token as the model override. It must be one of the known model names: `opus`, `sonnet`, `haiku`. If the token after `--model` is not a recognized model name, display an error and stop:
+
+   ```
+   Unknown model: <token>. Must be one of: opus, sonnet, haiku
+   ```
+
+   Everything after the model token is the prompt.
 2. Otherwise, there is no model override — the entire args string is the prompt.
 
 This flag-based syntax avoids ambiguity when the prompt itself starts with a model name (e.g. `/hoop-agent haiku generator` is unambiguously a prompt, not a model override).
