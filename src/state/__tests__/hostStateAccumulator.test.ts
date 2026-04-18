@@ -190,7 +190,7 @@ describe("HostStateAccumulator", () => {
   describe("accumulate() — lock updates", () => {
     it("tracks the current lock holder", () => {
       acc.accumulate(makeLockAcquire("peer-1", 1_000));
-      expect(acc.getSnapshot().lock).toEqual({
+      expect(acc.getSnapshot(1_000).lock).toEqual({
         holderPeerId: "peer-1",
         acquiredAt: 1_000,
         status: "busy",
@@ -239,7 +239,7 @@ describe("HostStateAccumulator", () => {
       acc.accumulate(makeFileChange("peer-1", "src/c.ts", "hash-c"));
       acc.accumulate(makeLockAcquire("peer-3", 3_000));
 
-      const snapshot = acc.getSnapshot();
+      const snapshot = acc.getSnapshot(3_000);
       expect(Object.keys(snapshot.cursors)).toEqual(["peer-1"]);
       expect(Object.keys(snapshot.buffers)).toEqual(["peer-2"]);
       expect(Object.keys(snapshot.metadata)).toEqual(["theme"]);
@@ -279,7 +279,7 @@ describe("HostStateAccumulator", () => {
   describe("getLockSnapshot()", () => {
     it("returns the current lock state", () => {
       acc.accumulate(makeLockAcquire("peer-1", 5_000));
-      expect(acc.getLockSnapshot()).toEqual({
+      expect(acc.getLockSnapshot(5_000)).toEqual({
         holderPeerId: "peer-1",
         acquiredAt: 5_000,
         status: "busy",
@@ -302,7 +302,7 @@ describe("HostStateAccumulator", () => {
     it("does nothing for a non-holder", () => {
       acc.accumulate(makeLockAcquire("peer-1", 1_000));
       expect(acc.releaseLockForPeer("peer-2", 2_000)).toBeUndefined();
-      expect(acc.getLockSnapshot()).toEqual({
+      expect(acc.getLockSnapshot(2_000)).toEqual({
         holderPeerId: "peer-1",
         acquiredAt: 1_000,
         status: "busy",
