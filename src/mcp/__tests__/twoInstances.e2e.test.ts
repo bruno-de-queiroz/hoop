@@ -1,13 +1,15 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { unlinkSync } from "node:fs";
+import { unlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHoopMcpServer, type HoopMcpDeps } from "../server.js";
 import { stubGitOps } from "../../session/createSession.js";
 import { stubJoinGitOps } from "../../session/joinSession.js";
 import { hashContent } from "../../git/gitBranch.js";
+import { dirname } from "node:path";
+import type { OutboundUpdatesRegistry } from "../../state/outboundUpdatesReader.js";
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -627,5 +629,53 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     expect(peerLeave.left).toBe(true);
     expect(peerLeave.previousRole).toBe("peer");
     expect(peer.state.role).toBeNull();
+  }, 60_000);
+
+  // ── Hook integration: OutboundUpdatesReader → broadcast → peer ──
+
+  it("host PostToolUse hook write is picked up and broadcast to peer", async () => {
+    const session = await setupConnectedSession();
+    ({ host, peer, hostDeps: hDeps, peerDeps: pDeps } = session);
+
+    // Simulate PostToolUse hook writing to the outbound registry file.
+    // In production, the hook shell script writes this JSON after a file-write tool call.
+    const registryPath = hDeps!.outboundUpdatesRegistryPath!;
+    mkdirSync(dirname(registryPath), { recursive: true });
+
+    const registry: OutboundUpdatesRegistry = {
+      updates: [
+        {
+          filePath: "src/hookTest.ts",
+          patch: VALID_PATCH_A,
+          baseHash: hashContent("const a = 1;\nconst b = 2;\nconst c = 3;\n"),
+          resultHash: hashContent("const a = 1;\nconst b = 42;\nconst c = 3;\n"),
+          timestamp: Date.now(),
+        },
+      ],
+      updatedAt: Date.now(),
+    };
+    writeFileSync(registryPath, JSON.stringify(registry), "utf-8");
+
+    // OutboundUpdatesReader uses watchFile with 500ms interval, so wait for it
+    // to drain the file and broadcast through the host's broadcastHub → peer
+    await waitFor(
+      () => peer!.state.pendingUpdates.length > 0,
+      "waiting for hook-originated update to reach peer via OutboundUpdatesReader",
+      5_000,
+    );
+
+    // Peer drains updates — should see the file change from the hook path
+    const peerUpdates = parseJson(
+      await peer.client.callTool({ name: "hoop_check_updates", arguments: {} }),
+    ) as { count: number; updates: Array<{ type: string; filePath: string; patch: string; peerId: string }> };
+
+    expect(peerUpdates.count).toBeGreaterThanOrEqual(1);
+    const hookUpdate = peerUpdates.updates.find(
+      (u) => u.type === "file-change" && u.filePath === "src/hookTest.ts",
+    );
+    expect(hookUpdate).toBeDefined();
+    expect(hookUpdate!.patch).toBe(VALID_PATCH_A);
+    // The update should be attributed to the host's peerId
+    expect(hookUpdate!.peerId).toBe(session.hostData.peerId);
   }, 60_000);
 });
