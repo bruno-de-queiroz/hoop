@@ -587,7 +587,33 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     async () => jsonResult(getCurrentLockStatus()),
   );
 
-  // ── 11. hoop_get_status ─────────────────────────────────────────
+  // ── 11. hoop_force_unlock ────────────────────────────────────────
+
+  server.registerTool(
+    "hoop_force_unlock",
+    {
+      description:
+        "Force-release the Hot Seat lock regardless of who holds it. Host only. Use when a peer agent hangs or crashes.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      if (state.role === null) {
+        return errorResult("No active session.");
+      }
+      if (state.role !== "host") {
+        return errorResult("Only the host can force-unlock.");
+      }
+      if (!state.hostSession) {
+        return errorResult("No active session.");
+      }
+
+      const result = state.hostSession.forceReleaseLock();
+      flushLockStatus();
+      return jsonResult({ released: result.released, holder: result.holder });
+    },
+  );
+
+  // ── 12. hoop_get_status ─────────────────────────────────────────
 
   server.registerTool(
     "hoop_get_status",

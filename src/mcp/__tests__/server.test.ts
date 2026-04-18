@@ -66,7 +66,7 @@ describe("hoop MCP server", () => {
     try { unlinkSync(SESSION_STATUS_FILE); } catch { /* ignore */ }
   });
 
-  it("registers all 13 tools", async () => {
+  it("registers all 14 tools", async () => {
     ({ server, state, client } = await setup());
 
     const { tools } = await client!.listTools();
@@ -80,6 +80,7 @@ describe("hoop MCP server", () => {
       "hoop_check_updates",
       "hoop_create_session",
       "hoop_deny_peer",
+      "hoop_force_unlock",
       "hoop_get_status",
       "hoop_join_session",
       "hoop_leave_session",
@@ -204,6 +205,101 @@ describe("hoop MCP server", () => {
       arguments: {},
     });
     expect(parseJson(releaseResult)).toEqual({ released: true, holder: null });
+  }, 30_000);
+
+  it("hoop_force_unlock fails with no active session", async () => {
+    ({ server, state, client } = await setup());
+
+    const result = await client!.callTool({
+      name: "hoop_force_unlock",
+      arguments: {},
+    });
+
+    expect(result.isError).toBe(true);
+  }, 30_000);
+
+  it("hoop_force_unlock returns released:false when lock is already free", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_force_unlock",
+      arguments: {},
+    });
+
+    expect(parseJson(result)).toEqual({ released: false, holder: null });
+  }, 30_000);
+
+  it("hoop_force_unlock releases a peer's lock", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    // Simulate a peer acquiring the lock directly on the host session
+    state!.hostSession!.acquireLock("fake-peer-id");
+
+    const statusBefore = await client!.callTool({
+      name: "hoop_lock_status",
+      arguments: {},
+    });
+    expect(parseJson(statusBefore)).toEqual({
+      holderPeerId: "fake-peer-id",
+      acquiredAt: expect.any(Number),
+      status: "busy",
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_force_unlock",
+      arguments: {},
+    });
+    expect(parseJson(result)).toEqual({ released: true, holder: null });
+
+    const statusAfter = await client!.callTool({
+      name: "hoop_lock_status",
+      arguments: {},
+    });
+    expect(parseJson(statusAfter)).toEqual({
+      holderPeerId: null,
+      acquiredAt: null,
+      status: "free",
+    });
+  }, 30_000);
+
+  it("hoop_force_unlock can release the host's own lock", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    await client!.callTool({
+      name: "hoop_acquire_lock",
+      arguments: {},
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_force_unlock",
+      arguments: {},
+    });
+    expect(parseJson(result)).toEqual({ released: true, holder: null });
+
+    const statusAfter = await client!.callTool({
+      name: "hoop_lock_status",
+      arguments: {},
+    });
+    expect(parseJson(statusAfter)).toEqual({
+      holderPeerId: null,
+      acquiredAt: null,
+      status: "free",
+    });
   }, 30_000);
 
   it("hoop_check_updates returns empty when no updates pending", async () => {
