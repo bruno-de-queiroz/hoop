@@ -11,7 +11,9 @@
 #   2. Lock TTL expiry (5-minute timeout, matching HOOP_LOCK_TTL_MS)
 #   3. Lock holder vs self identity
 #
-# Only applies to Edit and Write tools.
+# Only applies to Edit, Write, and NotebookEdit tools.
+# NOTE: The lock file path must match defaultLockStatusPath() in
+# src/state/lockStatusWriter.ts — both derive from TMPDIR.
 
 set -euo pipefail
 
