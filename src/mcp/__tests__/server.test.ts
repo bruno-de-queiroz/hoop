@@ -216,6 +216,26 @@ describe("hoop MCP server", () => {
     });
 
     expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      expect.objectContaining({ text: "No active session." }),
+    ]);
+  }, 30_000);
+
+  it("hoop_force_unlock rejects when called by a peer", async () => {
+    ({ server, state, client } = await setup());
+
+    // Simulate being a peer (not a host)
+    state!.role = "peer";
+
+    const result = await client!.callTool({
+      name: "hoop_force_unlock",
+      arguments: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      expect.objectContaining({ text: "Only the host can force-unlock." }),
+    ]);
   }, 30_000);
 
   it("hoop_force_unlock returns released:false when lock is already free", async () => {

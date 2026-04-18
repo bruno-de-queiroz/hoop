@@ -358,7 +358,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 3b. hoop_check_conflicts ─────────────────────────────────
+  // ── 4. hoop_check_conflicts ──────────────────────────────────
 
   server.registerTool(
     "hoop_check_conflicts",
@@ -377,7 +377,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 4. hoop_check_admissions ───────────────────────────────────
+  // ── 5. hoop_check_admissions ───────────────────────────────────
 
   server.registerTool(
     "hoop_check_admissions",
@@ -396,7 +396,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 5. hoop_admit_peer ─────────────────────────────────────────
+  // ── 6. hoop_admit_peer ─────────────────────────────────────────
 
   server.registerTool(
     "hoop_admit_peer",
@@ -418,7 +418,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 6. hoop_deny_peer ──────────────────────────────────────────
+  // ── 7. hoop_deny_peer ──────────────────────────────────────────
 
   server.registerTool(
     "hoop_deny_peer",
@@ -440,7 +440,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 7. hoop_send_update ────────────────────────────────────────
+  // ── 8. hoop_send_update ────────────────────────────────────────
 
   server.registerTool(
     "hoop_send_update",
@@ -517,7 +517,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 8. hoop_acquire_lock ───────────────────────────────────────
+  // ── 9. hoop_acquire_lock ───────────────────────────────────────
 
   server.registerTool(
     "hoop_acquire_lock",
@@ -547,7 +547,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 9. hoop_release_lock ───────────────────────────────────────
+  // ── 10. hoop_release_lock ──────────────────────────────────────
 
   server.registerTool(
     "hoop_release_lock",
@@ -576,7 +576,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 10. hoop_lock_status ────────────────────────────────────────
+  // ── 11. hoop_lock_status ───────────────────────────────────────
 
   server.registerTool(
     "hoop_lock_status",
@@ -587,7 +587,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     async () => jsonResult(getCurrentLockStatus()),
   );
 
-  // ── 11. hoop_force_unlock ────────────────────────────────────────
+  // ── 12. hoop_force_unlock ──────────────────────────────────────
 
   server.registerTool(
     "hoop_force_unlock",
@@ -604,7 +604,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         return errorResult("Only the host can force-unlock.");
       }
       if (!state.hostSession) {
-        return errorResult("No active session.");
+        return errorResult("Internal error: host session missing.");
       }
 
       const result = state.hostSession.forceReleaseLock();
@@ -613,7 +613,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 12. hoop_get_status ─────────────────────────────────────────
+  // ── 13. hoop_get_status ────────────────────────────────────────
 
   server.registerTool(
     "hoop_get_status",
@@ -668,7 +668,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 9. hoop_leave_session ──────────────────────────────────────
+  // ── 14. hoop_leave_session ─────────────────────────────────────
 
   function cleanupState(): void {
     state.outboundUpdatesReader?.stop();
