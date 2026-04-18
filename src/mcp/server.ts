@@ -21,6 +21,7 @@ import { ActiveEditsTracker } from "../state/activeEditsTracker.js";
 import { PendingUpdatesWriter } from "../state/pendingUpdatesWriter.js";
 import { PendingAdmissionsWriter } from "../state/pendingAdmissionsWriter.js";
 import { OutboundUpdatesReader } from "../state/outboundUpdatesReader.js";
+import { LockStatusWriter } from "../state/lockStatusWriter.js";
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -42,6 +43,7 @@ interface ServerState {
   activeEditsTracker: ActiveEditsTracker | null;
   pendingUpdatesWriter: PendingUpdatesWriter | null;
   outboundUpdatesReader: OutboundUpdatesReader | null;
+  lockStatusWriter: LockStatusWriter | null;
 }
 
 export interface HoopMcpDeps {
@@ -51,6 +53,7 @@ export interface HoopMcpDeps {
   pendingUpdatesRegistryPath?: string;
   pendingAdmissionsRegistryPath?: string;
   outboundUpdatesRegistryPath?: string;
+  lockStatusRegistryPath?: string;
   sessionStatusPath?: string;
 }
 
@@ -74,6 +77,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
   const pendingUpdatesRegistryPath = deps?.pendingUpdatesRegistryPath;
   const pendingAdmissionsRegistryPath = deps?.pendingAdmissionsRegistryPath;
   const outboundUpdatesRegistryPath = deps?.outboundUpdatesRegistryPath;
+  const lockStatusRegistryPath = deps?.lockStatusRegistryPath;
 
   const state: ServerState = {
     role: null,
@@ -86,6 +90,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     activeEditsTracker: null,
     pendingUpdatesWriter: null,
     outboundUpdatesReader: null,
+    lockStatusWriter: null,
   };
 
   const server = new McpServer({ name: "hoop", version: "0.1.0" });
@@ -112,6 +117,10 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       return state.peerSession.getLockStatus();
     }
     return createFreeHoopLock();
+  }
+
+  function flushLockStatus(): void {
+    state.lockStatusWriter?.update(getCurrentLockStatus());
   }
 
   // ── 1. hoop_create_session ──────────────────────────────────────
@@ -173,6 +182,11 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           result.peerId,
           pendingUpdatesRegistryPath,
         );
+        state.lockStatusWriter = new LockStatusWriter(
+          result.peerId,
+          lockStatusRegistryPath,
+        );
+        flushLockStatus();
 
         // Intercept peer updates so hoop_check_updates can drain them
         state.origAccumulate = result.accumulator.accumulate.bind(result.accumulator);
@@ -180,6 +194,9 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           state.origAccumulate!(update);
           if (shouldQueuePendingUpdate(update)) {
             state.pendingUpdates.push(update);
+          }
+          if (update.type === "lock-acquire" || update.type === "lock-release") {
+            flushLockStatus();
           }
           state.activeEditsTracker?.handleUpdate(update);
           state.pendingUpdatesWriter?.handleUpdate(update);
@@ -270,11 +287,19 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           result.localPeerId,
           pendingUpdatesRegistryPath,
         );
+        state.lockStatusWriter = new LockStatusWriter(
+          result.localPeerId,
+          lockStatusRegistryPath,
+        );
+        flushLockStatus();
 
         // Queue incoming broadcasts for hoop_check_updates
         result.onBroadcast((update) => {
           if (shouldQueuePendingUpdate(update)) {
             state.pendingUpdates.push(update);
+          }
+          if (update.type === "lock-acquire" || update.type === "lock-release") {
+            flushLockStatus();
           }
           state.activeEditsTracker?.handleUpdate(update);
           state.pendingUpdatesWriter?.handleUpdate(update);
@@ -506,11 +531,13 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
       if (state.role === "host" && state.hostSession) {
         const result = state.hostSession.acquireLock(state.hostSession.peerId);
+        flushLockStatus();
         return jsonResult({ acquired: result.acquired, holder: result.holder });
       }
 
       if (state.role === "peer" && state.peerSession) {
         const result = await state.peerSession.acquireLock();
+        flushLockStatus();
         return jsonResult(result);
       }
 
@@ -533,11 +560,13 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
       if (state.role === "host" && state.hostSession) {
         const result = state.hostSession.releaseLock(state.hostSession.peerId);
+        flushLockStatus();
         return jsonResult({ released: result.released, holder: result.holder });
       }
 
       if (state.role === "peer" && state.peerSession) {
         const result = await state.peerSession.releaseLock();
+        flushLockStatus();
         return jsonResult(result);
       }
 
@@ -639,6 +668,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.activeEditsTracker = null;
     state.pendingUpdatesWriter?.clear();
     state.pendingUpdatesWriter = null;
+    state.lockStatusWriter?.clear();
+    state.lockStatusWriter = null;
     state.pendingAdmissions.clear();
     state.pendingAdmissionsWriter?.clear();
     state.pendingAdmissionsWriter = null;
