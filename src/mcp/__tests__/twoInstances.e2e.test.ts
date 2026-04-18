@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { unlinkSync, writeFileSync, mkdirSync } from "node:fs";
+import { unlinkSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHoopMcpServer, type HoopMcpDeps } from "../server.js";
@@ -396,7 +396,9 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     const hostLockBefore = LockStatusWriter.readRegistry(hDeps!.lockStatusRegistryPath!);
     expect(hostLockBefore).not.toBeNull();
     expect(hostLockBefore!.status).toBe("free");
+    expect(hostLockBefore!.acquiredAt).toBeNull();
     expect(hostLockBefore!.selfPeerId).toBe(session.hostData.peerId);
+    expect(hostLockBefore!.sessionPid).toBe(process.pid);
 
     const peerLockBefore = LockStatusWriter.readRegistry(pDeps!.lockStatusRegistryPath!);
     expect(peerLockBefore).not.toBeNull();
@@ -408,6 +410,7 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     const hostLockAfterAcquire = LockStatusWriter.readRegistry(hDeps!.lockStatusRegistryPath!);
     expect(hostLockAfterAcquire!.status).toBe("busy");
     expect(hostLockAfterAcquire!.holderPeerId).toBe(session.hostData.peerId);
+    expect(hostLockAfterAcquire!.acquiredAt).toBeGreaterThan(0);
 
     // Wait for lock broadcast to reach peer → peer file should show busy
     await waitFor(
@@ -442,7 +445,9 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     await peer.client.callTool({ name: "hoop_leave_session", arguments: {} });
     await host.client.callTool({ name: "hoop_leave_session", arguments: {} });
 
-    // Files should be removed
+    // Files should be removed (check both existence and readRegistry)
+    expect(existsSync(hDeps!.lockStatusRegistryPath!)).toBe(false);
+    expect(existsSync(pDeps!.lockStatusRegistryPath!)).toBe(false);
     expect(LockStatusWriter.readRegistry(hDeps!.lockStatusRegistryPath!)).toBeNull();
     expect(LockStatusWriter.readRegistry(pDeps!.lockStatusRegistryPath!)).toBeNull();
   }, 60_000);

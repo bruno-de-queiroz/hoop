@@ -162,6 +162,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
               });
               syncPendingAdmissions();
             }),
+          onLockChange: () => flushLockStatus(),
         });
 
         state.hostSession = result;
@@ -642,26 +643,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
   // ── 9. hoop_leave_session ──────────────────────────────────────
 
-  async function gracefulShutdown(): Promise<{ left: boolean; previousRole: string | null; sessionCode: string | undefined }> {
-    const previousRole = state.role;
-    const sessionCode =
-      state.role === "host"
-        ? state.hostSession?.sessionCode
-        : state.peerSession?.sessionCode;
-
-    if (state.role === "host" && state.hostSession) {
-      for (const pending of state.pendingAdmissions.values()) {
-        pending.resolve(false);
-      }
-      state.hostSession.broadcastHub.close();
-      await state.hostSession.node.stop();
-    }
-
-    if (state.role === "peer" && state.peerSession) {
-      state.peerSession.stopAckInterval();
-      await state.peerSession.node.stop();
-    }
-
+  function cleanupState(): void {
     state.outboundUpdatesReader?.stop();
     state.outboundUpdatesReader = null;
     state.activeEditsTracker?.clear();
@@ -679,6 +661,31 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.peerSession = null;
     state.origAccumulate = null;
     state.pendingUpdates.length = 0;
+  }
+
+  async function gracefulShutdown(): Promise<{ left: boolean; previousRole: string | null; sessionCode: string | undefined }> {
+    const previousRole = state.role;
+    const sessionCode =
+      state.role === "host"
+        ? state.hostSession?.sessionCode
+        : state.peerSession?.sessionCode;
+
+    try {
+      if (state.role === "host" && state.hostSession) {
+        for (const pending of state.pendingAdmissions.values()) {
+          pending.resolve(false);
+        }
+        state.hostSession.broadcastHub.close();
+        await state.hostSession.node.stop();
+      }
+
+      if (state.role === "peer" && state.peerSession) {
+        state.peerSession.stopAckInterval();
+        await state.peerSession.node.stop();
+      }
+    } finally {
+      cleanupState();
+    }
 
     return { left: true, previousRole, sessionCode };
   }
