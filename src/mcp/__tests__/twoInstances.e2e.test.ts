@@ -778,7 +778,8 @@ describe("E2E: two claude-code instances in a hoop session", () => {
       "waiting for host file-change to reach peer",
     );
 
-    // Drain the update so it registers in the peer's activeEditsTracker
+    // Drain the pending update queue (the activeEditsTracker was already
+    // updated when the broadcast arrived; this just clears the queue).
     await peer.client.callTool({ name: "hoop_check_updates", arguments: {} });
 
     // Verify conflict exists NOW
