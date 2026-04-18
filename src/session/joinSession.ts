@@ -21,8 +21,20 @@ import {
 } from "../network/protocol.js";
 import type { StateTree } from "../state/stateTree.js";
 import type { AccumulatedState } from "../state/hostStateAccumulator.js";
-import type { StateUpdate, FileChangeUpdate, BroadcastEnvelope, AckMessage } from "../state/stateUpdate.js";
+import type {
+  StateUpdate,
+  FileChangeUpdate,
+  BroadcastEnvelope,
+  AckMessage,
+  LockAcquireUpdate,
+  LockReleaseUpdate,
+} from "../state/stateUpdate.js";
 import { isBroadcastEnvelope } from "../state/stateUpdate.js";
+import {
+  createFreeHoopLock,
+  normalizeHoopLock,
+  type HoopLock,
+} from "../state/hoopLock.js";
 import { computeFileDiff } from "../diff/computeDiff.js";
 import { validateSessionCode } from "./sessionCode.js";
 import {
@@ -74,6 +86,9 @@ export interface JoinSessionResult {
   onBroadcast: (handler: (update: StateUpdate) => void) => void;
   getLastSeqNo: () => number;
   requestReplay: (fromSeq: number) => Promise<SyncResponse>;
+  acquireLock: () => Promise<{ acquired: boolean; holder: string | null; queuePosition?: number }>;
+  releaseLock: () => Promise<{ released: boolean; holder: string | null }>;
+  getLockStatus: () => HoopLock;
   sendAck: () => Promise<void>;
   stopAckInterval: () => void;
 }
@@ -185,6 +200,28 @@ export async function joinSession(
     branchName = syncResponse.branchName;
   }
 
+  let lockState = syncResponse.accumulatedState?.lock ?? createFreeHoopLock();
+
+  const syncLockState = (nextLock?: HoopLock): HoopLock => {
+    lockState = nextLock ? normalizeHoopLock(nextLock) : normalizeHoopLock(lockState);
+    return { ...lockState };
+  };
+
+  const applyLockUpdate = (update: StateUpdate): void => {
+    if (update.type === "lock-acquire") {
+      lockState = {
+        holderPeerId: update.peerId,
+        acquiredAt: update.timestamp,
+        status: "busy",
+      };
+      return;
+    }
+
+    if (update.type === "lock-release") {
+      lockState = createFreeHoopLock();
+    }
+  };
+
   const broadcastHandlers: Array<(update: StateUpdate) => void> = [];
   let lastSeqNo = 0;
 
@@ -197,6 +234,8 @@ export async function joinSession(
       );
     }
     lastSeqNo = envelope.seqNo;
+    applyLockUpdate(envelope.update);
+    syncLockState();
     for (const handler of broadcastHandlers) {
       handler(envelope.update);
     }
@@ -238,8 +277,49 @@ export async function joinSession(
   const requestReplay = async (fromSeq: number): Promise<SyncResponse> => {
     const stream = await node.openStream(params.hostAddress, SYNC_PROTOCOL);
     await writeToStream(stream, { type: "state-tree", replayFromSeq: fromSeq } as SyncRequest);
-    return readFromStream<SyncResponse>(stream);
+    const response = await readFromStream<SyncResponse>(stream);
+    syncLockState(response.accumulatedState?.lock);
+    for (const envelope of response.replayedUpdates ?? []) {
+      applyLockUpdate(envelope.update);
+    }
+    syncLockState();
+    return response;
   };
+
+  const acquireLock = async (): Promise<{
+    acquired: boolean;
+    holder: string | null;
+    queuePosition?: number;
+  }> => {
+    const update: LockAcquireUpdate = {
+      type: "lock-acquire",
+      peerId: node.getPeerId(),
+      timestamp: Date.now(),
+    };
+    const response = await sendUpdate(update);
+    const lock = syncLockState(response.lock);
+    return {
+      acquired: response.acquired === true,
+      holder: response.holder ?? lock.holderPeerId,
+      ...(response.queuePosition !== undefined ? { queuePosition: response.queuePosition } : {}),
+    };
+  };
+
+  const releaseLock = async (): Promise<{ released: boolean; holder: string | null }> => {
+    const update: LockReleaseUpdate = {
+      type: "lock-release",
+      peerId: node.getPeerId(),
+      timestamp: Date.now(),
+    };
+    const response = await sendUpdate(update);
+    const lock = syncLockState(response.lock);
+    return {
+      released: response.released === true,
+      holder: response.holder ?? lock.holderPeerId,
+    };
+  };
+
+  const getLockStatus = (): HoopLock => syncLockState();
 
   const sendAck = async (): Promise<void> => {
     const ack: AckMessage = {
@@ -278,6 +358,9 @@ export async function joinSession(
     onBroadcast,
     getLastSeqNo,
     requestReplay,
+    acquireLock,
+    releaseLock,
+    getLockStatus,
     sendAck,
     stopAckInterval,
   };

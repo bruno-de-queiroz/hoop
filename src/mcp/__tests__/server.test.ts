@@ -66,13 +66,14 @@ describe("hoop MCP server", () => {
     try { unlinkSync(SESSION_STATUS_FILE); } catch { /* ignore */ }
   });
 
-  it("registers all 10 tools", async () => {
+  it("registers all 13 tools", async () => {
     ({ server, state, client } = await setup());
 
     const { tools } = await client!.listTools();
     const names = tools.map((t) => t.name).sort();
 
     expect(names).toEqual([
+      "hoop_acquire_lock",
       "hoop_admit_peer",
       "hoop_check_admissions",
       "hoop_check_conflicts",
@@ -82,6 +83,8 @@ describe("hoop MCP server", () => {
       "hoop_get_status",
       "hoop_join_session",
       "hoop_leave_session",
+      "hoop_lock_status",
+      "hoop_release_lock",
       "hoop_send_update",
     ]);
   });
@@ -94,6 +97,21 @@ describe("hoop MCP server", () => {
       arguments: {},
     });
     expect(parseJson(result)).toEqual({ active: false });
+  });
+
+  it("hoop_lock_status returns a free lock when no session is active", async () => {
+    ({ server, state, client } = await setup());
+
+    const result = await client!.callTool({
+      name: "hoop_lock_status",
+      arguments: {},
+    });
+
+    expect(parseJson(result)).toEqual({
+      holderPeerId: null,
+      acquiredAt: null,
+      status: "free",
+    });
   });
 
   it("hoop_create_session starts a host session and returns session code", async () => {
@@ -151,6 +169,41 @@ describe("hoop MCP server", () => {
     expect(data.role).toBe("host");
     expect(data.executionTarget).toBe("proponent-side");
     expect(data.peerCount).toBe(0);
+  }, 30_000);
+
+  it("host can acquire, inspect, and release the lock", async () => {
+    ({ server, state, client } = await setup());
+
+    const createResult = await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+    const hostPeerId = (parseJson(createResult) as { peerId: string }).peerId;
+
+    const acquireResult = await client!.callTool({
+      name: "hoop_acquire_lock",
+      arguments: {},
+    });
+    expect(parseJson(acquireResult)).toEqual({
+      acquired: true,
+      holder: hostPeerId,
+    });
+
+    const statusResult = await client!.callTool({
+      name: "hoop_lock_status",
+      arguments: {},
+    });
+    expect(parseJson(statusResult)).toEqual({
+      holderPeerId: hostPeerId,
+      acquiredAt: expect.any(Number),
+      status: "busy",
+    });
+
+    const releaseResult = await client!.callTool({
+      name: "hoop_release_lock",
+      arguments: {},
+    });
+    expect(parseJson(releaseResult)).toEqual({ released: true, holder: null });
   }, 30_000);
 
   it("hoop_check_updates returns empty when no updates pending", async () => {

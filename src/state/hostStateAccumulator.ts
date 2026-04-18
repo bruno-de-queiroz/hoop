@@ -1,10 +1,22 @@
-import type { StateUpdate, CursorUpdate, BufferUpdate, MetadataUpdate } from "./stateUpdate.js";
+import type {
+  StateUpdate,
+  CursorUpdate,
+  BufferUpdate,
+  MetadataUpdate,
+  LockReleaseUpdate,
+} from "./stateUpdate.js";
+import {
+  createFreeHoopLock,
+  normalizeHoopLock,
+  type HoopLock,
+} from "./hoopLock.js";
 
 export interface AccumulatedState {
-  cursors: Record<string, Record<string, CursorUpdate>>;   // peerId -> filePath -> CursorUpdate
-  buffers: Record<string, Record<string, BufferUpdate>>;    // peerId -> filePath -> BufferUpdate
-  metadata: Record<string, MetadataUpdate>;                  // key -> MetadataUpdate (LWW)
-  fileHashes: Record<string, string>;                        // filePath -> last resultHash
+  cursors: Record<string, Record<string, CursorUpdate>>;
+  buffers: Record<string, Record<string, BufferUpdate>>;
+  metadata: Record<string, MetadataUpdate>;
+  fileHashes: Record<string, string>;
+  lock: HoopLock;
 }
 
 export class HostStateAccumulator {
@@ -12,6 +24,7 @@ export class HostStateAccumulator {
   private buffers = new Map<string, Map<string, BufferUpdate>>();
   private metadata = new Map<string, MetadataUpdate>();
   private fileHashes = new Map<string, string>();
+  private lock: HoopLock = createFreeHoopLock();
 
   accumulate(update: StateUpdate): void {
     switch (update.type) {
@@ -35,15 +48,29 @@ export class HostStateAccumulator {
       }
       case "metadata-update": {
         const existing = this.metadata.get(update.key);
-        // LWW: accept if newer timestamp, or same timestamp but higher peerId (tiebreak)
-        if (!existing || update.timestamp > existing.timestamp ||
-            (update.timestamp === existing.timestamp && update.peerId > existing.peerId)) {
+        if (
+          !existing ||
+          update.timestamp > existing.timestamp ||
+          (update.timestamp === existing.timestamp && update.peerId > existing.peerId)
+        ) {
           this.metadata.set(update.key, update);
         }
         break;
       }
       case "file-change": {
         this.fileHashes.set(update.filePath, update.resultHash);
+        break;
+      }
+      case "lock-acquire": {
+        this.lock = {
+          holderPeerId: update.peerId,
+          acquiredAt: update.timestamp,
+          status: "busy",
+        };
+        break;
+      }
+      case "lock-release": {
+        this.lock = createFreeHoopLock();
         break;
       }
     }
@@ -65,6 +92,7 @@ export class HostStateAccumulator {
       buffers,
       metadata: Object.fromEntries(this.metadata),
       fileHashes: Object.fromEntries(this.fileHashes),
+      lock: this.getLock(),
     };
   }
 
@@ -74,6 +102,25 @@ export class HostStateAccumulator {
 
   getMetadata(key: string): MetadataUpdate | undefined {
     return this.metadata.get(key);
+  }
+
+  getLock(now: number = Date.now()): HoopLock {
+    this.lock = normalizeHoopLock(this.lock, now);
+    return { ...this.lock };
+  }
+
+  releaseLockForPeer(peerId: string, timestamp: number = Date.now()): LockReleaseUpdate | undefined {
+    const lock = this.getLock(timestamp);
+    if (lock.status === "busy" && lock.holderPeerId === peerId) {
+      const update: LockReleaseUpdate = {
+        type: "lock-release",
+        peerId,
+        timestamp,
+      };
+      this.accumulate(update);
+      return update;
+    }
+    return undefined;
   }
 
   removePeer(peerId: string): void {
@@ -86,5 +133,6 @@ export class HostStateAccumulator {
     this.buffers.clear();
     this.metadata.clear();
     this.fileHashes.clear();
+    this.lock = createFreeHoopLock();
   }
 }

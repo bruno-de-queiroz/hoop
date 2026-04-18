@@ -24,8 +24,15 @@ import {
 } from "../network/protocol.js";
 import { BroadcastHub } from "../network/broadcastHub.js";
 import { ReplayBuffer } from "../network/replayBuffer.js";
-import { type StateUpdate, isStateUpdate, isAckMessage, type FileChangeUpdate } from "../state/stateUpdate.js";
+import {
+  type StateUpdate,
+  isStateUpdate,
+  isAckMessage,
+  type LockAcquireUpdate,
+  type LockReleaseUpdate,
+} from "../state/stateUpdate.js";
 import { HostStateAccumulator } from "../state/hostStateAccumulator.js";
+import { type HoopLock } from "../state/hoopLock.js";
 import { isValidUnifiedDiff } from "../diff/validatePatch.js";
 import { type ExecutionTarget, type Session, SessionStore } from "./session.js";
 import { generateSessionCode } from "./sessionCode.js";
@@ -62,6 +69,19 @@ export interface CreateSessionParams {
   gitOps: GitOps;
 }
 
+export interface LockAcquireResult {
+  acquired: boolean;
+  holder: string | null;
+  queuePosition?: number;
+  seqNo?: number;
+}
+
+export interface LockReleaseResult {
+  released: boolean;
+  holder: string | null;
+  seqNo?: number;
+}
+
 export interface CreateSessionResult {
   sessionCode: string;
   hostId: string;
@@ -76,6 +96,9 @@ export interface CreateSessionResult {
   broadcastHub: BroadcastHub;
   accumulator: HostStateAccumulator;
   replayBuffer: ReplayBuffer;
+  acquireLock: (peerId?: string, timestamp?: number) => LockAcquireResult;
+  releaseLock: (peerId?: string, timestamp?: number) => LockReleaseResult;
+  getLockStatus: () => HoopLock;
 }
 
 export async function createSession(
@@ -207,6 +230,63 @@ export async function createSession(
   const broadcastHub = new BroadcastHub();
   const accumulator = new HostStateAccumulator();
   const replayBuffer = new ReplayBuffer();
+  const accumulateStateUpdate = accumulator.accumulate.bind(accumulator);
+
+  const applyAndBroadcastUpdate = (
+    update: StateUpdate,
+    excludePeerId?: string,
+  ): number => {
+    accumulateStateUpdate(update);
+    const seqNo = broadcastHub.broadcast(update, excludePeerId);
+    replayBuffer.push({ seqNo, update });
+    return seqNo;
+  };
+
+  const getLockStatus = (): HoopLock => accumulator.getLock();
+
+  const acquireLock = (
+    peerId: string = node.getPeerId(),
+    timestamp: number = Date.now(),
+    excludePeerId?: string,
+  ): LockAcquireResult => {
+    const lock = accumulator.getLock(timestamp);
+    if (lock.status === "busy") {
+      if (lock.holderPeerId === peerId) {
+        return { acquired: true, holder: peerId };
+      }
+      return { acquired: false, holder: lock.holderPeerId };
+    }
+
+    const update: LockAcquireUpdate = {
+      type: "lock-acquire",
+      peerId,
+      timestamp,
+    };
+    const seqNo = applyAndBroadcastUpdate(update, excludePeerId);
+    return { acquired: true, holder: peerId, seqNo };
+  };
+
+  const releaseLock = (
+    peerId: string = node.getPeerId(),
+    timestamp: number = Date.now(),
+    excludePeerId?: string,
+  ): LockReleaseResult => {
+    const lock = accumulator.getLock(timestamp);
+    if (lock.status === "free") {
+      return { released: true, holder: null };
+    }
+    if (lock.holderPeerId !== peerId) {
+      return { released: false, holder: lock.holderPeerId };
+    }
+
+    const update: LockReleaseUpdate = {
+      type: "lock-release",
+      peerId,
+      timestamp,
+    };
+    const seqNo = applyAndBroadcastUpdate(update, excludePeerId);
+    return { released: true, holder: null, seqNo };
+  };
 
   await node.handle(SYNC_PROTOCOL, async (stream, connection) => {
     const request = await readFromStream<SyncRequest>(stream);
@@ -262,13 +342,60 @@ export async function createSession(
       return;
     }
 
+    if ((update.type === "lock-acquire" || update.type === "lock-release") && update.peerId !== remotePeerId) {
+      const response: UpdateResponse = { accepted: false, reason: "invalid-peer", lock: accumulator.getLock() };
+      await writeToStream(stream, response);
+      return;
+    }
+
+    if (update.type === "lock-acquire") {
+      const result = acquireLock(update.peerId, update.timestamp, remotePeerId);
+      const response: UpdateResponse = result.acquired
+        ? {
+            accepted: true,
+            seqNo: result.seqNo,
+            acquired: true,
+            holder: result.holder,
+            lock: accumulator.getLock(),
+          }
+        : {
+            accepted: false,
+            reason: "lock-busy",
+            acquired: false,
+            holder: result.holder,
+            lock: accumulator.getLock(),
+          };
+      await writeToStream(stream, response);
+      return;
+    }
+
+    if (update.type === "lock-release") {
+      const result = releaseLock(update.peerId, update.timestamp, remotePeerId);
+      const response: UpdateResponse = result.released
+        ? {
+            accepted: true,
+            seqNo: result.seqNo,
+            released: true,
+            holder: result.holder,
+            lock: accumulator.getLock(),
+          }
+        : {
+            accepted: false,
+            reason: "lock-held-by-other-peer",
+            released: false,
+            holder: result.holder,
+            lock: accumulator.getLock(),
+          };
+      await writeToStream(stream, response);
+      return;
+    }
+
     if (update.type === "file-change" && !isValidUnifiedDiff(update.patch)) {
       const response: UpdateResponse = { accepted: false, reason: "invalid-patch" };
       await writeToStream(stream, response);
       return;
     }
 
-    // Conflict resolution: metadata LWW
     if (update.type === "metadata-update") {
       const existing = accumulator.getMetadata(update.key);
       if (existing && (update.timestamp < existing.timestamp ||
@@ -279,7 +406,6 @@ export async function createSession(
       }
     }
 
-    // Conflict resolution: file-change baseHash check
     if (update.type === "file-change") {
       const lastHash = accumulator.getFileHash(update.filePath);
       if (lastHash !== undefined && update.baseHash !== lastHash) {
@@ -300,6 +426,12 @@ export async function createSession(
     const peerId = evt.detail.toString();
     broadcastHub.unsubscribe(peerId);
     accumulator.removePeer(peerId);
+
+    const releaseUpdate = accumulator.releaseLockForPeer(peerId);
+    if (releaseUpdate) {
+      const seqNo = broadcastHub.broadcast(releaseUpdate);
+      replayBuffer.push({ seqNo, update: releaseUpdate });
+    }
   });
 
   return {
@@ -316,5 +448,8 @@ export async function createSession(
     broadcastHub,
     accumulator,
     replayBuffer,
+    acquireLock,
+    releaseLock,
+    getLockStatus,
   };
 }

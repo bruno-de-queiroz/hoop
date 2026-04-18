@@ -239,6 +239,93 @@ describe("State reconciliation and concurrency handling", () => {
     }, 30_000);
   });
 
+  describe("Hot Seat lock reconciliation", () => {
+    it("late joiner receives the current lock holder in accumulated state", async () => {
+      const store = new SessionStore();
+
+      hostResult = await createSession(
+        {
+          executionTarget: "host-only",
+          networkConfig: { transportMode: "test" },
+          gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
+        },
+        store,
+      );
+
+      joinResult = await joinSession({
+        sessionCode: hostResult.sessionCode,
+        hostAddress: hostResult.listenAddresses[0],
+        email: "test@example.com",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubJoinGitOps,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const acquire = await joinResult.acquireLock();
+      expect(acquire).toEqual({ acquired: true, holder: joinResult.localPeerId });
+
+      joinResult2 = await joinSession({
+        sessionCode: hostResult.sessionCode,
+        hostAddress: hostResult.listenAddresses[0],
+        email: "test@example.com",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubJoinGitOps,
+      });
+
+      expect(joinResult2.accumulatedState?.lock).toMatchObject({
+        holderPeerId: joinResult.localPeerId,
+        status: "busy",
+      });
+      expect(joinResult2.accumulatedState?.lock.acquiredAt).toBeTypeOf("number");
+    }, 30_000);
+
+    it("host serializes concurrent lock acquisition attempts", async () => {
+      const store = new SessionStore();
+
+      hostResult = await createSession(
+        {
+          executionTarget: "host-only",
+          networkConfig: { transportMode: "test" },
+          gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
+        },
+        store,
+      );
+
+      joinResult = await joinSession({
+        sessionCode: hostResult.sessionCode,
+        hostAddress: hostResult.listenAddresses[0],
+        email: "test@example.com",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubJoinGitOps,
+      });
+
+      joinResult2 = await joinSession({
+        sessionCode: hostResult.sessionCode,
+        hostAddress: hostResult.listenAddresses[0],
+        email: "test@example.com",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubJoinGitOps,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const [first, second] = await Promise.all([
+        joinResult.acquireLock(),
+        joinResult2.acquireLock(),
+      ]);
+
+      const results = [first, second];
+      expect(results.filter((result) => result.acquired)).toHaveLength(1);
+      const winner = results.find((result) => result.acquired)!;
+      const loser = results.find((result) => !result.acquired)!;
+      expect(loser.holder).toBe(winner.holder);
+      expect(hostResult.accumulator.getSnapshot().lock.holderPeerId).toBe(winner.holder);
+    }, 30_000);
+  });
+
   // -----------------------------------------------------------------------
   // Replay buffer
   // -----------------------------------------------------------------------

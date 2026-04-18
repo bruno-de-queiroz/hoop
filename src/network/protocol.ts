@@ -2,6 +2,7 @@ import type { Stream } from "@libp2p/interface";
 import type { StateTree } from "../state/stateTree.js";
 import type { StateUpdate, BroadcastEnvelope } from "../state/stateUpdate.js";
 import type { AccumulatedState } from "../state/hostStateAccumulator.js";
+import type { HoopLock } from "../state/hoopLock.js";
 
 export const AUTH_PROTOCOL = "/hoop/auth/1.0.0";
 export const AUTH_TIMEOUT_MS = 10_000;
@@ -47,6 +48,11 @@ export interface UpdateResponse {
   accepted: boolean;
   seqNo?: number;
   reason?: string;
+  acquired?: boolean;
+  released?: boolean;
+  holder?: string | null;
+  queuePosition?: number;
+  lock?: HoopLock;
 }
 
 function concatBytes(chunks: Uint8Array[]): Uint8Array {

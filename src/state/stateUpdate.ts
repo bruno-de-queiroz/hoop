@@ -35,7 +35,25 @@ export interface FileChangeUpdate {
   timestamp: number;
 }
 
-export type StateUpdate = CursorUpdate | BufferUpdate | MetadataUpdate | FileChangeUpdate;
+export interface LockAcquireUpdate {
+  type: "lock-acquire";
+  peerId: string;
+  timestamp: number;
+}
+
+export interface LockReleaseUpdate {
+  type: "lock-release";
+  peerId: string;
+  timestamp: number;
+}
+
+export type StateUpdate =
+  | CursorUpdate
+  | BufferUpdate
+  | MetadataUpdate
+  | FileChangeUpdate
+  | LockAcquireUpdate
+  | LockReleaseUpdate;
 
 export function isStateUpdate(value: unknown): value is StateUpdate {
   if (typeof value !== "object" || value === null) return false;
@@ -67,6 +85,9 @@ export function isStateUpdate(value: unknown): value is StateUpdate {
         typeof v["baseHash"] === "string" &&
         typeof v["resultHash"] === "string"
       );
+    case "lock-acquire":
+    case "lock-release":
+      return true;
     default:
       return false;
   }
