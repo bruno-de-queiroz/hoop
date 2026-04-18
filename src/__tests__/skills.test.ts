@@ -38,19 +38,26 @@ describe("skill definitions", () => {
     expect(content).toContain("hoop_get_status");
     expect(content).toContain("hoop_acquire_lock");
     expect(content).toContain("hoop_release_lock");
-    expect(content).toContain("Agent");
+    expect(content).toContain("`Agent` tool");
     expect(content).not.toContain("import {");
     expect(content).not.toContain("src/session/");
     expect(content).not.toContain("src/mcp/");
 
-    // Model parsing
+    // Model parsing via --model flag
+    expect(content).toContain("--model");
     expect(content).toContain("opus");
     expect(content).toContain("sonnet");
     expect(content).toContain("haiku");
 
-    // UX strings
+    // Agent tool parameters
+    expect(content).toContain("`description`:");
+    expect(content).toContain("`model`:");
+    expect(content).toContain("`prompt`:");
+
+    // UX strings — happy path and error paths
     expect(content).toContain("Usage: /hoop-agent");
     expect(content).toContain("No active Hoop session");
+    expect(content).toContain("Cannot start agent");
     expect(content).toContain("Agent completed. Lock released.");
   });
 });
