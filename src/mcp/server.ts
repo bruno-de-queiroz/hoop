@@ -15,7 +15,7 @@ import {
   type JoinGitOps,
   type JoinSessionResult,
 } from "../session/joinSession.js";
-import type { StateUpdate } from "../state/stateUpdate.js";
+import type { StateUpdate, NonLockStateUpdate } from "../state/stateUpdate.js";
 import { createFreeHoopLock } from "../state/hoopLock.js";
 import { ActiveEditsTracker } from "../state/activeEditsTracker.js";
 import { PendingUpdatesWriter } from "../state/pendingUpdatesWriter.js";
@@ -472,9 +472,13 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
             ...input,
             peerId: state.peerSession.localPeerId,
             timestamp: Date.now(),
-          } as StateUpdate;
+          } as NonLockStateUpdate;
           const response = await state.peerSession.sendUpdate(update);
-          return jsonResult(response);
+          return jsonResult({
+            accepted: response.accepted,
+            ...(response.seqNo !== undefined ? { seqNo: response.seqNo } : {}),
+            ...(response.reason !== undefined ? { reason: response.reason } : {}),
+          });
         }
 
         return errorResult("Unexpected state.");
@@ -502,11 +506,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
       if (state.role === "host" && state.hostSession) {
         const result = state.hostSession.acquireLock(state.hostSession.peerId);
-        return jsonResult({
-          acquired: result.acquired,
-          holder: result.holder,
-          ...(result.queuePosition !== undefined ? { queuePosition: result.queuePosition } : {}),
-        });
+        return jsonResult({ acquired: result.acquired, holder: result.holder });
       }
 
       if (state.role === "peer" && state.peerSession) {

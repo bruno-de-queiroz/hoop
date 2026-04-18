@@ -17,12 +17,15 @@ import {
   type AdmissionResponse,
   type SyncRequest,
   type SyncResponse,
-  type UpdateResponse,
+  type StateUpdateResponse,
+  type LockAcquireResponse,
+  type LockReleaseResponse,
 } from "../network/protocol.js";
 import type { StateTree } from "../state/stateTree.js";
 import type { AccumulatedState } from "../state/hostStateAccumulator.js";
 import type {
   StateUpdate,
+  NonLockStateUpdate,
   FileChangeUpdate,
   BroadcastEnvelope,
   AckMessage,
@@ -31,6 +34,7 @@ import type {
 } from "../state/stateUpdate.js";
 import { isBroadcastEnvelope } from "../state/stateUpdate.js";
 import {
+  applyHoopLockUpdate,
   createFreeHoopLock,
   normalizeHoopLock,
   type HoopLock,
@@ -81,12 +85,12 @@ export interface JoinSessionResult {
   stateTree: StateTree;
   branchName?: string;
   accumulatedState?: AccumulatedState;
-  sendUpdate: (update: StateUpdate) => Promise<UpdateResponse>;
-  sendFileChange: (filePath: string, oldContent: string, newContent: string) => Promise<UpdateResponse>;
+  sendUpdate: (update: NonLockStateUpdate) => Promise<StateUpdateResponse>;
+  sendFileChange: (filePath: string, oldContent: string, newContent: string) => Promise<StateUpdateResponse>;
   onBroadcast: (handler: (update: StateUpdate) => void) => void;
   getLastSeqNo: () => number;
   requestReplay: (fromSeq: number) => Promise<SyncResponse>;
-  acquireLock: () => Promise<{ acquired: boolean; holder: string | null; queuePosition?: number }>;
+  acquireLock: () => Promise<{ acquired: boolean; holder: string | null }>;
   releaseLock: () => Promise<{ released: boolean; holder: string | null }>;
   getLockStatus: () => HoopLock;
   sendAck: () => Promise<void>;
@@ -200,26 +204,18 @@ export async function joinSession(
     branchName = syncResponse.branchName;
   }
 
-  let lockState = syncResponse.accumulatedState?.lock ?? createFreeHoopLock();
+  let lockState = normalizeHoopLock(syncResponse.accumulatedState?.lock ?? createFreeHoopLock());
 
-  const syncLockState = (nextLock?: HoopLock): HoopLock => {
-    lockState = nextLock ? normalizeHoopLock(nextLock) : normalizeHoopLock(lockState);
+  const setLockState = (nextLock: HoopLock): HoopLock => {
+    lockState = normalizeHoopLock(nextLock);
     return { ...lockState };
   };
 
   const applyLockUpdate = (update: StateUpdate): void => {
-    if (update.type === "lock-acquire") {
-      lockState = {
-        holderPeerId: update.peerId,
-        acquiredAt: update.timestamp,
-        status: "busy",
-      };
+    if (update.type !== "lock-acquire" && update.type !== "lock-release") {
       return;
     }
-
-    if (update.type === "lock-release") {
-      lockState = createFreeHoopLock();
-    }
+    lockState = applyHoopLockUpdate(lockState, update);
   };
 
   const broadcastHandlers: Array<(update: StateUpdate) => void> = [];
@@ -235,23 +231,34 @@ export async function joinSession(
     }
     lastSeqNo = envelope.seqNo;
     applyLockUpdate(envelope.update);
-    syncLockState();
     for (const handler of broadcastHandlers) {
       handler(envelope.update);
     }
   }).catch(() => {});
 
-  const sendUpdate = async (update: StateUpdate): Promise<UpdateResponse> => {
+  const sendUpdate = async (update: NonLockStateUpdate): Promise<StateUpdateResponse> => {
     const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
     await writeHalf(stream, update);
-    return readFromStream<UpdateResponse>(stream);
+    return readFromStream<StateUpdateResponse>(stream);
+  };
+
+  const sendLockAcquire = async (update: LockAcquireUpdate): Promise<LockAcquireResponse> => {
+    const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
+    await writeHalf(stream, update);
+    return readFromStream<LockAcquireResponse>(stream);
+  };
+
+  const sendLockRelease = async (update: LockReleaseUpdate): Promise<LockReleaseResponse> => {
+    const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
+    await writeHalf(stream, update);
+    return readFromStream<LockReleaseResponse>(stream);
   };
 
   const sendFileChange = async (
     filePath: string,
     oldContent: string,
     newContent: string,
-  ): Promise<UpdateResponse> => {
+  ): Promise<StateUpdateResponse> => {
     if (!worktreePath) {
       throw new Error("Git repository required to send file changes");
     }
@@ -278,30 +285,24 @@ export async function joinSession(
     const stream = await node.openStream(params.hostAddress, SYNC_PROTOCOL);
     await writeToStream(stream, { type: "state-tree", replayFromSeq: fromSeq } as SyncRequest);
     const response = await readFromStream<SyncResponse>(stream);
-    syncLockState(response.accumulatedState?.lock);
+    setLockState(response.accumulatedState?.lock ?? createFreeHoopLock());
     for (const envelope of response.replayedUpdates ?? []) {
       applyLockUpdate(envelope.update);
     }
-    syncLockState();
     return response;
   };
 
-  const acquireLock = async (): Promise<{
-    acquired: boolean;
-    holder: string | null;
-    queuePosition?: number;
-  }> => {
+  const acquireLock = async (): Promise<{ acquired: boolean; holder: string | null }> => {
     const update: LockAcquireUpdate = {
       type: "lock-acquire",
       peerId: node.getPeerId(),
       timestamp: Date.now(),
     };
-    const response = await sendUpdate(update);
-    const lock = syncLockState(response.lock);
+    const response = await sendLockAcquire(update);
+    const lock = setLockState(response.lock);
     return {
-      acquired: response.acquired === true,
+      acquired: response.acquired,
       holder: response.holder ?? lock.holderPeerId,
-      ...(response.queuePosition !== undefined ? { queuePosition: response.queuePosition } : {}),
     };
   };
 
@@ -311,15 +312,15 @@ export async function joinSession(
       peerId: node.getPeerId(),
       timestamp: Date.now(),
     };
-    const response = await sendUpdate(update);
-    const lock = syncLockState(response.lock);
+    const response = await sendLockRelease(update);
+    const lock = setLockState(response.lock);
     return {
-      released: response.released === true,
+      released: response.released,
       holder: response.holder ?? lock.holderPeerId,
     };
   };
 
-  const getLockStatus = (): HoopLock => syncLockState();
+  const getLockStatus = (): HoopLock => normalizeHoopLock(lockState);
 
   const sendAck = async (): Promise<void> => {
     const ack: AckMessage = {

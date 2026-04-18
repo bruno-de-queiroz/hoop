@@ -17,6 +17,7 @@ import type {
   MetadataUpdate,
   FileChangeUpdate,
 } from "../state/stateUpdate.js";
+import { HOOP_LOCK_TTL_MS } from "../state/hoopLock.js";
 import { hashContent } from "../git/gitBranch.js";
 
 const VALID_PATCH = `--- a/src/index.ts
@@ -323,6 +324,71 @@ describe("State reconciliation and concurrency handling", () => {
       const loser = results.find((result) => !result.acquired)!;
       expect(loser.holder).toBe(winner.holder);
       expect(hostResult.accumulator.getSnapshot().lock.holderPeerId).toBe(winner.holder);
+    }, 30_000);
+
+    it("expiring a stale lock broadcasts a release before a new holder is admitted", async () => {
+      const store = new SessionStore();
+
+      hostResult = await createSession(
+        {
+          executionTarget: "host-only",
+          networkConfig: { transportMode: "test" },
+          gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
+        },
+        store,
+      );
+
+      joinResult = await joinSession({
+        sessionCode: hostResult.sessionCode,
+        hostAddress: hostResult.listenAddresses[0],
+        email: "test@example.com",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubJoinGitOps,
+      });
+
+      joinResult2 = await joinSession({
+        sessionCode: hostResult.sessionCode,
+        hostAddress: hostResult.listenAddresses[0],
+        email: "test@example.com",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubJoinGitOps,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const staleTimestamp = Date.now() - HOOP_LOCK_TTL_MS - 1;
+      const staleAcquire = hostResult.acquireLock(joinResult.localPeerId, staleTimestamp);
+      expect(staleAcquire).toEqual({
+        acquired: true,
+        holder: joinResult.localPeerId,
+        seqNo: expect.any(Number),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const peer1LockUpdates: StateUpdate[] = [];
+      joinResult.onBroadcast((update) => {
+        if (update.type === "lock-acquire" || update.type === "lock-release") {
+          peer1LockUpdates.push(update);
+        }
+      });
+
+      const acquire = await joinResult2.acquireLock();
+      expect(acquire).toEqual({ acquired: true, holder: joinResult2.localPeerId });
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(peer1LockUpdates).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "lock-release", peerId: joinResult.localPeerId }),
+          expect.objectContaining({ type: "lock-acquire", peerId: joinResult2.localPeerId }),
+        ]),
+      );
+      expect(hostResult.accumulator.getSnapshot().lock).toMatchObject({
+        holderPeerId: joinResult2.localPeerId,
+        status: "busy",
+      });
     }, 30_000);
   });
 

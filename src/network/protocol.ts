@@ -44,16 +44,32 @@ export interface SyncResponse {
   replayedUpdates?: BroadcastEnvelope[];
 }
 
-export interface UpdateResponse {
+export interface StateUpdateResponse {
+  kind: "state-update";
   accepted: boolean;
   seqNo?: number;
   reason?: string;
-  acquired?: boolean;
-  released?: boolean;
-  holder?: string | null;
-  queuePosition?: number;
-  lock?: HoopLock;
 }
+
+export interface LockAcquireResponse {
+  kind: "lock-acquire";
+  acquired: boolean;
+  holder: string | null;
+  seqNo?: number;
+  reason?: string;
+  lock: HoopLock;
+}
+
+export interface LockReleaseResponse {
+  kind: "lock-release";
+  released: boolean;
+  holder: string | null;
+  seqNo?: number;
+  reason?: string;
+  lock: HoopLock;
+}
+
+export type UpdateResponse = StateUpdateResponse | LockAcquireResponse | LockReleaseResponse;
 
 function concatBytes(chunks: Uint8Array[]): Uint8Array {
   const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
