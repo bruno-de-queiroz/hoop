@@ -40,6 +40,8 @@ rm -f "${TMPDIR:-/tmp}/hoop-pending-admissions.json"
 rm -f "${TMPDIR:-/tmp}/hoop-pending-updates.json"
 rm -f "${TMPDIR:-/tmp}/hoop-outbound-updates.json"
 rm -f "${TMPDIR:-/tmp}/hoop-outbound-updates.json.lock"
+rm -f "${TMPDIR:-/tmp}/hoop-lock-status.json"
+rm -f "${TMPDIR:-/tmp}/hoop-lock-status.json.tmp"
 rm -f "${TMPDIR:-/tmp}/hoop-first-broadcast.flag"
 
 exit 0

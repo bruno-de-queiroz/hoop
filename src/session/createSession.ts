@@ -65,6 +65,7 @@ export const defaultAdmissionHandler = async (_email: string, _peerId: string): 
 export interface CreateSessionParams {
   password?: string;
   onAdmissionRequest: (email: string, peerId: string) => Promise<boolean>;
+  onLockChange?: (lock: HoopLock) => void;
   executionTarget: ExecutionTarget;
   networkConfig?: NetworkConfig;
   stateTree?: StateTree;
@@ -253,6 +254,7 @@ export async function createSession(
     const releaseUpdate = accumulator.expireStaleLock(timestamp);
     if (releaseUpdate) {
       broadcastAppliedUpdate(releaseUpdate, excludePeerId);
+      params.onLockChange?.(accumulator.getLockSnapshot(timestamp));
     }
     return releaseUpdate;
   };
@@ -485,6 +487,7 @@ export async function createSession(
     const releaseUpdate = accumulator.removePeer(peerId);
     if (releaseUpdate) {
       broadcastAppliedUpdate(releaseUpdate);
+      params.onLockChange?.(accumulator.getLockSnapshot());
     }
   });
 
