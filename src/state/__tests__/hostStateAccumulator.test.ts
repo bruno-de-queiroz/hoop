@@ -1,6 +1,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { HostStateAccumulator } from "../hostStateAccumulator.js";
-import type { CursorUpdate, BufferUpdate, MetadataUpdate, FileChangeUpdate } from "../stateUpdate.js";
+import { HOOP_LOCK_TTL_MS } from "../hoopLock.js";
+import type {
+  CursorUpdate,
+  BufferUpdate,
+  MetadataUpdate,
+  FileChangeUpdate,
+  LockAcquireUpdate,
+  LockReleaseUpdate,
+} from "../stateUpdate.js";
 
 function makeCursor(peerId: string, filePath: string, timestamp = 1000): CursorUpdate {
   return { type: "cursor-update", peerId, filePath, line: 1, column: 0, timestamp };
@@ -24,6 +32,14 @@ function makeFileChange(peerId: string, filePath: string, resultHash: string, ti
     resultHash,
     timestamp,
   };
+}
+
+function makeLockAcquire(peerId: string, timestamp = 1000): LockAcquireUpdate {
+  return { type: "lock-acquire", peerId, timestamp };
+}
+
+function makeLockRelease(peerId: string, timestamp = 1000): LockReleaseUpdate {
+  return { type: "lock-release", peerId, timestamp };
 }
 
 describe("HostStateAccumulator", () => {
@@ -171,6 +187,37 @@ describe("HostStateAccumulator", () => {
     });
   });
 
+  describe("accumulate() — lock updates", () => {
+    it("tracks the current lock holder", () => {
+      acc.accumulate(makeLockAcquire("peer-1", 1_000));
+      expect(acc.getSnapshot().lock).toEqual({
+        holderPeerId: "peer-1",
+        acquiredAt: 1_000,
+        status: "busy",
+      });
+    });
+
+    it("releases the lock", () => {
+      acc.accumulate(makeLockAcquire("peer-1", 1_000));
+      acc.accumulate(makeLockRelease("peer-1", 2_000));
+      expect(acc.getSnapshot().lock).toEqual({
+        holderPeerId: null,
+        acquiredAt: null,
+        status: "free",
+      });
+    });
+
+    it("auto-expires stale locks after the TTL", () => {
+      const staleTimestamp = Date.now() - HOOP_LOCK_TTL_MS - 1;
+      acc.accumulate(makeLockAcquire("peer-1", staleTimestamp));
+      expect(acc.getSnapshot().lock).toEqual({
+        holderPeerId: null,
+        acquiredAt: null,
+        status: "free",
+      });
+    });
+  });
+
   describe("getSnapshot()", () => {
     it("returns empty collections when nothing accumulated", () => {
       const snapshot = acc.getSnapshot();
@@ -178,6 +225,11 @@ describe("HostStateAccumulator", () => {
       expect(snapshot.buffers).toEqual({});
       expect(snapshot.metadata).toEqual({});
       expect(snapshot.fileHashes).toEqual({});
+      expect(snapshot.lock).toEqual({
+        holderPeerId: null,
+        acquiredAt: null,
+        status: "free",
+      });
     });
 
     it("returns correct structure with mixed updates", () => {
@@ -185,12 +237,18 @@ describe("HostStateAccumulator", () => {
       acc.accumulate(makeBuffer("peer-2", "src/b.ts"));
       acc.accumulate(makeMetadata("peer-1", "theme", "dark"));
       acc.accumulate(makeFileChange("peer-1", "src/c.ts", "hash-c"));
+      acc.accumulate(makeLockAcquire("peer-3", 3_000));
 
       const snapshot = acc.getSnapshot();
       expect(Object.keys(snapshot.cursors)).toEqual(["peer-1"]);
       expect(Object.keys(snapshot.buffers)).toEqual(["peer-2"]);
       expect(Object.keys(snapshot.metadata)).toEqual(["theme"]);
       expect(Object.keys(snapshot.fileHashes)).toEqual(["src/c.ts"]);
+      expect(snapshot.lock).toEqual({
+        holderPeerId: "peer-3",
+        acquiredAt: 3_000,
+        status: "busy",
+      });
     });
   });
 
@@ -215,6 +273,40 @@ describe("HostStateAccumulator", () => {
       acc.accumulate(makeMetadata("peer-2", "theme", "light", 1000));
       acc.accumulate(update);
       expect(acc.getMetadata("theme")).toEqual(update);
+    });
+  });
+
+  describe("getLock()", () => {
+    it("returns the current lock state", () => {
+      acc.accumulate(makeLockAcquire("peer-1", 5_000));
+      expect(acc.getLock()).toEqual({
+        holderPeerId: "peer-1",
+        acquiredAt: 5_000,
+        status: "busy",
+      });
+    });
+  });
+
+  describe("releaseLockForPeer()", () => {
+    it("releases the lock when the holder disconnects", () => {
+      acc.accumulate(makeLockAcquire("peer-1", 1_000));
+      const release = acc.releaseLockForPeer("peer-1", 2_000);
+      expect(release).toEqual({ type: "lock-release", peerId: "peer-1", timestamp: 2_000 });
+      expect(acc.getLock()).toEqual({
+        holderPeerId: null,
+        acquiredAt: null,
+        status: "free",
+      });
+    });
+
+    it("does nothing for a non-holder", () => {
+      acc.accumulate(makeLockAcquire("peer-1", 1_000));
+      expect(acc.releaseLockForPeer("peer-2", 2_000)).toBeUndefined();
+      expect(acc.getLock()).toEqual({
+        holderPeerId: "peer-1",
+        acquiredAt: 1_000,
+        status: "busy",
+      });
     });
   });
 
@@ -260,6 +352,7 @@ describe("HostStateAccumulator", () => {
       acc.accumulate(makeBuffer("peer-1", "src/b.ts"));
       acc.accumulate(makeMetadata("peer-1", "theme", "dark"));
       acc.accumulate(makeFileChange("peer-1", "src/c.ts", "hash-c"));
+      acc.accumulate(makeLockAcquire("peer-1", 1_000));
 
       acc.clear();
 
@@ -268,6 +361,11 @@ describe("HostStateAccumulator", () => {
       expect(snapshot.buffers).toEqual({});
       expect(snapshot.metadata).toEqual({});
       expect(snapshot.fileHashes).toEqual({});
+      expect(snapshot.lock).toEqual({
+        holderPeerId: null,
+        acquiredAt: null,
+        status: "free",
+      });
     });
 
     it("allows accumulation after clear", () => {

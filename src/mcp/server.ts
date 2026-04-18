@@ -16,6 +16,7 @@ import {
   type JoinSessionResult,
 } from "../session/joinSession.js";
 import type { StateUpdate } from "../state/stateUpdate.js";
+import { createFreeHoopLock } from "../state/hoopLock.js";
 import { ActiveEditsTracker } from "../state/activeEditsTracker.js";
 import { PendingUpdatesWriter } from "../state/pendingUpdatesWriter.js";
 import { PendingAdmissionsWriter } from "../state/pendingAdmissionsWriter.js";
@@ -99,6 +100,20 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.pendingAdmissionsWriter?.sync(listPendingAdmissions());
   }
 
+  function shouldQueuePendingUpdate(update: StateUpdate): boolean {
+    return update.type !== "lock-acquire" && update.type !== "lock-release";
+  }
+
+  function getCurrentLockStatus() {
+    if (state.role === "host" && state.hostSession) {
+      return state.hostSession.getLockStatus();
+    }
+    if (state.role === "peer" && state.peerSession) {
+      return state.peerSession.getLockStatus();
+    }
+    return createFreeHoopLock();
+  }
+
   // ── 1. hoop_create_session ──────────────────────────────────────
 
   server.registerTool(
@@ -163,7 +178,9 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         state.origAccumulate = result.accumulator.accumulate.bind(result.accumulator);
         result.accumulator.accumulate = (update: StateUpdate) => {
           state.origAccumulate!(update);
-          state.pendingUpdates.push(update);
+          if (shouldQueuePendingUpdate(update)) {
+            state.pendingUpdates.push(update);
+          }
           state.activeEditsTracker?.handleUpdate(update);
           state.pendingUpdatesWriter?.handleUpdate(update);
         };
@@ -256,7 +273,9 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
         // Queue incoming broadcasts for hoop_check_updates
         result.onBroadcast((update) => {
-          state.pendingUpdates.push(update);
+          if (shouldQueuePendingUpdate(update)) {
+            state.pendingUpdates.push(update);
+          }
           state.activeEditsTracker?.handleUpdate(update);
           state.pendingUpdatesWriter?.handleUpdate(update);
         });
@@ -467,7 +486,77 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 8. hoop_get_status ─────────────────────────────────────────
+  // ── 8. hoop_acquire_lock ───────────────────────────────────────
+
+  server.registerTool(
+    "hoop_acquire_lock",
+    {
+      description:
+        "Attempt to acquire the Hot Seat lock. Only one peer can hold it at a time.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      if (state.role === null) {
+        return errorResult("No active session.");
+      }
+
+      if (state.role === "host" && state.hostSession) {
+        const result = state.hostSession.acquireLock(state.hostSession.peerId);
+        return jsonResult({
+          acquired: result.acquired,
+          holder: result.holder,
+          ...(result.queuePosition !== undefined ? { queuePosition: result.queuePosition } : {}),
+        });
+      }
+
+      if (state.role === "peer" && state.peerSession) {
+        const result = await state.peerSession.acquireLock();
+        return jsonResult(result);
+      }
+
+      return errorResult("Unexpected state.");
+    },
+  );
+
+  // ── 9. hoop_release_lock ───────────────────────────────────────
+
+  server.registerTool(
+    "hoop_release_lock",
+    {
+      description: "Release the Hot Seat lock if held by the current peer.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      if (state.role === null) {
+        return errorResult("No active session.");
+      }
+
+      if (state.role === "host" && state.hostSession) {
+        const result = state.hostSession.releaseLock(state.hostSession.peerId);
+        return jsonResult({ released: result.released, holder: result.holder });
+      }
+
+      if (state.role === "peer" && state.peerSession) {
+        const result = await state.peerSession.releaseLock();
+        return jsonResult(result);
+      }
+
+      return errorResult("Unexpected state.");
+    },
+  );
+
+  // ── 10. hoop_lock_status ────────────────────────────────────────
+
+  server.registerTool(
+    "hoop_lock_status",
+    {
+      description: "Return the current Hot Seat lock state without mutating it.",
+      inputSchema: z.object({}),
+    },
+    async () => jsonResult(getCurrentLockStatus()),
+  );
+
+  // ── 11. hoop_get_status ─────────────────────────────────────────
 
   server.registerTool(
     "hoop_get_status",
@@ -497,6 +586,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           worktreePath: s.worktreePath,
           pendingAdmissions: state.pendingAdmissions.size,
           pendingUpdates: state.pendingUpdates.length,
+          lock: s.getLockStatus(),
         });
       }
 
@@ -513,6 +603,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           branchName: s.branchName,
           lastSeqNo: s.getLastSeqNo(),
           pendingUpdates: state.pendingUpdates.length,
+          lock: s.getLockStatus(),
         });
       }
 

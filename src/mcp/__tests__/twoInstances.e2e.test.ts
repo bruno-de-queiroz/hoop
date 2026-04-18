@@ -346,6 +346,43 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     expect(host.state.role).toBeNull();
   }, 60_000);
 
+  it("the host is authoritative for lock acquisition and release", async () => {
+    ({ host, peer, hostDeps: hDeps, peerDeps: pDeps } = await setupConnectedSession());
+
+    const hostLock = parseJson(
+      await host.client.callTool({ name: "hoop_acquire_lock", arguments: {} }),
+    ) as { acquired: boolean; holder: string };
+    expect(hostLock.acquired).toBe(true);
+    expect(hostLock.holder).toBe(host.state.hostSession!.peerId);
+
+    await waitFor(
+      () => peer!.state.peerSession?.getLockStatus().holderPeerId === host!.state.hostSession!.peerId,
+      "waiting for host lock broadcast to reach peer",
+    );
+
+    const peerAcquire = parseJson(
+      await peer.client.callTool({ name: "hoop_acquire_lock", arguments: {} }),
+    ) as { acquired: boolean; holder: string };
+    expect(peerAcquire.acquired).toBe(false);
+    expect(peerAcquire.holder).toBe(host.state.hostSession!.peerId);
+
+    const peerRelease = parseJson(
+      await peer.client.callTool({ name: "hoop_release_lock", arguments: {} }),
+    ) as { released: boolean; holder: string };
+    expect(peerRelease.released).toBe(false);
+    expect(peerRelease.holder).toBe(host.state.hostSession!.peerId);
+
+    const hostRelease = parseJson(
+      await host.client.callTool({ name: "hoop_release_lock", arguments: {} }),
+    ) as { released: boolean; holder: null };
+    expect(hostRelease).toEqual({ released: true, holder: null });
+
+    await waitFor(
+      () => peer!.state.peerSession?.getLockStatus().status === "free",
+      "waiting for lock release to reach peer",
+    );
+  }, 60_000);
+
   // ── Conflict detection across instances ──────────────────────────
 
   it("peer detects conflict when host is editing the same file", async () => {
@@ -747,11 +784,26 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     expect(checkUpdates.isError).toBe(true);
     expect(resultText(checkUpdates)).toContain("No active session");
 
+    const acquireLock = await host.client.callTool({
+      name: "hoop_acquire_lock",
+      arguments: {},
+    });
+    expect(acquireLock.isError).toBe(true);
+    expect(resultText(acquireLock)).toContain("No active session");
+
+    const lockStatus = parseJson(
+      await host.client.callTool({ name: "hoop_lock_status", arguments: {} }),
+    ) as { status: string; holderPeerId: string | null; acquiredAt: number | null };
+    expect(lockStatus).toEqual({
+      status: "free",
+      holderPeerId: null,
+      acquiredAt: null,
+    });
+
     const getStatus = await host.client.callTool({
       name: "hoop_get_status",
       arguments: {},
     });
-    // hoop_get_status returns inactive status rather than error when no session
     const statusData = parseJson(getStatus) as { active: boolean };
     expect(statusData.active).toBe(false);
   }, 60_000);

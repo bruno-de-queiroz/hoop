@@ -149,6 +149,26 @@ describe("isStateUpdate", () => {
     ).toBe(true);
   });
 
+  it("returns true for a valid lock-acquire", () => {
+    expect(
+      isStateUpdate({
+        type: "lock-acquire",
+        peerId: "peer-5",
+        timestamp: 1700000000006,
+      })
+    ).toBe(true);
+  });
+
+  it("returns true for a valid lock-release", () => {
+    expect(
+      isStateUpdate({
+        type: "lock-release",
+        peerId: "peer-5",
+        timestamp: 1700000000007,
+      })
+    ).toBe(true);
+  });
+
   // --- type-specific missing fields ---
 
   it("returns false for cursor-update missing line", () => {
