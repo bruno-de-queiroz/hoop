@@ -46,7 +46,7 @@ describe("computeGitDiff", () => {
 
     const result = await computeGitDiff("/tmp/worktree", "file.txt");
 
-    expect(result).toEqual({ ok: true, value: diffOutput });
+    expect(result).toEqual({ ok: true, value: diffOutput + "\n" });
     expect(mockExecFile).toHaveBeenCalledWith(
       "git",
       ["diff", "--no-color", "--", "file.txt"],
