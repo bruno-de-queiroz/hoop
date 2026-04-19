@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { applyFilePatch } from "../applyDiff.js";
-import { computeGitDiff, hashContent } from "../../git/gitBranch.js";
+import { computeContentDiff, hashContent } from "../../git/gitBranch.js";
 import { gitSync, createTempRepo, removeTempRepo } from "../../__tests__/helpers/gitTestRepo.js";
 
 describe("applyFilePatch (real git)", () => {
@@ -27,14 +27,10 @@ describe("applyFilePatch (real git)", () => {
     gitSync(["add", "."], repoDir);
     gitSync(["commit", "-m", "initial"], repoDir);
 
-    // Modify, generate diff, then restore
-    await writeFile(join(repoDir, filePath), modifiedContent);
-    const diffResult = await computeGitDiff(repoDir, filePath);
+    // Generate diff from content strings
+    const diffResult = await computeContentDiff(filePath, originalContent, modifiedContent);
     expect(diffResult.ok).toBe(true);
     if (!diffResult.ok) return;
-
-    // Restore to original state
-    gitSync(["checkout", "--", filePath], repoDir);
 
     // Apply via applyFilePatch with correct hashes
     const baseHash = hashContent(originalContent);
@@ -64,14 +60,10 @@ describe("applyFilePatch (real git)", () => {
     gitSync(["add", "."], repoDir);
     gitSync(["commit", "-m", "initial"], repoDir);
 
-    // Generate a real patch
-    await writeFile(join(repoDir, filePath), modifiedContent);
-    const diffResult = await computeGitDiff(repoDir, filePath);
+    // Generate diff from content strings
+    const diffResult = await computeContentDiff(filePath, originalContent, modifiedContent);
     expect(diffResult.ok).toBe(true);
     if (!diffResult.ok) return;
-
-    // Restore
-    gitSync(["checkout", "--", filePath], repoDir);
 
     const baseHash = hashContent(originalContent);
     const wrongResultHash = hashContent("not the real result");
@@ -93,18 +85,16 @@ describe("applyFilePatch (real git)", () => {
   it("returns base-hash-mismatch when file has been modified since hash was computed", async () => {
     const filePath = "data.txt";
     const originalContent = "version 1\n";
+    const modifiedContent = "version 2\n";
 
     await writeFile(join(repoDir, filePath), originalContent);
     gitSync(["add", "."], repoDir);
     gitSync(["commit", "-m", "initial"], repoDir);
 
-    // Generate a valid patch
-    await writeFile(join(repoDir, filePath), "version 2\n");
-    const diffResult = await computeGitDiff(repoDir, filePath);
+    // Generate a valid patch from content strings
+    const diffResult = await computeContentDiff(filePath, originalContent, modifiedContent);
     expect(diffResult.ok).toBe(true);
     if (!diffResult.ok) return;
-
-    gitSync(["checkout", "--", filePath], repoDir);
 
     // Simulate a concurrent edit: current content differs from what the hash claims
     const staleHash = hashContent("stale content");
@@ -114,7 +104,7 @@ describe("applyFilePatch (real git)", () => {
       diffResult.value,
       originalContent,
       staleHash,
-      hashContent("version 2\n"),
+      hashContent(modifiedContent),
     );
 
     expect(result.ok).toBe(false);
@@ -126,25 +116,21 @@ describe("applyFilePatch (real git)", () => {
   it("returns patch-failed when patch does not apply to current file state", async () => {
     const filePath = "conflict.txt";
     const originalContent = "line A\nline B\nline C\n";
+    const modifiedContent = "line A\nline B modified\nline C\n";
 
-    await writeFile(join(repoDir, filePath), originalContent);
-    gitSync(["add", "."], repoDir);
-    gitSync(["commit", "-m", "initial"], repoDir);
-
-    // Generate patch for one change
-    await writeFile(join(repoDir, filePath), "line A\nline B modified\nline C\n");
-    const diffResult = await computeGitDiff(repoDir, filePath);
-    expect(diffResult.ok).toBe(true);
-    if (!diffResult.ok) return;
-
-    // Instead of restoring, make a conflicting change
+    // Commit a conflicting version so the patch context won't match
     const conflictContent = "line X\nline Y\nline Z\n";
     await writeFile(join(repoDir, filePath), conflictContent);
     gitSync(["add", "."], repoDir);
-    gitSync(["commit", "-m", "conflicting change"], repoDir);
+    gitSync(["commit", "-m", "initial"], repoDir);
 
-    // Attempt to apply the old patch — content has changed, base hash won't match
-    // But we'll pass the correct hash of current content to bypass base-hash check
+    // Generate patch from content strings that don't match disk state
+    const diffResult = await computeContentDiff(filePath, originalContent, modifiedContent);
+    expect(diffResult.ok).toBe(true);
+    if (!diffResult.ok) return;
+
+    // Pass the correct hash of current content to bypass base-hash check,
+    // but the patch context won't match the file on disk
     const baseHash = hashContent(conflictContent);
     const result = await applyFilePatch(
       repoDir,

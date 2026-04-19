@@ -28,6 +28,27 @@ function gitRaw(args: string[], cwd?: string): Promise<string> {
   });
 }
 
+function gitRawAllowExitCode(
+  args: string[],
+  allowedCodes: number[],
+  cwd?: string,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("git", args, { cwd }, (error, stdout, stderr) => {
+      if (error) {
+        const code = typeof error.code === "number" ? error.code : undefined;
+        if (code !== undefined && allowedCodes.includes(code)) {
+          resolve(stdout);
+        } else {
+          reject(new Error(stderr.trim() || error.message));
+        }
+      } else {
+        resolve(stdout);
+      }
+    });
+  });
+}
+
 function git(args: string[], cwd?: string): Promise<string> {
   return gitRaw(args, cwd).then((out) => out.trim());
 }
@@ -120,18 +141,6 @@ export async function createSessionWorktree(
   }
 }
 
-export async function computeGitDiff(
-  worktreePath: string,
-  filePath: string,
-): Promise<GitResult<string>> {
-  try {
-    const diff = await gitRaw(["diff", "--no-color", "--", filePath], worktreePath);
-    return { ok: true, value: diff };
-  } catch (err) {
-    return { ok: false, error: (err as Error).message };
-  }
-}
-
 export async function computeContentDiff(
   filePath: string,
   oldContent: string,
@@ -149,30 +158,18 @@ export async function computeContentDiff(
     await writeFile(oldFile, oldContent);
     await writeFile(newFile, newContent);
 
-    const diff = await new Promise<string>((resolve, reject) => {
-      execFile(
-        "git",
-        ["diff", "--no-index", "--no-color", "--", oldFile, newFile],
-        (error, stdout, stderr) => {
-          // git diff --no-index exits with 1 when files differ — that's expected.
-          // The exit code is a number at runtime but typed as string|undefined.
-          const exitCode = (error as unknown as { code?: number } | null)?.code;
-          if (error && exitCode !== 1) {
-            reject(new Error(stderr.trim() || error.message));
-          } else {
-            resolve(stdout);
-          }
-        },
-      );
-    });
+    // git diff --no-index exits with 1 when files differ — that's expected
+    const diff = await gitRawAllowExitCode(
+      ["diff", "--no-index", "--no-color", "--", oldFile, newFile],
+      [1],
+    );
 
-    // Replace temp file paths with the actual filePath so git apply works correctly.
-    // git diff --no-index strips the leading "/" from absolute paths in headers.
-    const oldLabel = oldFile.replace(/^\//, "");
-    const newLabel = newFile.replace(/^\//, "");
+    // Rewrite only the known header lines to use the actual filePath.
+    // This avoids accidental matches in the diff body.
     const fixed = diff
-      .replaceAll(`a/${oldLabel}`, `a/${filePath}`)
-      .replaceAll(`b/${newLabel}`, `b/${filePath}`);
+      .replace(/^diff --git a\/.*? b\/.*$/m, `diff --git a/${filePath} b/${filePath}`)
+      .replace(/^--- a\/.*$/m, `--- a/${filePath}`)
+      .replace(/^\+\+\+ b\/.*$/m, `+++ b/${filePath}`);
 
     return { ok: true, value: fixed };
   } catch (err) {

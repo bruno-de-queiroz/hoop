@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { computeGitDiff, applyGitPatch, hashContent } from "../gitBranch.js";
+import { applyGitPatch, hashContent } from "../gitBranch.js";
 import { execFile } from "node:child_process";
 
 vi.mock("node:child_process", () => ({
@@ -34,38 +34,6 @@ function simulateExecFileError(message: string, stderr = "") {
     }) as unknown as typeof execFile,
   );
 }
-
-describe("computeGitDiff", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("returns diff output on success", async () => {
-    const diffOutput = `--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new`;
-    simulateExecFile(diffOutput);
-
-    const result = await computeGitDiff("/tmp/worktree", "file.txt");
-
-    expect(result).toEqual({ ok: true, value: diffOutput });
-    expect(mockExecFile).toHaveBeenCalledWith(
-      "git",
-      ["diff", "--no-color", "--", "file.txt"],
-      { cwd: "/tmp/worktree" },
-      expect.any(Function),
-    );
-  });
-
-  it("returns failure when git fails", async () => {
-    simulateExecFileError("exit code 128", "fatal: not a git repository");
-
-    const result = await computeGitDiff("/tmp/worktree", "file.txt");
-
-    expect(result).toEqual({
-      ok: false,
-      error: "fatal: not a git repository",
-    });
-  });
-});
 
 describe("applyGitPatch", () => {
   beforeEach(() => {

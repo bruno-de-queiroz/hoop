@@ -263,9 +263,6 @@ export async function joinSession(
     oldContent: string,
     newContent: string,
   ): Promise<StateUpdateResponse> => {
-    if (!worktreePath) {
-      throw new Error("Git repository required to send file changes");
-    }
     const diff = await computeFileDiff(filePath, oldContent, newContent);
     const update: FileChangeUpdate = {
       type: "file-change",
