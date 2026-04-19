@@ -39,9 +39,9 @@ function gitWithStdin(args: string[], stdin: string, cwd?: string): Promise<stri
   });
 }
 
-export async function getGitRoot(): Promise<GitResult<string>> {
+export async function getGitRoot(cwd?: string): Promise<GitResult<string>> {
   try {
-    const root = await git(["rev-parse", "--show-toplevel"]);
+    const root = await git(["rev-parse", "--show-toplevel"], cwd);
     return { ok: true, value: root };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
@@ -74,10 +74,11 @@ export async function checkoutBranch(
 export async function createSessionWorktree(
   branchName: string,
   worktreePath: string,
+  cwd?: string,
 ): Promise<GitResult<string>> {
   try {
     const absolutePath = resolve(worktreePath);
-    await git(["worktree", "add", "-b", branchName, absolutePath]);
+    await git(["worktree", "add", "-b", branchName, absolutePath], cwd);
     return { ok: true, value: absolutePath };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
@@ -90,7 +91,9 @@ export async function computeGitDiff(
 ): Promise<GitResult<string>> {
   try {
     const diff = await git(["diff", "--no-color", "--", filePath], worktreePath);
-    return { ok: true, value: diff };
+    // Patches must end with a newline for git-apply to accept them.
+    // The git() helper trims stdout, so re-append it.
+    return { ok: true, value: diff ? diff + "\n" : diff };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }
