@@ -90,6 +90,20 @@ export async function pushBranch(
   }
 }
 
+export async function removeSessionWorktree(
+  worktreePath: string,
+  branchName: string,
+  cwd?: string,
+): Promise<GitResult> {
+  try {
+    await git(["worktree", "remove", "--force", worktreePath], cwd);
+    await git(["branch", "-D", branchName], cwd);
+    return { ok: true, value: undefined as never };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
 export async function createSessionWorktree(
   branchName: string,
   worktreePath: string,
