@@ -51,6 +51,7 @@ import { type StateTree, createEmptyStateTree } from "../state/stateTree.js";
 import {
   getGitRoot as defaultGetGitRoot,
   createSessionWorktree as defaultCreateSessionWorktree,
+  removeSessionWorktree as defaultRemoveSessionWorktree,
   pushBranch as defaultPushBranch,
   type GitResult,
 } from "../git/gitBranch.js";
@@ -58,18 +59,21 @@ import {
 export interface GitOps {
   getGitRoot: () => Promise<GitResult<string>>;
   createSessionWorktree: (branchName: string, worktreePath: string) => Promise<GitResult<string>>;
+  removeSessionWorktree: (worktreePath: string, branchName: string) => Promise<GitResult>;
   pushBranch: (branchName: string, remote?: string) => Promise<GitResult>;
 }
 
 export const realGitOps: GitOps = {
   getGitRoot: defaultGetGitRoot,
   createSessionWorktree: defaultCreateSessionWorktree,
+  removeSessionWorktree: defaultRemoveSessionWorktree,
   pushBranch: defaultPushBranch,
 };
 
 export const stubGitOps: GitOps = {
   getGitRoot: async () => ({ ok: true, value: "/tmp/hoop-stub" }),
   createSessionWorktree: async (_branch, path) => ({ ok: true, value: path }),
+  removeSessionWorktree: async () => ({ ok: true, value: undefined as never }),
   pushBranch: async () => ({ ok: true, value: undefined as never }),
 };
 
@@ -263,8 +267,7 @@ export async function createSession(
 
   const pushResult = await gitOps.pushBranch(branchName);
   if (!pushResult.ok) {
-    await node.stop();
-    throw new Error(`Failed to push session branch: ${pushResult.error}`);
+    console.warn(`[hoop] Failed to push session branch to remote: ${pushResult.error}. Peers connecting over the network will not be able to fetch this branch.`);
   }
 
   store.update(sessionCode, { branchName, worktreePath });

@@ -83,6 +83,7 @@ describe("createSession", () => {
     const mockGitOps: GitOps = {
       getGitRoot: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo" }),
       createSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo/.hoop/sessions/MOCK" }),
+      removeSessionWorktree: vi.fn(),
       pushBranch: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
     };
 
@@ -117,6 +118,7 @@ describe("createSession", () => {
     const mockGitOps: GitOps = {
       getGitRoot: vi.fn().mockResolvedValue({ ok: false, error: "fatal: not a git repository" }),
       createSessionWorktree: vi.fn(),
+      removeSessionWorktree: vi.fn(),
       pushBranch: vi.fn(),
     };
 
@@ -141,6 +143,7 @@ describe("createSession", () => {
     const mockGitOps: GitOps = {
       getGitRoot: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo" }),
       createSessionWorktree: vi.fn().mockResolvedValue({ ok: false, error: "branch already exists" }),
+      removeSessionWorktree: vi.fn(),
       pushBranch: vi.fn(),
     };
 
@@ -161,29 +164,35 @@ describe("createSession", () => {
     expect(mockGitOps.pushBranch).not.toHaveBeenCalled();
   }, 30_000);
 
-  it("throws when push fails after worktree creation", async () => {
+  it("warns but continues when push fails after worktree creation", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const mockGitOps: GitOps = {
       getGitRoot: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo" }),
       createSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo/.hoop/sessions/MOCK" }),
+      removeSessionWorktree: vi.fn(),
       pushBranch: vi.fn().mockResolvedValue({ ok: false, error: "fatal: could not read from remote repository" }),
     };
 
     const store = new SessionStore();
 
-    await expect(
-      createSession(
-        {
-          executionTarget: "host-only",
-          networkConfig: { transportMode: "test" },
-          gitOps: mockGitOps,
-          onAdmissionRequest: defaultAdmissionHandler,
-        },
-        store,
-      ),
-    ).rejects.toThrow("Failed to push session branch");
+    result = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: mockGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+      store,
+    );
 
     expect(mockGitOps.createSessionWorktree).toHaveBeenCalled();
     expect(mockGitOps.pushBranch).toHaveBeenCalled();
+    expect(consoleWarn).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to push session branch to remote"),
+    );
+    // Session still created successfully
+    expect(result.branchName).toBeTruthy();
+    expect(result.worktreePath).toBeTruthy();
   }, 30_000);
 
   it("publishUpdate centralizes accumulation, replay buffering, and notifications", async () => {

@@ -7,6 +7,7 @@ import {
   createSessionWorktree,
   pushBranch,
   fetchBranch,
+  checkoutBranch,
   computeGitDiff,
   applyGitPatch,
   hashContent,
@@ -69,24 +70,37 @@ describe("git operations (real)", () => {
 
   describe("pushBranch", () => {
     let bareRemote: string;
+    const worktrees: string[] = [];
+    const tempDirs: string[] = [];
 
     beforeEach(async () => {
       bareRemote = await mkdtemp(join(tmpdir(), "hoop-bare-"));
       gitSync(["init", "--bare"], bareRemote);
-    });
 
-    afterEach(async () => {
-      await rm(bareRemote, { recursive: true, force: true });
-    });
-
-    it("pushes a session branch to a bare remote", async () => {
+      // Every pushBranch test needs at least one commit
       const filePath = join(repoDir, "init.txt");
       await writeFile(filePath, "init\n");
       gitSync(["add", "."], repoDir);
       gitSync(["commit", "-m", "initial"], repoDir);
+    });
+
+    afterEach(async () => {
+      for (const wt of worktrees) {
+        try { gitSync(["worktree", "remove", "--force", wt], repoDir); } catch {}
+      }
+      worktrees.length = 0;
+      for (const dir of tempDirs) {
+        await rm(dir, { recursive: true, force: true });
+      }
+      tempDirs.length = 0;
+      await rm(bareRemote, { recursive: true, force: true });
+    });
+
+    it("pushes a session branch to a bare remote", async () => {
       gitSync(["remote", "add", "origin", bareRemote], repoDir);
 
       const worktreePath = join(repoDir, ".hoop", "sessions", "push-test");
+      worktrees.push(worktreePath);
       await createSessionWorktree("hoop/session-push", worktreePath, repoDir);
 
       const result = await pushBranch("hoop/session-push", "origin", repoDir);
@@ -95,40 +109,35 @@ describe("git operations (real)", () => {
       // Verify the branch exists on the bare remote
       const remoteBranches = gitSync(["branch", "--list"], bareRemote);
       expect(remoteBranches).toContain("hoop/session-push");
-
-      gitSync(["worktree", "remove", "--force", worktreePath], repoDir);
     });
 
-    it("allows a peer to fetch a pushed session branch", async () => {
-      // Host: create repo, commit, add remote, create worktree, push
-      const filePath = join(repoDir, "init.txt");
-      await writeFile(filePath, "init\n");
-      gitSync(["add", "."], repoDir);
-      gitSync(["commit", "-m", "initial"], repoDir);
+    it("allows a peer to fetch and checkout a pushed session branch", async () => {
       gitSync(["remote", "add", "origin", bareRemote], repoDir);
 
       const worktreePath = join(repoDir, ".hoop", "sessions", "fetch-test");
+      worktrees.push(worktreePath);
       await createSessionWorktree("hoop/session-fetch", worktreePath, repoDir);
       await pushBranch("hoop/session-fetch", "origin", repoDir);
 
-      // Peer: clone from bare remote, fetch the session branch
+      // Peer: clone from bare remote, fetch and checkout the session branch
       const peerDir = await mkdtemp(join(tmpdir(), "hoop-peer-"));
+      tempDirs.push(peerDir);
       gitSync(["clone", bareRemote, peerDir], peerDir);
 
       const fetchResult = await fetchBranch("hoop/session-fetch", "origin", peerDir);
       expect(fetchResult.ok).toBe(true);
 
-      await rm(peerDir, { recursive: true, force: true });
-      gitSync(["worktree", "remove", "--force", worktreePath], repoDir);
+      const checkoutResult = await checkoutBranch("hoop/session-fetch", peerDir);
+      expect(checkoutResult.ok).toBe(true);
+
+      // Verify the peer has the file from the session branch
+      const content = await readFile(join(peerDir, "init.txt"), "utf-8");
+      expect(content).toBe("init\n");
     });
 
     it("returns failure when remote does not exist", async () => {
-      const filePath = join(repoDir, "init.txt");
-      await writeFile(filePath, "init\n");
-      gitSync(["add", "."], repoDir);
-      gitSync(["commit", "-m", "initial"], repoDir);
-
       const worktreePath = join(repoDir, ".hoop", "sessions", "no-remote");
+      worktrees.push(worktreePath);
       await createSessionWorktree("hoop/session-noremote", worktreePath, repoDir);
 
       const result = await pushBranch("hoop/session-noremote", "origin", repoDir);
@@ -136,15 +145,9 @@ describe("git operations (real)", () => {
       if (!result.ok) {
         expect(result.error).toContain("origin");
       }
-
-      gitSync(["worktree", "remove", "--force", worktreePath], repoDir);
     });
 
     it("returns failure when pushing a nonexistent branch", async () => {
-      const filePath = join(repoDir, "init.txt");
-      await writeFile(filePath, "init\n");
-      gitSync(["add", "."], repoDir);
-      gitSync(["commit", "-m", "initial"], repoDir);
       gitSync(["remote", "add", "origin", bareRemote], repoDir);
 
       const result = await pushBranch("hoop/session-nonexistent", "origin", repoDir);
