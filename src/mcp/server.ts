@@ -23,9 +23,8 @@ import { PendingAdmissionsWriter } from "../state/pendingAdmissionsWriter.js";
 import { OutboundUpdatesReader } from "../state/outboundUpdatesReader.js";
 import { LockStatusWriter } from "../state/lockStatusWriter.js";
 import { PendingPromptRequestsWriter } from "../state/pendingPromptRequestsWriter.js";
-import { PROMPT_PROTOCOL, writeHalf, readFromStream } from "../network/protocol.js";
-import type { PromptRequest, PromptResponse, PromptRequestStatus } from "../state/promptRequest.js";
-import { randomUUID } from "node:crypto";
+import { PROMPT_PROTOCOL, writeHalf, readFromStream, writeToStream } from "../network/protocol.js";
+import type { PromptRequestMessage, PromptStatusQuery, PromptResponse, PromptRequestStatus } from "../state/promptRequest.js";
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -140,7 +139,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
   function syncPromptRequests(): void {
     if (!state.hostSession) return;
-    const entries = state.hostSession.promptRequestQueue.listPending().map((e) => ({
+    const entries = state.hostSession.promptRequestQueue.listActive().map((e) => ({
       id: e.request.id,
       prompt: e.request.prompt,
       model: e.request.model,
@@ -681,7 +680,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           branchName: s.branchName,
           worktreePath: s.worktreePath,
           pendingAdmissions: state.pendingAdmissions.size,
-          pendingPromptRequests: s.promptRequestQueue.listPending().length,
+          activePromptRequests: s.promptRequestQueue.listActive().length,
           pendingUpdates: state.pendingUpdates.length,
           lock: s.getLockStatus(),
         });
@@ -708,7 +707,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 13. hoop_request_host_execution ─────────────────────────────
+  // ── 14. hoop_request_host_execution ─────────────────────────────
 
   server.registerTool(
     "hoop_request_host_execution",
@@ -726,22 +725,21 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       }
 
       try {
-        const id = randomUUID();
-        const request: PromptRequest = {
-          id,
+        const message: PromptRequestMessage = {
+          type: "prompt-request",
           prompt,
           model,
-          requestedBy: state.peerSession.localPeerId,
           timestamp: Date.now(),
         };
 
         const hostAddress = state.peerSession.hostAddress;
         const stream = await state.peerSession.node.openStream(hostAddress, PROMPT_PROTOCOL);
-        await writeHalf(stream, request);
+        await writeHalf(stream, message);
         const response = await readFromStream<PromptResponse>(stream);
 
-        state.peerPromptRequests.set(id, { id, status: response.status });
-        return jsonResult({ requestId: id, status: response.status });
+        const hostId = response.id;
+        state.peerPromptRequests.set(hostId, { id: hostId, status: response.status });
+        return jsonResult({ requestId: hostId, status: response.status });
       } catch (e) {
         return errorResult(
           `Failed to send prompt to host: ${e instanceof Error ? e.message : String(e)}`,
@@ -750,7 +748,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 14. hoop_poll_execution_result ────────────────────────────────
+  // ── 15. hoop_poll_execution_result ────────────────────────────────
 
   server.registerTool(
     "hoop_poll_execution_result",
@@ -762,7 +760,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       }),
     },
     async ({ requestId }) => {
-      if (state.role !== "peer") {
+      if (state.role !== "peer" || !state.peerSession) {
         return errorResult("Only peers can poll execution results.");
       }
 
@@ -771,11 +769,29 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         return errorResult(`No prompt request found with ID: ${requestId}`);
       }
 
-      return jsonResult({ requestId, status: tracked.status });
+      try {
+        const query: PromptStatusQuery = { type: "status-query", id: requestId };
+        const hostAddress = state.peerSession.hostAddress;
+        const stream = await state.peerSession.node.openStream(hostAddress, PROMPT_PROTOCOL);
+        await writeToStream(stream, query);
+        const response = await readFromStream<PromptResponse>(stream);
+
+        tracked.status = response.status;
+        return jsonResult({
+          requestId,
+          status: response.status,
+          ...(response.error ? { error: response.error } : {}),
+          ...(response.reason ? { reason: response.reason } : {}),
+        });
+      } catch (e) {
+        return errorResult(
+          `Failed to poll host: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
     },
   );
 
-  // ── 15. hoop_check_prompt_requests ────────────────────────────────
+  // ── 16. hoop_check_prompt_requests ────────────────────────────────
 
   server.registerTool(
     "hoop_check_prompt_requests",
@@ -789,7 +805,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         return errorResult("Only the host can check prompt requests.");
       }
 
-      const pending = state.hostSession.promptRequestQueue.listPending();
+      const pending = state.hostSession.promptRequestQueue.listActive();
       const requests = pending.map((e) => ({
         id: e.request.id,
         prompt: e.request.prompt,
@@ -803,7 +819,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 16. hoop_approve_prompt_request ───────────────────────────────
+  // ── 17. hoop_approve_prompt_request ───────────────────────────────
 
   server.registerTool(
     "hoop_approve_prompt_request",
@@ -828,7 +844,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 17. hoop_deny_prompt_request ──────────────────────────────────
+  // ── 18. hoop_deny_prompt_request ──────────────────────────────────
 
   server.registerTool(
     "hoop_deny_prompt_request",
@@ -854,7 +870,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  // ── 18. hoop_complete_prompt_request ──────────────────────────────
+  // ── 19. hoop_complete_prompt_request ──────────────────────────────
 
   server.registerTool(
     "hoop_complete_prompt_request",
@@ -871,9 +887,10 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         return errorResult("Only the host can complete prompt requests.");
       }
 
+      state.hostSession.promptRequestQueue.markExecuting(requestId);
       const response = state.hostSession.promptRequestQueue.complete(requestId, error);
       if (!response) {
-        return errorResult(`No approved/executing request found with ID: ${requestId}`);
+        return errorResult(`No executing request found with ID: ${requestId}`);
       }
       syncPromptRequests();
       return jsonResult(response);
@@ -917,6 +934,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         for (const pending of state.pendingAdmissions.values()) {
           pending.resolve(false);
         }
+        state.hostSession.promptRequestQueue.failAll();
         state.hostSession.promptRequestQueue.clear();
         state.hostSession.broadcastHub.close();
         await state.hostSession.node.stop();

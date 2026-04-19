@@ -996,7 +996,6 @@ describe("hoop MCP server", () => {
         requestedBy: "peer-abc",
         timestamp: Date.now(),
       },
-      () => {},
       false,
     );
 
@@ -1054,7 +1053,6 @@ describe("hoop MCP server", () => {
         requestedBy: "peer-xyz",
         timestamp: Date.now(),
       },
-      () => {},
       false,
     );
 
@@ -1066,8 +1064,9 @@ describe("hoop MCP server", () => {
     expect(denyData.status).toBe("denied");
     expect(denyData.reason).toBe("Too risky");
 
-    // Queue is now empty
-    expect(queue.size()).toBe(0);
+    // Denied entry stays in queue but not in active list
+    expect(queue.getStatus("req-2")).toBe("denied");
+    expect(queue.listActive()).toHaveLength(0);
   }, 30_000);
 
   it("prompt request flow: complete with error marks as failed", async () => {
@@ -1086,7 +1085,6 @@ describe("hoop MCP server", () => {
         requestedBy: "peer-fail",
         timestamp: Date.now(),
       },
-      () => {},
       true, // auto-approved
     );
 
@@ -1192,7 +1190,6 @@ describe("hoop MCP server", () => {
         requestedBy: "peer-hook",
         timestamp: 1000,
       },
-      () => {},
       false,
     );
 
@@ -1228,7 +1225,6 @@ describe("hoop MCP server", () => {
         requestedBy: "peer-leave",
         timestamp: Date.now(),
       },
-      () => {},
       false,
     );
 
@@ -1241,7 +1237,7 @@ describe("hoop MCP server", () => {
     expect(state!.peerPromptRequests.size).toBe(0);
   }, 30_000);
 
-  it("hoop_get_status includes pendingPromptRequests count for host", async () => {
+  it("hoop_get_status includes activePromptRequests count for host", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1249,11 +1245,11 @@ describe("hoop MCP server", () => {
       arguments: { executionTarget: "host-only" },
     });
 
-    // No pending requests initially
+    // No active requests initially
     const status1 = parseJson(
       await client!.callTool({ name: "hoop_get_status", arguments: {} }),
-    ) as { pendingPromptRequests: number };
-    expect(status1.pendingPromptRequests).toBe(0);
+    ) as { activePromptRequests: number };
+    expect(status1.activePromptRequests).toBe(0);
 
     // Add a pending request
     state!.hostSession!.promptRequestQueue.enqueue(
@@ -1263,13 +1259,12 @@ describe("hoop MCP server", () => {
         requestedBy: "peer-count",
         timestamp: Date.now(),
       },
-      () => {},
       false,
     );
 
     const status2 = parseJson(
       await client!.callTool({ name: "hoop_get_status", arguments: {} }),
-    ) as { pendingPromptRequests: number };
-    expect(status2.pendingPromptRequests).toBe(1);
+    ) as { activePromptRequests: number };
+    expect(status2.activePromptRequests).toBe(1);
   }, 30_000);
 });

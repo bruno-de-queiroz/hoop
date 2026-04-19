@@ -2,12 +2,13 @@ import { describe, it, expect } from "vitest";
 import {
   isPromptRequest,
   isPromptResponse,
+  isPromptRequestMessage,
+  isPromptStatusQuery,
   PromptRequestQueue,
   type PromptRequest,
-  type PromptResponse,
 } from "../promptRequest.js";
 
-// ── Validation guards ──────────────────────────────────────────────
+// ── isPromptRequest ────────────────────────────────────────────────
 
 describe("isPromptRequest", () => {
   it("accepts a valid request", () => {
@@ -77,6 +78,8 @@ describe("isPromptRequest", () => {
     ).toBe(false);
   });
 });
+
+// ── isPromptResponse ───────────────────────────────────────────────
 
 describe("isPromptResponse", () => {
   it("accepts a valid response", () => {
@@ -159,6 +162,75 @@ describe("isPromptResponse", () => {
   });
 });
 
+// ── isPromptRequestMessage ─────────────────────────────────────────
+
+describe("isPromptRequestMessage", () => {
+  it("accepts a valid message", () => {
+    expect(
+      isPromptRequestMessage({
+        type: "prompt-request",
+        prompt: "Fix the bug",
+        timestamp: 123,
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts with optional model", () => {
+    expect(
+      isPromptRequestMessage({
+        type: "prompt-request",
+        prompt: "Fix",
+        model: "sonnet",
+        timestamp: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects wrong type field", () => {
+    expect(
+      isPromptRequestMessage({
+        type: "status-query",
+        prompt: "Fix",
+        timestamp: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects missing prompt", () => {
+    expect(
+      isPromptRequestMessage({ type: "prompt-request", timestamp: 1 }),
+    ).toBe(false);
+  });
+
+  it("rejects null", () => {
+    expect(isPromptRequestMessage(null)).toBe(false);
+  });
+});
+
+// ── isPromptStatusQuery ────────────────────────────────────────────
+
+describe("isPromptStatusQuery", () => {
+  it("accepts a valid query", () => {
+    expect(
+      isPromptStatusQuery({ type: "status-query", id: "req-1" }),
+    ).toBe(true);
+  });
+
+  it("rejects wrong type", () => {
+    expect(
+      isPromptStatusQuery({ type: "prompt-request", id: "req-1" }),
+    ).toBe(false);
+  });
+
+  it("rejects missing id", () => {
+    expect(isPromptStatusQuery({ type: "status-query" })).toBe(false);
+  });
+
+  it("rejects null", () => {
+    expect(isPromptStatusQuery(null)).toBe(false);
+  });
+});
+
 // ── PromptRequestQueue ──────────────────────────────────────────────
 
 function makeRequest(overrides?: Partial<PromptRequest>): PromptRequest {
@@ -174,8 +246,7 @@ function makeRequest(overrides?: Partial<PromptRequest>): PromptRequest {
 describe("PromptRequestQueue", () => {
   it("enqueue with autoExecute=false returns pending-approval", () => {
     const queue = new PromptRequestQueue();
-    const resolve = () => {};
-    const response = queue.enqueue(makeRequest(), resolve, false);
+    const response = queue.enqueue(makeRequest(), false);
     expect(response.status).toBe("pending-approval");
     expect(response.id).toBe("req-1");
     expect(queue.size()).toBe(1);
@@ -183,14 +254,13 @@ describe("PromptRequestQueue", () => {
 
   it("enqueue with autoExecute=true returns approved", () => {
     const queue = new PromptRequestQueue();
-    const resolve = () => {};
-    const response = queue.enqueue(makeRequest(), resolve, true);
+    const response = queue.enqueue(makeRequest(), true);
     expect(response.status).toBe("approved");
   });
 
   it("get returns the queued entry", () => {
     const queue = new PromptRequestQueue();
-    queue.enqueue(makeRequest(), () => {}, false);
+    queue.enqueue(makeRequest(), false);
     const entry = queue.get("req-1");
     expect(entry).toBeDefined();
     expect(entry!.request.prompt).toBe("Do something");
@@ -204,7 +274,7 @@ describe("PromptRequestQueue", () => {
 
   it("getStatus returns the current status", () => {
     const queue = new PromptRequestQueue();
-    queue.enqueue(makeRequest(), () => {}, false);
+    queue.enqueue(makeRequest(), false);
     expect(queue.getStatus("req-1")).toBe("pending-approval");
   });
 
@@ -213,39 +283,36 @@ describe("PromptRequestQueue", () => {
     expect(queue.getStatus("no-such")).toBeUndefined();
   });
 
-  it("listPending returns pending-approval and approved entries", () => {
+  it("listActive returns pending-approval, approved, and executing entries", () => {
     const queue = new PromptRequestQueue();
-    queue.enqueue(makeRequest({ id: "a" }), () => {}, false);
-    queue.enqueue(makeRequest({ id: "b" }), () => {}, true);
-    const pending = queue.listPending();
-    expect(pending).toHaveLength(2);
+    queue.enqueue(makeRequest({ id: "a" }), false);
+    queue.enqueue(makeRequest({ id: "b" }), true);
+    const active = queue.listActive();
+    expect(active).toHaveLength(2);
   });
 
-  it("listPending excludes executing/completed/failed/denied", () => {
+  it("listActive excludes completed/failed/denied", () => {
     const queue = new PromptRequestQueue();
-    queue.enqueue(makeRequest({ id: "a" }), () => {}, true);
-    queue.markExecuting("a");
-    expect(queue.listPending()).toHaveLength(0);
+    queue.enqueue(makeRequest({ id: "a" }), true);
+    queue.complete("a");
+    expect(queue.listActive()).toHaveLength(0);
   });
 
   // ── approve ──
 
   it("approve transitions pending-approval to approved", () => {
     const queue = new PromptRequestQueue();
-    let resolved: PromptResponse | undefined;
-    queue.enqueue(makeRequest(), (r) => { resolved = r; }, false);
+    queue.enqueue(makeRequest(), false);
 
     const response = queue.approve("req-1");
     expect(response).toBeDefined();
     expect(response!.status).toBe("approved");
-    expect(resolved).toBeDefined();
-    expect(resolved!.status).toBe("approved");
     expect(queue.getStatus("req-1")).toBe("approved");
   });
 
   it("approve returns undefined for already-approved entry", () => {
     const queue = new PromptRequestQueue();
-    queue.enqueue(makeRequest(), () => {}, true); // already approved
+    queue.enqueue(makeRequest(), true); // already approved
     expect(queue.approve("req-1")).toBeUndefined();
   });
 
@@ -256,22 +323,20 @@ describe("PromptRequestQueue", () => {
 
   // ── deny ──
 
-  it("deny transitions pending-approval to denied and removes entry", () => {
+  it("deny transitions pending-approval to denied", () => {
     const queue = new PromptRequestQueue();
-    let resolved: PromptResponse | undefined;
-    queue.enqueue(makeRequest(), (r) => { resolved = r; }, false);
+    queue.enqueue(makeRequest(), false);
 
     const response = queue.deny("req-1", "not now");
     expect(response).toBeDefined();
     expect(response!.status).toBe("denied");
     expect(response!.reason).toBe("not now");
-    expect(resolved!.status).toBe("denied");
-    expect(queue.size()).toBe(0);
+    expect(queue.getStatus("req-1")).toBe("denied");
   });
 
   it("deny returns undefined for approved entry", () => {
     const queue = new PromptRequestQueue();
-    queue.enqueue(makeRequest(), () => {}, true);
+    queue.enqueue(makeRequest(), true);
     expect(queue.deny("req-1")).toBeUndefined();
   });
 
@@ -279,14 +344,14 @@ describe("PromptRequestQueue", () => {
 
   it("markExecuting transitions approved to executing", () => {
     const queue = new PromptRequestQueue();
-    queue.enqueue(makeRequest(), () => {}, true);
+    queue.enqueue(makeRequest(), true);
     expect(queue.markExecuting("req-1")).toBe(true);
     expect(queue.getStatus("req-1")).toBe("executing");
   });
 
   it("markExecuting returns false for pending-approval", () => {
     const queue = new PromptRequestQueue();
-    queue.enqueue(makeRequest(), () => {}, false);
+    queue.enqueue(makeRequest(), false);
     expect(queue.markExecuting("req-1")).toBe(false);
   });
 
@@ -297,20 +362,18 @@ describe("PromptRequestQueue", () => {
 
   // ── complete ──
 
-  it("complete from approved returns completed and removes entry", () => {
+  it("complete auto-transitions from approved through executing to completed", () => {
     const queue = new PromptRequestQueue();
-    let resolved: PromptResponse | undefined;
-    queue.enqueue(makeRequest(), (r) => { resolved = r; }, true);
+    queue.enqueue(makeRequest(), true);
 
     const response = queue.complete("req-1");
     expect(response!.status).toBe("completed");
-    expect(resolved!.status).toBe("completed");
-    expect(queue.size()).toBe(0);
+    expect(queue.getStatus("req-1")).toBe("completed");
   });
 
   it("complete from executing returns completed", () => {
     const queue = new PromptRequestQueue();
-    queue.enqueue(makeRequest(), () => {}, true);
+    queue.enqueue(makeRequest(), true);
     queue.markExecuting("req-1");
     const response = queue.complete("req-1");
     expect(response!.status).toBe("completed");
@@ -318,7 +381,7 @@ describe("PromptRequestQueue", () => {
 
   it("complete with error returns failed", () => {
     const queue = new PromptRequestQueue();
-    queue.enqueue(makeRequest(), () => {}, true);
+    queue.enqueue(makeRequest(), true);
     const response = queue.complete("req-1", "something broke");
     expect(response!.status).toBe("failed");
     expect(response!.error).toBe("something broke");
@@ -326,7 +389,7 @@ describe("PromptRequestQueue", () => {
 
   it("complete returns undefined for pending-approval", () => {
     const queue = new PromptRequestQueue();
-    queue.enqueue(makeRequest(), () => {}, false);
+    queue.enqueue(makeRequest(), false);
     expect(queue.complete("req-1")).toBeUndefined();
   });
 
@@ -335,12 +398,53 @@ describe("PromptRequestQueue", () => {
     expect(queue.complete("no-such")).toBeUndefined();
   });
 
+  it("complete returns undefined for denied entry", () => {
+    const queue = new PromptRequestQueue();
+    queue.enqueue(makeRequest(), false);
+    queue.deny("req-1");
+    expect(queue.complete("req-1")).toBeUndefined();
+  });
+
+  // ── failAll ──
+
+  it("failAll marks all non-terminal entries as failed", () => {
+    const queue = new PromptRequestQueue();
+    queue.enqueue(makeRequest({ id: "a" }), false);
+    queue.enqueue(makeRequest({ id: "b" }), true);
+    queue.enqueue(makeRequest({ id: "c" }), true);
+    queue.complete("c"); // completed — should not change
+
+    queue.failAll();
+
+    expect(queue.getStatus("a")).toBe("failed");
+    expect(queue.getStatus("b")).toBe("failed");
+    expect(queue.getStatus("c")).toBe("completed");
+  });
+
+  // ── terminal entries stay in queue ──
+
+  it("denied entries remain queryable", () => {
+    const queue = new PromptRequestQueue();
+    queue.enqueue(makeRequest(), false);
+    queue.deny("req-1", "no");
+    expect(queue.getStatus("req-1")).toBe("denied");
+    expect(queue.size()).toBe(1);
+  });
+
+  it("completed entries remain queryable", () => {
+    const queue = new PromptRequestQueue();
+    queue.enqueue(makeRequest(), true);
+    queue.complete("req-1");
+    expect(queue.getStatus("req-1")).toBe("completed");
+    expect(queue.size()).toBe(1);
+  });
+
   // ── clear / size ──
 
   it("clear removes all entries", () => {
     const queue = new PromptRequestQueue();
-    queue.enqueue(makeRequest({ id: "a" }), () => {}, false);
-    queue.enqueue(makeRequest({ id: "b" }), () => {}, true);
+    queue.enqueue(makeRequest({ id: "a" }), false);
+    queue.enqueue(makeRequest({ id: "b" }), true);
     expect(queue.size()).toBe(2);
     queue.clear();
     expect(queue.size()).toBe(0);

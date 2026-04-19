@@ -22,6 +22,41 @@ export interface PromptResponse {
   timestamp: number;
 }
 
+// ── Wire message types for PROMPT_PROTOCOL ─────────────────────────
+
+export interface PromptRequestMessage {
+  type: "prompt-request";
+  prompt: string;
+  model?: string;
+  timestamp: number;
+}
+
+export interface PromptStatusQuery {
+  type: "status-query";
+  id: string;
+}
+
+export type PromptProtocolMessage = PromptRequestMessage | PromptStatusQuery;
+
+export function isPromptRequestMessage(value: unknown): value is PromptRequestMessage {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    v["type"] === "prompt-request" &&
+    typeof v["prompt"] === "string" &&
+    typeof v["timestamp"] === "number" &&
+    (v["model"] === undefined || typeof v["model"] === "string")
+  );
+}
+
+export function isPromptStatusQuery(value: unknown): value is PromptStatusQuery {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return v["type"] === "status-query" && typeof v["id"] === "string";
+}
+
+// ── Internal validation guards ─────────────────────────────────────
+
 export function isPromptRequest(value: unknown): value is PromptRequest {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
@@ -56,10 +91,11 @@ export function isPromptResponse(value: unknown): value is PromptResponse {
   );
 }
 
+// ── Queue ──────────────────────────────────────────────────────────
+
 export interface QueuedPromptRequest {
   request: PromptRequest;
   status: PromptRequestStatus;
-  resolve: (response: PromptResponse) => void;
 }
 
 export class PromptRequestQueue {
@@ -67,11 +103,10 @@ export class PromptRequestQueue {
 
   enqueue(
     request: PromptRequest,
-    resolve: (response: PromptResponse) => void,
     autoExecute: boolean,
   ): PromptResponse {
     const status: PromptRequestStatus = autoExecute ? "approved" : "pending-approval";
-    this.entries.set(request.id, { request, status, resolve });
+    this.entries.set(request.id, { request, status });
     return { id: request.id, status, timestamp: Date.now() };
   }
 
@@ -83,9 +118,10 @@ export class PromptRequestQueue {
     return this.entries.get(id)?.status;
   }
 
-  listPending(): QueuedPromptRequest[] {
+  /** Returns entries that are not in a terminal state. */
+  listActive(): QueuedPromptRequest[] {
     return Array.from(this.entries.values()).filter(
-      (e) => e.status === "pending-approval" || e.status === "approved",
+      (e) => e.status === "pending-approval" || e.status === "approved" || e.status === "executing",
     );
   }
 
@@ -93,19 +129,14 @@ export class PromptRequestQueue {
     const entry = this.entries.get(id);
     if (!entry || entry.status !== "pending-approval") return undefined;
     entry.status = "approved";
-    const response: PromptResponse = { id, status: "approved", timestamp: Date.now() };
-    entry.resolve(response);
-    return response;
+    return { id, status: "approved", timestamp: Date.now() };
   }
 
   deny(id: string, reason?: string): PromptResponse | undefined {
     const entry = this.entries.get(id);
     if (!entry || entry.status !== "pending-approval") return undefined;
     entry.status = "denied";
-    const response: PromptResponse = { id, status: "denied", reason, timestamp: Date.now() };
-    entry.resolve(response);
-    this.entries.delete(id);
-    return response;
+    return { id, status: "denied", reason, timestamp: Date.now() };
   }
 
   markExecuting(id: string): boolean {
@@ -117,13 +148,21 @@ export class PromptRequestQueue {
 
   complete(id: string, error?: string): PromptResponse | undefined {
     const entry = this.entries.get(id);
-    if (!entry || (entry.status !== "approved" && entry.status !== "executing")) return undefined;
+    if (!entry) return undefined;
+    if (entry.status === "approved") entry.status = "executing";
+    if (entry.status !== "executing") return undefined;
     const status: PromptRequestStatus = error ? "failed" : "completed";
     entry.status = status;
-    const response: PromptResponse = { id, status, error, timestamp: Date.now() };
-    entry.resolve(response);
-    this.entries.delete(id);
-    return response;
+    return { id, status, error, timestamp: Date.now() };
+  }
+
+  /** Mark all non-terminal entries as failed (for graceful shutdown). */
+  failAll(): void {
+    for (const entry of this.entries.values()) {
+      if (entry.status !== "completed" && entry.status !== "failed" && entry.status !== "denied") {
+        entry.status = "failed";
+      }
+    }
   }
 
   size(): number {
