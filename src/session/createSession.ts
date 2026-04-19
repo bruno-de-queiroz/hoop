@@ -51,22 +51,26 @@ import { type StateTree, createEmptyStateTree } from "../state/stateTree.js";
 import {
   getGitRoot as defaultGetGitRoot,
   createSessionWorktree as defaultCreateSessionWorktree,
+  pushBranch as defaultPushBranch,
   type GitResult,
 } from "../git/gitBranch.js";
 
 export interface GitOps {
   getGitRoot: () => Promise<GitResult<string>>;
   createSessionWorktree: (branchName: string, worktreePath: string) => Promise<GitResult<string>>;
+  pushBranch: (branchName: string, remote?: string) => Promise<GitResult>;
 }
 
 export const realGitOps: GitOps = {
   getGitRoot: defaultGetGitRoot,
   createSessionWorktree: defaultCreateSessionWorktree,
+  pushBranch: defaultPushBranch,
 };
 
 export const stubGitOps: GitOps = {
   getGitRoot: async () => ({ ok: true, value: "/tmp/hoop-stub" }),
   createSessionWorktree: async (_branch, path) => ({ ok: true, value: path }),
+  pushBranch: async () => ({ ok: true, value: undefined as never }),
 };
 
 export const defaultAdmissionHandler = async (_email: string, _peerId: string): Promise<boolean> => true;
@@ -256,6 +260,13 @@ export async function createSession(
   }
 
   const worktreePath = worktreeResult.value;
+
+  const pushResult = await gitOps.pushBranch(branchName);
+  if (!pushResult.ok) {
+    await node.stop();
+    throw new Error(`Failed to push session branch: ${pushResult.error}`);
+  }
+
   store.update(sessionCode, { branchName, worktreePath });
 
   const broadcastHub = new BroadcastHub();
