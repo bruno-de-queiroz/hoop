@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { applyFilePatch } from "../applyDiff.js";
 import * as gitBranch from "../../git/gitBranch.js";
 
-vi.mock("node:fs/promises", () => ({
-  readFile: vi.fn(),
-}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, readFile: vi.fn() };
+});
 
 vi.mock("../../git/gitBranch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../git/gitBranch.js")>();

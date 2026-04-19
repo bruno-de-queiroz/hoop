@@ -1,31 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
+import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { execFileSync } from "node:child_process";
 import { applyFilePatch } from "../applyDiff.js";
 import { computeGitDiff, hashContent } from "../../git/gitBranch.js";
-
-function gitSync(args: string[], cwd: string): string {
-  return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
-}
-
-function initRepo(cwd: string): void {
-  gitSync(["init"], cwd);
-  gitSync(["config", "user.email", "test@test.com"], cwd);
-  gitSync(["config", "user.name", "Test"], cwd);
-}
+import { gitSync, createTempRepo, removeTempRepo } from "../../__tests__/helpers/gitTestRepo.js";
 
 describe("applyFilePatch (real git)", () => {
   let repoDir: string;
 
   beforeEach(async () => {
-    repoDir = await mkdtemp(join(tmpdir(), "hoop-applydiff-e2e-"));
-    initRepo(repoDir);
+    repoDir = await createTempRepo("hoop-applydiff-e2e-");
   });
 
   afterEach(async () => {
-    await rm(repoDir, { recursive: true, force: true });
+    await removeTempRepo(repoDir);
   });
 
   it("applies a real patch and verifies result hash matches", async () => {

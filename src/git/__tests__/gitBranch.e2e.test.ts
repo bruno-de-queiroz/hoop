@@ -1,9 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
+import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { execFileSync } from "node:child_process";
 import {
   getGitRoot,
   createSessionWorktree,
@@ -11,27 +9,17 @@ import {
   applyGitPatch,
   hashContent,
 } from "../gitBranch.js";
-
-function gitSync(args: string[], cwd: string): string {
-  return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
-}
-
-function initRepo(cwd: string): void {
-  gitSync(["init"], cwd);
-  gitSync(["config", "user.email", "test@test.com"], cwd);
-  gitSync(["config", "user.name", "Test"], cwd);
-}
+import { gitSync, createTempRepo, removeTempRepo } from "../../__tests__/helpers/gitTestRepo.js";
 
 describe("git operations (real)", () => {
   let repoDir: string;
 
   beforeEach(async () => {
-    repoDir = await mkdtemp(join(tmpdir(), "hoop-git-e2e-"));
-    initRepo(repoDir);
+    repoDir = await createTempRepo("hoop-git-e2e-");
   });
 
   afterEach(async () => {
-    await rm(repoDir, { recursive: true, force: true });
+    await removeTempRepo(repoDir);
   });
 
   describe("getGitRoot", () => {
@@ -103,14 +91,11 @@ describe("git operations (real)", () => {
 
       // Apply the patch
       const applyResult = await applyGitPatch(repoDir, patch);
-      if (!applyResult.ok) {
-        throw new Error(`applyGitPatch failed: ${applyResult.error}`);
-      }
+      expect(applyResult).toMatchObject({ ok: true });
 
       // Verify the file content matches the modified version
       const resultContent = await readFile(join(repoDir, filePath), "utf-8");
       expect(resultContent).toBe(modifiedContent);
-      expect(hashContent(resultContent)).toBe(hashContent(modifiedContent));
     });
 
     it("dry-run rejects a patch that does not match current file state", async () => {
