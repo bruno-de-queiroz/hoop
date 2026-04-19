@@ -887,7 +887,6 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         return errorResult("Only the host can complete prompt requests.");
       }
 
-      state.hostSession.promptRequestQueue.markExecuting(requestId);
       const response = state.hostSession.promptRequestQueue.complete(requestId, error);
       if (!response) {
         return errorResult(`No executing request found with ID: ${requestId}`);
@@ -934,7 +933,6 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         for (const pending of state.pendingAdmissions.values()) {
           pending.resolve(false);
         }
-        state.hostSession.promptRequestQueue.failAll();
         state.hostSession.promptRequestQueue.clear();
         state.hostSession.broadcastHub.close();
         await state.hostSession.node.stop();

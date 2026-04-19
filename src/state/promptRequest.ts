@@ -93,13 +93,29 @@ export function isPromptResponse(value: unknown): value is PromptResponse {
 
 // ── Queue ──────────────────────────────────────────────────────────
 
+const TERMINAL_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 export interface QueuedPromptRequest {
   request: PromptRequest;
   status: PromptRequestStatus;
+  resolvedAt?: number;
+}
+
+function isTerminal(status: PromptRequestStatus): boolean {
+  return status === "completed" || status === "failed" || status === "denied";
 }
 
 export class PromptRequestQueue {
   private readonly entries = new Map<string, QueuedPromptRequest>();
+
+  private evictStale(): void {
+    const cutoff = Date.now() - TERMINAL_TTL_MS;
+    for (const [id, entry] of this.entries) {
+      if (isTerminal(entry.status) && entry.resolvedAt !== undefined && entry.resolvedAt < cutoff) {
+        this.entries.delete(id);
+      }
+    }
+  }
 
   enqueue(
     request: PromptRequest,
@@ -111,6 +127,7 @@ export class PromptRequestQueue {
   }
 
   get(id: string): QueuedPromptRequest | undefined {
+    this.evictStale();
     return this.entries.get(id);
   }
 
@@ -120,6 +137,7 @@ export class PromptRequestQueue {
 
   /** Returns entries that are not in a terminal state. */
   listActive(): QueuedPromptRequest[] {
+    this.evictStale();
     return Array.from(this.entries.values()).filter(
       (e) => e.status === "pending-approval" || e.status === "approved" || e.status === "executing",
     );
@@ -136,6 +154,7 @@ export class PromptRequestQueue {
     const entry = this.entries.get(id);
     if (!entry || entry.status !== "pending-approval") return undefined;
     entry.status = "denied";
+    entry.resolvedAt = Date.now();
     return { id, status: "denied", reason, timestamp: Date.now() };
   }
 
@@ -153,14 +172,17 @@ export class PromptRequestQueue {
     if (entry.status !== "executing") return undefined;
     const status: PromptRequestStatus = error ? "failed" : "completed";
     entry.status = status;
+    entry.resolvedAt = Date.now();
     return { id, status, error, timestamp: Date.now() };
   }
 
   /** Mark all non-terminal entries as failed (for graceful shutdown). */
   failAll(): void {
+    const now = Date.now();
     for (const entry of this.entries.values()) {
-      if (entry.status !== "completed" && entry.status !== "failed" && entry.status !== "denied") {
+      if (!isTerminal(entry.status)) {
         entry.status = "failed";
+        entry.resolvedAt = now;
       }
     }
   }
