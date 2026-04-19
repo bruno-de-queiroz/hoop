@@ -33,6 +33,17 @@ describe("computeContentDiff (real git)", () => {
     expect(result.value).not.toContain("/tmp/");
   });
 
+  it("handles file paths containing $ without corruption", async () => {
+    const filePath = "src/$&_helper.ts";
+    const result = await computeContentDiff(filePath, "old\n", "new\n");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value).toContain(`--- a/${filePath}`);
+    expect(result.value).toContain(`+++ b/${filePath}`);
+    expect(result.value).toContain(`diff --git a/${filePath} b/${filePath}`);
+  });
+
   it("handles new file content (empty old)", async () => {
     const result = await computeContentDiff("new-file.ts", "", "content\n");
     expect(result.ok).toBe(true);

@@ -165,11 +165,11 @@ export async function computeContentDiff(
     );
 
     // Rewrite only the known header lines to use the actual filePath.
-    // This avoids accidental matches in the diff body.
+    // Replacer functions avoid $ special-pattern interpolation in filePath.
     const fixed = diff
-      .replace(/^diff --git a\/.*? b\/.*$/m, `diff --git a/${filePath} b/${filePath}`)
-      .replace(/^--- a\/.*$/m, `--- a/${filePath}`)
-      .replace(/^\+\+\+ b\/.*$/m, `+++ b/${filePath}`);
+      .replace(/^diff --git a\/.*? b\/.*$/m, () => `diff --git a/${filePath} b/${filePath}`)
+      .replace(/^--- a\/.*$/m, () => `--- a/${filePath}`)
+      .replace(/^\+\+\+ b\/.*$/m, () => `+++ b/${filePath}`);
 
     return { ok: true, value: fixed };
   } catch (err) {
