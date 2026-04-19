@@ -144,11 +144,12 @@ export async function joinSession(
       }
       authenticated = true;
     } catch (err) {
-      if (err instanceof Error && err.name === "UnsupportedProtocolError") {
-        // Host doesn't register the auth protocol — password not required, proceed
-      } else {
+      const isUnsupportedProtocol = err instanceof Error && err.name === "UnsupportedProtocolError";
+      if (!isUnsupportedProtocol) {
+        await node.stop();
         throw err;
       }
+      // Host doesn't register the auth protocol — password not required, proceed
     }
   }
 
@@ -167,11 +168,12 @@ export async function joinSession(
       }
       admitted = true;
     } catch (err) {
-      if (err instanceof Error && err.name === "UnsupportedProtocolError") {
-        // Host doesn't register the admission protocol — admission not required, proceed
-      } else {
+      const isUnsupportedProtocol = err instanceof Error && err.name === "UnsupportedProtocolError";
+      if (!isUnsupportedProtocol) {
+        await node.stop();
         throw err;
       }
+      // Host doesn't register the admission protocol — admission not required, proceed
     }
   }
 
