@@ -385,7 +385,6 @@ export async function createSession(
         reason: "not-authenticated",
         timestamp: Date.now(),
       } as PromptResponse);
-      await stream.close();
       return;
     }
 
@@ -398,7 +397,6 @@ export async function createSession(
           ? { id: message.id, status: entry.status, timestamp: Date.now() }
           : { id: message.id, status: "failed", error: "not-found", timestamp: Date.now() };
         await writeToStream(stream, response);
-        await stream.close();
         return;
       }
 
@@ -414,7 +412,6 @@ export async function createSession(
         const response = promptRequestQueue.enqueue(request, autoExecutePrompts);
         params.onPromptRequest?.(request);
         await writeToStream(stream, response);
-        await stream.close();
         return;
       }
 
@@ -424,7 +421,6 @@ export async function createSession(
         error: "invalid-message",
         timestamp: Date.now(),
       } as PromptResponse);
-      await stream.close();
     } catch {
       await writeToStream(stream, {
         id: "",
@@ -432,7 +428,6 @@ export async function createSession(
         error: "internal-error",
         timestamp: Date.now(),
       } as PromptResponse);
-      await stream.close();
     }
   });
 
