@@ -44,7 +44,7 @@ interface ServerState {
   role: "host" | "peer" | null;
   hostSession: CreateSessionResult | null;
   peerSession: JoinSessionResult | null;
-  origAccumulate: ((update: StateUpdate) => void) | null;
+  stopHostUpdateMirror: (() => void) | null;
   pendingUpdates: StateUpdate[];
   pendingAdmissions: Map<string, PendingAdmission>;
   pendingAdmissionsWriter: PendingAdmissionsWriter | null;
@@ -95,7 +95,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     role: null,
     hostSession: null,
     peerSession: null,
-    origAccumulate: null,
+    stopHostUpdateMirror: null,
     pendingUpdates: [],
     pendingAdmissions: new Map(),
     pendingAdmissionsWriter: null,
@@ -135,6 +135,14 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
   function flushLockStatus(): void {
     state.lockStatusWriter?.update(getCurrentLockStatus());
+  }
+
+  function mirrorObservedUpdate(update: StateUpdate, selfPeerId: string): void {
+    if (update.peerId !== selfPeerId && shouldQueuePendingUpdate(update)) {
+      state.pendingUpdates.push(update);
+    }
+    state.activeEditsTracker?.handleUpdate(update);
+    state.pendingUpdatesWriter?.handleUpdate(update);
   }
 
   function syncPromptRequests(): void {
@@ -223,19 +231,11 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         );
         flushLockStatus();
 
-        // Intercept peer updates so hoop_check_updates can drain them
-        state.origAccumulate = result.accumulator.accumulate.bind(result.accumulator);
-        result.accumulator.accumulate = (update: StateUpdate) => {
-          state.origAccumulate!(update);
-          if (shouldQueuePendingUpdate(update)) {
-            state.pendingUpdates.push(update);
-          }
-          if (update.type === "lock-acquire" || update.type === "lock-release") {
-            flushLockStatus();
-          }
-          state.activeEditsTracker?.handleUpdate(update);
-          state.pendingUpdatesWriter?.handleUpdate(update);
-        };
+        // Mirror every host-side publication through one observer path so MCP
+        // sees peer updates without patching the accumulator implementation.
+        state.stopHostUpdateMirror = result.onPublishedUpdate(({ update }) => {
+          mirrorObservedUpdate(update, result.peerId);
+        });
 
         // Watch for outbound updates from PostToolUse hook
         state.outboundUpdatesReader = new OutboundUpdatesReader((outbound) => {
@@ -248,10 +248,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
             resultHash: outbound.resultHash,
             timestamp: outbound.timestamp,
           };
-          // Bypass the interceptor so host's own updates don't queue
-          state.origAccumulate!(update);
-          const seqNo = result.broadcastHub.broadcast(update);
-          result.replayBuffer.push({ seqNo, update });
+          result.publishUpdate(update);
         }, outboundUpdatesRegistryPath);
         state.outboundUpdatesReader.start();
 
@@ -334,14 +331,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
         // Queue incoming broadcasts for hoop_check_updates
         result.onBroadcast((update) => {
-          if (shouldQueuePendingUpdate(update)) {
-            state.pendingUpdates.push(update);
-          }
-          if (update.type === "lock-acquire" || update.type === "lock-release") {
-            flushLockStatus();
-          }
-          state.activeEditsTracker?.handleUpdate(update);
-          state.pendingUpdatesWriter?.handleUpdate(update);
+          mirrorObservedUpdate(update, result.localPeerId);
         });
 
         // Watch for outbound updates from PostToolUse hook
@@ -524,10 +514,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
             peerId: state.hostSession.peerId,
             timestamp: Date.now(),
           } as StateUpdate;
-          // Bypass the interceptor so host's own updates don't queue
-          state.origAccumulate!(update);
-          const seqNo = state.hostSession.broadcastHub.broadcast(update);
-          state.hostSession.replayBuffer.push({ seqNo, update });
+          const seqNo = state.hostSession.publishUpdate(update);
           return jsonResult({ accepted: true, seqNo });
         }
 
@@ -570,13 +557,11 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
       if (state.role === "host" && state.hostSession) {
         const result = state.hostSession.acquireLock(state.hostSession.peerId);
-        flushLockStatus();
         return jsonResult({ acquired: result.acquired, holder: result.holder });
       }
 
       if (state.role === "peer" && state.peerSession) {
         const result = await state.peerSession.acquireLock();
-        flushLockStatus();
         return jsonResult(result);
       }
 
@@ -599,13 +584,11 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
       if (state.role === "host" && state.hostSession) {
         const result = state.hostSession.releaseLock(state.hostSession.peerId);
-        flushLockStatus();
         return jsonResult({ released: result.released, holder: result.holder });
       }
 
       if (state.role === "peer" && state.peerSession) {
         const result = await state.peerSession.releaseLock();
-        flushLockStatus();
         return jsonResult(result);
       }
 
@@ -645,7 +628,6 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       }
 
       const result = state.hostSession.forceReleaseLock();
-      flushLockStatus();
       return jsonResult({ released: result.released, holder: result.holder });
     },
   );
@@ -913,11 +895,12 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.pendingPromptRequestsWriter?.clear();
     state.pendingPromptRequestsWriter = null;
     state.peerPromptRequests.clear();
+    state.stopHostUpdateMirror?.();
+    state.stopHostUpdateMirror = null;
     clearSessionStatus(deps?.sessionStatusPath);
     state.role = null;
     state.hostSession = null;
     state.peerSession = null;
-    state.origAccumulate = null;
     state.pendingUpdates.length = 0;
   }
 

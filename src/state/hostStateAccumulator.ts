@@ -104,34 +104,45 @@ export class HostStateAccumulator {
     return normalizeHoopLock(this.lock, now);
   }
 
-  expireStaleLock(timestamp: number = Date.now()): LockReleaseUpdate | undefined {
-    const { lock, releaseUpdate } = expireHoopLock(this.lock, timestamp);
-    this.lock = lock;
-    return releaseUpdate;
+  peekExpiredLockRelease(timestamp: number = Date.now()): LockReleaseUpdate | undefined {
+    return expireHoopLock(this.lock, timestamp).releaseUpdate;
   }
 
-  releaseLockForPeer(peerId: string, timestamp: number = Date.now()): LockReleaseUpdate | undefined {
+  peekPeerDisconnectRelease(peerId: string, timestamp: number = Date.now()): LockReleaseUpdate | undefined {
     if (this.lock.holderPeerId !== peerId) {
       return undefined;
     }
 
-    const expiredRelease = this.expireStaleLock(timestamp);
-    if (expiredRelease) {
-      return expiredRelease;
-    }
-
-    const update: LockReleaseUpdate = {
+    return this.peekExpiredLockRelease(timestamp) ?? {
       type: "lock-release",
       peerId,
       timestamp,
     };
-    this.lock = applyHoopLockUpdate(this.lock, update);
-    return update;
+  }
+
+  removePeerPresence(peerId: string): void {
+    this.cursors.delete(peerId);
+    this.buffers.delete(peerId);
+  }
+
+  expireStaleLock(timestamp: number = Date.now()): LockReleaseUpdate | undefined {
+    const releaseUpdate = this.peekExpiredLockRelease(timestamp);
+    if (releaseUpdate) {
+      this.lock = applyHoopLockUpdate(this.lock, releaseUpdate);
+    }
+    return releaseUpdate;
+  }
+
+  releaseLockForPeer(peerId: string, timestamp: number = Date.now()): LockReleaseUpdate | undefined {
+    const releaseUpdate = this.peekPeerDisconnectRelease(peerId, timestamp);
+    if (releaseUpdate) {
+      this.lock = applyHoopLockUpdate(this.lock, releaseUpdate);
+    }
+    return releaseUpdate;
   }
 
   removePeer(peerId: string, timestamp: number = Date.now()): LockReleaseUpdate | undefined {
-    this.cursors.delete(peerId);
-    this.buffers.delete(peerId);
+    this.removePeerPresence(peerId);
     return this.releaseLockForPeer(peerId, timestamp);
   }
 

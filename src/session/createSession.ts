@@ -95,6 +95,14 @@ export interface LockReleaseResult {
   seqNo?: number;
 }
 
+export interface PublishedUpdate {
+  seqNo: number;
+  update: StateUpdate;
+  excludePeerId?: string;
+}
+
+export type PublishedUpdateListener = (publication: PublishedUpdate) => void;
+
 export interface CreateSessionResult {
   sessionCode: string;
   hostId: string;
@@ -111,6 +119,8 @@ export interface CreateSessionResult {
   accumulator: HostStateAccumulator;
   replayBuffer: ReplayBuffer;
   promptRequestQueue: PromptRequestQueue;
+  publishUpdate: (update: StateUpdate, excludePeerId?: string) => number;
+  onPublishedUpdate: (listener: PublishedUpdateListener) => (() => void);
   acquireLock: (peerId?: string, timestamp?: number) => LockAcquireResult;
   releaseLock: (peerId?: string, timestamp?: number) => LockReleaseResult;
   forceReleaseLock: (timestamp?: number) => LockReleaseResult;
@@ -248,29 +258,45 @@ export async function createSession(
   const replayBuffer = new ReplayBuffer();
   const promptRequestQueue = new PromptRequestQueue();
   const autoExecutePrompts = params.autoExecutePrompts ?? false;
+  const publishedUpdateListeners = new Set<PublishedUpdateListener>();
 
-  const broadcastAppliedUpdate = (
-    update: StateUpdate,
-    excludePeerId?: string,
-  ): number => {
-    const seqNo = broadcastHub.broadcast(update, excludePeerId);
-    replayBuffer.push({ seqNo, update });
-    return seqNo;
+  const onPublishedUpdate = (listener: PublishedUpdateListener): (() => void) => {
+    publishedUpdateListeners.add(listener);
+    return () => {
+      publishedUpdateListeners.delete(listener);
+    };
   };
 
   const publishUpdate = (
     update: StateUpdate,
     excludePeerId?: string,
   ): number => {
+    // Centralized host-side publication flow: every accepted update must be
+    // accumulated before it is broadcast so snapshots, seqNos, and replay data
+    // all reflect the same ordering. Host-only observers run afterward.
     accumulator.accumulate(update);
-    return broadcastAppliedUpdate(update, excludePeerId);
+    const seqNo = broadcastHub.broadcast(update, excludePeerId);
+    replayBuffer.push({ seqNo, update });
+
+    if (update.type === "lock-acquire" || update.type === "lock-release") {
+      params.onLockChange?.(accumulator.getLockSnapshot(update.timestamp));
+    }
+
+    for (const listener of publishedUpdateListeners) {
+      try {
+        listener({ seqNo, update, excludePeerId });
+      } catch {
+        // Observers are best-effort; publication has already completed.
+      }
+    }
+
+    return seqNo;
   };
 
   const expireStaleLock = (timestamp: number = Date.now(), excludePeerId?: string): LockReleaseUpdate | undefined => {
-    const releaseUpdate = accumulator.expireStaleLock(timestamp);
+    const releaseUpdate = accumulator.peekExpiredLockRelease(timestamp);
     if (releaseUpdate) {
-      broadcastAppliedUpdate(releaseUpdate, excludePeerId);
-      params.onLockChange?.(accumulator.getLockSnapshot(timestamp));
+      publishUpdate(releaseUpdate, excludePeerId);
     }
     return releaseUpdate;
   };
@@ -572,11 +598,11 @@ export async function createSession(
   node.addEventListener("peer:disconnect", (evt: CustomEvent) => {
     const peerId = evt.detail.toString();
     broadcastHub.unsubscribe(peerId);
+    accumulator.removePeerPresence(peerId);
 
-    const releaseUpdate = accumulator.removePeer(peerId);
+    const releaseUpdate = accumulator.peekPeerDisconnectRelease(peerId);
     if (releaseUpdate) {
-      broadcastAppliedUpdate(releaseUpdate);
-      params.onLockChange?.(accumulator.getLockSnapshot());
+      publishUpdate(releaseUpdate);
     }
   });
 
@@ -596,6 +622,8 @@ export async function createSession(
     accumulator,
     replayBuffer,
     promptRequestQueue,
+    publishUpdate,
+    onPublishedUpdate,
     acquireLock,
     releaseLock,
     forceReleaseLock,
