@@ -131,10 +131,6 @@ export class PromptRequestQueue {
     return this.entries.get(id);
   }
 
-  getStatus(id: string): PromptRequestStatus | undefined {
-    return this.entries.get(id)?.status;
-  }
-
   /** Returns entries that are not in a terminal state. */
   listActive(): QueuedPromptRequest[] {
     this.evictStale();
@@ -174,17 +170,6 @@ export class PromptRequestQueue {
     entry.status = status;
     entry.resolvedAt = Date.now();
     return { id, status, error, timestamp: Date.now() };
-  }
-
-  /** Mark all non-terminal entries as failed (for graceful shutdown). */
-  failAll(): void {
-    const now = Date.now();
-    for (const entry of this.entries.values()) {
-      if (!isTerminal(entry.status)) {
-        entry.status = "failed";
-        entry.resolvedAt = now;
-      }
-    }
   }
 
   size(): number {

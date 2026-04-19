@@ -1065,7 +1065,7 @@ describe("hoop MCP server", () => {
     expect(denyData.reason).toBe("Too risky");
 
     // Denied entry stays in queue but not in active list
-    expect(queue.getStatus("req-2")).toBe("denied");
+    expect(queue.get("req-2")?.status).toBe("denied");
     expect(queue.listActive()).toHaveLength(0);
   }, 30_000);
 

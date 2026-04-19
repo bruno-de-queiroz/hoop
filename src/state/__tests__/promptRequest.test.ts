@@ -272,17 +272,6 @@ describe("PromptRequestQueue", () => {
     expect(queue.get("no-such")).toBeUndefined();
   });
 
-  it("getStatus returns the current status", () => {
-    const queue = new PromptRequestQueue();
-    queue.enqueue(makeRequest(), false);
-    expect(queue.getStatus("req-1")).toBe("pending-approval");
-  });
-
-  it("getStatus returns undefined for unknown id", () => {
-    const queue = new PromptRequestQueue();
-    expect(queue.getStatus("no-such")).toBeUndefined();
-  });
-
   it("listActive returns pending-approval, approved, and executing entries", () => {
     const queue = new PromptRequestQueue();
     queue.enqueue(makeRequest({ id: "a" }), false);
@@ -307,7 +296,7 @@ describe("PromptRequestQueue", () => {
     const response = queue.approve("req-1");
     expect(response).toBeDefined();
     expect(response!.status).toBe("approved");
-    expect(queue.getStatus("req-1")).toBe("approved");
+    expect(queue.get("req-1")?.status).toBe("approved");
   });
 
   it("approve returns undefined for already-approved entry", () => {
@@ -331,7 +320,7 @@ describe("PromptRequestQueue", () => {
     expect(response).toBeDefined();
     expect(response!.status).toBe("denied");
     expect(response!.reason).toBe("not now");
-    expect(queue.getStatus("req-1")).toBe("denied");
+    expect(queue.get("req-1")?.status).toBe("denied");
   });
 
   it("deny returns undefined for approved entry", () => {
@@ -346,7 +335,7 @@ describe("PromptRequestQueue", () => {
     const queue = new PromptRequestQueue();
     queue.enqueue(makeRequest(), true);
     expect(queue.markExecuting("req-1")).toBe(true);
-    expect(queue.getStatus("req-1")).toBe("executing");
+    expect(queue.get("req-1")?.status).toBe("executing");
   });
 
   it("markExecuting returns false for pending-approval", () => {
@@ -368,7 +357,7 @@ describe("PromptRequestQueue", () => {
 
     const response = queue.complete("req-1");
     expect(response!.status).toBe("completed");
-    expect(queue.getStatus("req-1")).toBe("completed");
+    expect(queue.get("req-1")?.status).toBe("completed");
   });
 
   it("complete from executing returns completed", () => {
@@ -405,29 +394,13 @@ describe("PromptRequestQueue", () => {
     expect(queue.complete("req-1")).toBeUndefined();
   });
 
-  // ── failAll ──
-
-  it("failAll marks all non-terminal entries as failed", () => {
-    const queue = new PromptRequestQueue();
-    queue.enqueue(makeRequest({ id: "a" }), false);
-    queue.enqueue(makeRequest({ id: "b" }), true);
-    queue.enqueue(makeRequest({ id: "c" }), true);
-    queue.complete("c"); // completed — should not change
-
-    queue.failAll();
-
-    expect(queue.getStatus("a")).toBe("failed");
-    expect(queue.getStatus("b")).toBe("failed");
-    expect(queue.getStatus("c")).toBe("completed");
-  });
-
   // ── terminal entries stay in queue ──
 
   it("denied entries remain queryable", () => {
     const queue = new PromptRequestQueue();
     queue.enqueue(makeRequest(), false);
     queue.deny("req-1", "no");
-    expect(queue.getStatus("req-1")).toBe("denied");
+    expect(queue.get("req-1")?.status).toBe("denied");
     expect(queue.size()).toBe(1);
   });
 
@@ -435,7 +408,7 @@ describe("PromptRequestQueue", () => {
     const queue = new PromptRequestQueue();
     queue.enqueue(makeRequest(), true);
     queue.complete("req-1");
-    expect(queue.getStatus("req-1")).toBe("completed");
+    expect(queue.get("req-1")?.status).toBe("completed");
     expect(queue.size()).toBe(1);
   });
 
