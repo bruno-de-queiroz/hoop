@@ -49,9 +49,21 @@ export async function applyFilePatch(
     };
   }
 
-  const resultContent = await readFile(join(worktreePath, filePath), "utf-8");
+  let resultContent: string;
+  try {
+    resultContent = await readFile(join(worktreePath, filePath), "utf-8");
+  } catch {
+    await applyGitPatch(worktreePath, patch, false, true);
+    return {
+      ok: false,
+      error: "patch-failed",
+      message: `Cannot read patched file: ${filePath}`,
+    };
+  }
+
   const actualResultHash = hashContent(resultContent);
   if (actualResultHash !== expectedResultHash) {
+    await applyGitPatch(worktreePath, patch, false, true);
     return {
       ok: false,
       error: "result-hash-mismatch",

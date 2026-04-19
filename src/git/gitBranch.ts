@@ -14,16 +14,20 @@ export interface GitFailure {
 
 export type GitResult<T = void> = GitSuccess<T> | GitFailure;
 
-function git(args: string[], cwd?: string): Promise<string> {
+function gitRaw(args: string[], cwd?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile("git", args, { cwd }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(stderr.trim() || error.message));
       } else {
-        resolve(stdout.trim());
+        resolve(stdout);
       }
     });
   });
+}
+
+function git(args: string[], cwd?: string): Promise<string> {
+  return gitRaw(args, cwd).then((out) => out.trim());
 }
 
 function gitWithStdin(args: string[], stdin: string, cwd?: string): Promise<string> {
@@ -90,10 +94,8 @@ export async function computeGitDiff(
   filePath: string,
 ): Promise<GitResult<string>> {
   try {
-    const diff = await git(["diff", "--no-color", "--", filePath], worktreePath);
-    // Patches must end with a newline for git-apply to accept them.
-    // The git() helper trims stdout, so re-append it.
-    return { ok: true, value: diff ? diff + "\n" : diff };
+    const diff = await gitRaw(["diff", "--no-color", "--", filePath], worktreePath);
+    return { ok: true, value: diff };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }
@@ -103,10 +105,12 @@ export async function applyGitPatch(
   worktreePath: string,
   patch: string,
   check = false,
+  reverse = false,
 ): Promise<GitResult> {
   try {
     const args = ["apply", "--whitespace=nowarn"];
     if (check) args.push("--check");
+    if (reverse) args.push("--reverse");
     args.push("-");
     await gitWithStdin(args, patch, worktreePath);
     return { ok: true, value: undefined as never };
