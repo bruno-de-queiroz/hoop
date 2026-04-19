@@ -85,7 +85,6 @@ describe("createSession", () => {
       createSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo/.hoop/sessions/MOCK" }),
       removeSessionWorktree: vi.fn(),
       pushBranch: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
-      deleteRemoteBranch: vi.fn(),
     };
 
     const store = new SessionStore();
@@ -121,7 +120,6 @@ describe("createSession", () => {
       createSessionWorktree: vi.fn(),
       removeSessionWorktree: vi.fn(),
       pushBranch: vi.fn(),
-      deleteRemoteBranch: vi.fn(),
     };
 
     const store = new SessionStore();
@@ -149,7 +147,6 @@ describe("createSession", () => {
       createSessionWorktree: vi.fn().mockResolvedValue({ ok: false, error: "branch already exists" }),
       removeSessionWorktree: vi.fn(),
       pushBranch: vi.fn(),
-      deleteRemoteBranch: vi.fn(),
     };
 
     const store = new SessionStore();
@@ -176,7 +173,6 @@ describe("createSession", () => {
       createSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo/.hoop/sessions/MOCK" }),
       removeSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
       pushBranch: vi.fn().mockResolvedValue({ ok: false, error: "fatal: could not read from remote repository" }),
-      deleteRemoteBranch: vi.fn(),
     };
 
     const store = new SessionStore();
@@ -208,7 +204,6 @@ describe("createSession", () => {
       createSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo/.hoop/sessions/MOCK" }),
       removeSessionWorktree: vi.fn().mockResolvedValue({ ok: false, error: "worktree locked" }),
       pushBranch: vi.fn().mockResolvedValue({ ok: false, error: "remote unreachable" }),
-      deleteRemoteBranch: vi.fn(),
     };
 
     const store = new SessionStore();

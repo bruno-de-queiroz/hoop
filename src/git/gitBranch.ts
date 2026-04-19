@@ -90,19 +90,6 @@ export async function pushBranch(
   }
 }
 
-export async function deleteRemoteBranch(
-  branchName: string,
-  remote = "origin",
-  cwd?: string,
-): Promise<GitResult> {
-  try {
-    await git(["push", remote, "--delete", branchName], cwd);
-    return { ok: true, value: undefined as never };
-  } catch (err) {
-    return { ok: false, error: (err as Error).message };
-  }
-}
-
 export async function removeSessionWorktree(
   worktreePath: string,
   branchName: string,
