@@ -65,7 +65,6 @@ export class HostStateAccumulator {
       }
       case "lock-acquire":
       case "lock-release": {
-        this.expireStaleLock(update.timestamp);
         this.lock = applyHoopLockUpdate(this.lock, update);
         break;
       }
@@ -104,16 +103,16 @@ export class HostStateAccumulator {
     return normalizeHoopLock(this.lock, now);
   }
 
-  peekExpiredLockRelease(timestamp: number = Date.now()): LockReleaseUpdate | undefined {
+  deriveExpiredLockRelease(timestamp: number = Date.now()): LockReleaseUpdate | undefined {
     return expireHoopLock(this.lock, timestamp).releaseUpdate;
   }
 
-  peekPeerDisconnectRelease(peerId: string, timestamp: number = Date.now()): LockReleaseUpdate | undefined {
+  deriveLockReleaseForPeer(peerId: string, timestamp: number = Date.now()): LockReleaseUpdate | undefined {
     if (this.lock.holderPeerId !== peerId) {
       return undefined;
     }
 
-    return this.peekExpiredLockRelease(timestamp) ?? {
+    return this.deriveExpiredLockRelease(timestamp) ?? {
       type: "lock-release",
       peerId,
       timestamp,
@@ -123,27 +122,6 @@ export class HostStateAccumulator {
   removePeerPresence(peerId: string): void {
     this.cursors.delete(peerId);
     this.buffers.delete(peerId);
-  }
-
-  expireStaleLock(timestamp: number = Date.now()): LockReleaseUpdate | undefined {
-    const releaseUpdate = this.peekExpiredLockRelease(timestamp);
-    if (releaseUpdate) {
-      this.lock = applyHoopLockUpdate(this.lock, releaseUpdate);
-    }
-    return releaseUpdate;
-  }
-
-  releaseLockForPeer(peerId: string, timestamp: number = Date.now()): LockReleaseUpdate | undefined {
-    const releaseUpdate = this.peekPeerDisconnectRelease(peerId, timestamp);
-    if (releaseUpdate) {
-      this.lock = applyHoopLockUpdate(this.lock, releaseUpdate);
-    }
-    return releaseUpdate;
-  }
-
-  removePeer(peerId: string, timestamp: number = Date.now()): LockReleaseUpdate | undefined {
-    this.removePeerPresence(peerId);
-    return this.releaseLockForPeer(peerId, timestamp);
   }
 
   clear(): void {

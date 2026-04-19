@@ -119,6 +119,11 @@ export interface CreateSessionResult {
   accumulator: HostStateAccumulator;
   replayBuffer: ReplayBuffer;
   promptRequestQueue: PromptRequestQueue;
+  /**
+   * Publishes a host-side update through the canonical accumulate → broadcast →
+   * replay flow. Prefer acquireLock()/releaseLock() for lock updates so their
+   * validation rules stay centralized.
+   */
   publishUpdate: (update: StateUpdate, excludePeerId?: string) => number;
   onPublishedUpdate: (listener: PublishedUpdateListener) => (() => void);
   acquireLock: (peerId?: string, timestamp?: number) => LockAcquireResult;
@@ -285,8 +290,8 @@ export async function createSession(
     for (const listener of publishedUpdateListeners) {
       try {
         listener({ seqNo, update, excludePeerId });
-      } catch {
-        // Observers are best-effort; publication has already completed.
+      } catch (err) {
+        console.error("[hoop] publishUpdate observer error:", err);
       }
     }
 
@@ -294,7 +299,7 @@ export async function createSession(
   };
 
   const expireStaleLock = (timestamp: number = Date.now(), excludePeerId?: string): LockReleaseUpdate | undefined => {
-    const releaseUpdate = accumulator.peekExpiredLockRelease(timestamp);
+    const releaseUpdate = accumulator.deriveExpiredLockRelease(timestamp);
     if (releaseUpdate) {
       publishUpdate(releaseUpdate, excludePeerId);
     }
@@ -600,7 +605,7 @@ export async function createSession(
     broadcastHub.unsubscribe(peerId);
     accumulator.removePeerPresence(peerId);
 
-    const releaseUpdate = accumulator.peekPeerDisconnectRelease(peerId);
+    const releaseUpdate = accumulator.deriveLockReleaseForPeer(peerId);
     if (releaseUpdate) {
       publishUpdate(releaseUpdate);
     }
