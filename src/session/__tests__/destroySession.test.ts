@@ -110,6 +110,33 @@ describe("destroySession", () => {
     expect(params.store.exists("ABCD12")).toBe(false);
   });
 
+  it("continues cleanup when deleteRemoteBranch throws", async () => {
+    const gitOps: Pick<GitOps, "removeSessionWorktree" | "deleteRemoteBranch"> = {
+      deleteRemoteBranch: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+      removeSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: undefined as never }),
+    };
+    const params = makeParams({ gitOps });
+
+    const result = await destroySession(params);
+
+    expect(result.errors).toEqual(["Failed to delete remote branch: ECONNREFUSED"]);
+    expect(gitOps.removeSessionWorktree).toHaveBeenCalled();
+    expect(params.store.exists("ABCD12")).toBe(false);
+  });
+
+  it("continues cleanup when removeSessionWorktree throws", async () => {
+    const gitOps: Pick<GitOps, "removeSessionWorktree" | "deleteRemoteBranch"> = {
+      deleteRemoteBranch: vi.fn().mockResolvedValue({ ok: true, value: undefined as never }),
+      removeSessionWorktree: vi.fn().mockRejectedValue(new Error("EPERM")),
+    };
+    const params = makeParams({ gitOps });
+
+    const result = await destroySession(params);
+
+    expect(result.errors).toEqual(["Failed to remove worktree: EPERM"]);
+    expect(params.store.exists("ABCD12")).toBe(false);
+  });
+
   it("handles session already removed from store gracefully", async () => {
     const params = makeParams();
     params.store.delete("ABCD12");

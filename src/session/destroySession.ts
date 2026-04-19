@@ -21,26 +21,30 @@ export async function destroySession(
   const { sessionCode, branchName, worktreePath, node, store, gitOps } = params;
   const errors: string[] = [];
 
-  // 1. Stop the network node first so no new protocol messages arrive
   try {
     await node.stop();
   } catch (err) {
     errors.push(`Failed to stop node: ${(err as Error).message}`);
   }
 
-  // 2. Delete the remote branch
-  const remoteResult = await gitOps.deleteRemoteBranch(branchName);
-  if (!remoteResult.ok) {
-    errors.push(`Failed to delete remote branch: ${remoteResult.error}`);
+  try {
+    const remoteResult = await gitOps.deleteRemoteBranch(branchName);
+    if (!remoteResult.ok) {
+      errors.push(`Failed to delete remote branch: ${remoteResult.error}`);
+    }
+  } catch (err) {
+    errors.push(`Failed to delete remote branch: ${(err as Error).message}`);
   }
 
-  // 3. Remove local worktree and branch
-  const worktreeResult = await gitOps.removeSessionWorktree(worktreePath, branchName);
-  if (!worktreeResult.ok) {
-    errors.push(`Failed to remove worktree: ${worktreeResult.error}`);
+  try {
+    const worktreeResult = await gitOps.removeSessionWorktree(worktreePath, branchName);
+    if (!worktreeResult.ok) {
+      errors.push(`Failed to remove worktree: ${worktreeResult.error}`);
+    }
+  } catch (err) {
+    errors.push(`Failed to remove worktree: ${(err as Error).message}`);
   }
 
-  // 4. Clean up session store
   store.delete(sessionCode);
 
   return { errors };
