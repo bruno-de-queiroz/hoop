@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { getGitRoot, createSessionWorktree, fetchBranch, checkoutBranch, pushBranch } from "../gitBranch.js";
+import { getGitRoot, createSessionWorktree, removeSessionWorktree, fetchBranch, checkoutBranch, pushBranch } from "../gitBranch.js";
 import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 
@@ -119,6 +119,79 @@ describe("createSessionWorktree", () => {
     expect(result).toEqual({
       ok: false,
       error: "spawn git ENOENT",
+    });
+  });
+});
+
+describe("removeSessionWorktree", () => {
+  let callCount: number;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    callCount = 0;
+  });
+
+  it("removes worktree then deletes branch on success", async () => {
+    mockExecFile.mockImplementation(
+      ((_cmd: unknown, args: unknown, _opts: unknown, cb: unknown) => {
+        callCount++;
+        (cb as (err: Error | null, stdout: string, stderr: string) => void)(null, "", "");
+      }) as typeof execFile,
+    );
+
+    const result = await removeSessionWorktree("/tmp/wt", "hoop/session-ABC", "/tmp/repo");
+
+    expect(result.ok).toBe(true);
+    expect(callCount).toBe(2);
+    expect(mockExecFile).toHaveBeenNthCalledWith(
+      1,
+      "git",
+      ["worktree", "remove", "--force", "/tmp/wt"],
+      { cwd: "/tmp/repo" },
+      expect.any(Function),
+    );
+    expect(mockExecFile).toHaveBeenNthCalledWith(
+      2,
+      "git",
+      ["branch", "-D", "hoop/session-ABC"],
+      { cwd: "/tmp/repo" },
+      expect.any(Function),
+    );
+  });
+
+  it("returns failure when worktree remove fails", async () => {
+    simulateExecFileError("exit code 128", "fatal: '/tmp/wt' is not a working tree");
+
+    const result = await removeSessionWorktree("/tmp/wt", "hoop/session-ABC");
+
+    expect(result).toEqual({
+      ok: false,
+      error: "fatal: '/tmp/wt' is not a working tree",
+    });
+  });
+
+  it("returns failure when branch delete fails after worktree removal", async () => {
+    mockExecFile.mockImplementation(
+      ((_cmd: unknown, args: unknown, _opts: unknown, cb: unknown) => {
+        callCount++;
+        if (callCount === 1) {
+          (cb as (err: Error | null, stdout: string, stderr: string) => void)(null, "", "");
+        } else {
+          const err = new Error("exit code 1");
+          (cb as (err: Error | null, stdout: string, stderr: string) => void)(
+            err,
+            "",
+            "error: branch 'hoop/session-ABC' not found",
+          );
+        }
+      }) as typeof execFile,
+    );
+
+    const result = await removeSessionWorktree("/tmp/wt", "hoop/session-ABC");
+
+    expect(result).toEqual({
+      ok: false,
+      error: "error: branch 'hoop/session-ABC' not found",
     });
   });
 });
