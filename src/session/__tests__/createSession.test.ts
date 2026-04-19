@@ -85,6 +85,7 @@ describe("createSession", () => {
       createSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo/.hoop/sessions/MOCK" }),
       removeSessionWorktree: vi.fn(),
       pushBranch: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
+      deleteRemoteBranch: vi.fn(),
     };
 
     const store = new SessionStore();
@@ -99,27 +100,28 @@ describe("createSession", () => {
       store,
     );
 
-    expect(result.branchName).toBe(`hoop/session-${result.sessionCode}`);
-    expect(result.worktreePath).toBeTruthy();
+    // Branch name includes hostId for uniqueness
+    expect(result.branchName).toMatch(/^hoop\/session-.+-/);
+    expect(result.branchName).toContain(result.sessionCode);
+    expect(result.worktreePath).toBe("/tmp/fakerepo/.hoop/sessions/MOCK");
     expect(mockGitOps.createSessionWorktree).toHaveBeenCalledWith(
-      `hoop/session-${result.sessionCode}`,
+      result.branchName,
       expect.stringContaining(result.sessionCode),
     );
-    expect(mockGitOps.pushBranch).toHaveBeenCalledWith(
-      `hoop/session-${result.sessionCode}`,
-    );
+    expect(mockGitOps.pushBranch).toHaveBeenCalledWith(result.branchName);
 
     const session = store.get(result.sessionCode);
     expect(session!.branchName).toBe(result.branchName);
     expect(session!.worktreePath).toBe(result.worktreePath);
   }, 30_000);
 
-  it("throws when git root is not available", async () => {
+  it("throws and cleans up store when git root is not available", async () => {
     const mockGitOps: GitOps = {
       getGitRoot: vi.fn().mockResolvedValue({ ok: false, error: "fatal: not a git repository" }),
       createSessionWorktree: vi.fn(),
       removeSessionWorktree: vi.fn(),
       pushBranch: vi.fn(),
+      deleteRemoteBranch: vi.fn(),
     };
 
     const store = new SessionStore();
@@ -137,14 +139,17 @@ describe("createSession", () => {
     ).rejects.toThrow("Git repository required");
 
     expect(mockGitOps.createSessionWorktree).not.toHaveBeenCalled();
+    // Store should be cleaned up
+    expect([...store["sessions"].values()]).toHaveLength(0);
   }, 30_000);
 
-  it("throws when worktree creation fails", async () => {
+  it("throws and cleans up store when worktree creation fails", async () => {
     const mockGitOps: GitOps = {
       getGitRoot: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo" }),
       createSessionWorktree: vi.fn().mockResolvedValue({ ok: false, error: "branch already exists" }),
       removeSessionWorktree: vi.fn(),
       pushBranch: vi.fn(),
+      deleteRemoteBranch: vi.fn(),
     };
 
     const store = new SessionStore();
@@ -162,14 +167,16 @@ describe("createSession", () => {
     ).rejects.toThrow("Failed to create session worktree");
 
     expect(mockGitOps.pushBranch).not.toHaveBeenCalled();
+    expect([...store["sessions"].values()]).toHaveLength(0);
   }, 30_000);
 
-  it("throws and cleans up worktree when push fails", async () => {
+  it("throws, cleans up worktree, and removes store entry when push fails", async () => {
     const mockGitOps: GitOps = {
       getGitRoot: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo" }),
       createSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo/.hoop/sessions/MOCK" }),
       removeSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
       pushBranch: vi.fn().mockResolvedValue({ ok: false, error: "fatal: could not read from remote repository" }),
+      deleteRemoteBranch: vi.fn(),
     };
 
     const store = new SessionStore();
@@ -192,6 +199,33 @@ describe("createSession", () => {
       "/tmp/fakerepo/.hoop/sessions/MOCK",
       expect.stringMatching(/^hoop\/session-/),
     );
+    expect([...store["sessions"].values()]).toHaveLength(0);
+  }, 30_000);
+
+  it("surfaces cleanup error in thrown message when both push and cleanup fail", async () => {
+    const mockGitOps: GitOps = {
+      getGitRoot: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo" }),
+      createSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo/.hoop/sessions/MOCK" }),
+      removeSessionWorktree: vi.fn().mockResolvedValue({ ok: false, error: "worktree locked" }),
+      pushBranch: vi.fn().mockResolvedValue({ ok: false, error: "remote unreachable" }),
+      deleteRemoteBranch: vi.fn(),
+    };
+
+    const store = new SessionStore();
+
+    await expect(
+      createSession(
+        {
+          executionTarget: "host-only",
+          networkConfig: { transportMode: "test" },
+          gitOps: mockGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
+        },
+        store,
+      ),
+    ).rejects.toThrow(/remote unreachable.*cleanup also failed.*worktree locked/);
+
+    expect([...store["sessions"].values()]).toHaveLength(0);
   }, 30_000);
 
   it("publishUpdate centralizes accumulation, replay buffering, and notifications", async () => {

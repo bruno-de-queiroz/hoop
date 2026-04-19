@@ -30,6 +30,10 @@ export class SessionStore {
     return this.sessions.has(code);
   }
 
+  delete(code: string): boolean {
+    return this.sessions.delete(code);
+  }
+
   update(code: string, fields: Partial<Pick<Session, 'peerId' | 'listenAddresses' | 'branchName' | 'worktreePath'>>): void {
     const session = this.sessions.get(code);
     if (!session) {

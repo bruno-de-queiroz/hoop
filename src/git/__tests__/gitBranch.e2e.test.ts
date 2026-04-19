@@ -151,12 +151,18 @@ describe("git operations (real)", () => {
       const worktreePath = join(repoDir, ".hoop", "sessions", "fetch-test");
       worktrees.push(worktreePath);
       await createSessionWorktree("hoop/session-fetch", worktreePath, repoDir);
+
+      // Commit a unique file on the session branch so we can prove checkout
+      await writeFile(join(worktreePath, "session-marker.txt"), "session-only\n");
+      gitSync(["add", "session-marker.txt"], worktreePath);
+      gitSync(["commit", "-m", "session branch commit"], worktreePath);
+
       await pushBranch("hoop/session-fetch", "origin", repoDir);
 
       // Peer: clone from bare remote, fetch and checkout the session branch
-      const peerDir = await mkdtemp(join(tmpdir(), "hoop-peer-"));
+      const peerDir = join(tmpdir(), `hoop-peer-${Date.now()}`);
       tempDirs.push(peerDir);
-      gitSync(["clone", bareRemote, peerDir], peerDir);
+      gitSync(["clone", bareRemote, peerDir], repoDir);
 
       const fetchResult = await fetchBranch("hoop/session-fetch", "origin", peerDir);
       expect(fetchResult.ok).toBe(true);
@@ -164,9 +170,13 @@ describe("git operations (real)", () => {
       const checkoutResult = await checkoutBranch("hoop/session-fetch", peerDir);
       expect(checkoutResult.ok).toBe(true);
 
-      // Verify the peer has the file from the session branch
-      const content = await readFile(join(peerDir, "init.txt"), "utf-8");
-      expect(content).toBe("init\n");
+      // Verify the peer has the session-branch-only file
+      const content = await readFile(join(peerDir, "session-marker.txt"), "utf-8");
+      expect(content).toBe("session-only\n");
+
+      // Verify we're on the correct branch
+      const currentBranch = gitSync(["rev-parse", "--abbrev-ref", "HEAD"], peerDir);
+      expect(currentBranch).toBe("hoop/session-fetch");
     });
 
     it("returns failure when remote does not exist", async () => {

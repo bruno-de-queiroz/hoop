@@ -53,6 +53,7 @@ import {
   createSessionWorktree as defaultCreateSessionWorktree,
   removeSessionWorktree as defaultRemoveSessionWorktree,
   pushBranch as defaultPushBranch,
+  deleteRemoteBranch as defaultDeleteRemoteBranch,
   type GitResult,
 } from "../git/gitBranch.js";
 
@@ -61,6 +62,7 @@ export interface GitOps {
   createSessionWorktree: (branchName: string, worktreePath: string) => Promise<GitResult<string>>;
   removeSessionWorktree: (worktreePath: string, branchName: string) => Promise<GitResult>;
   pushBranch: (branchName: string, remote?: string) => Promise<GitResult>;
+  deleteRemoteBranch: (branchName: string, remote?: string) => Promise<GitResult>;
 }
 
 export const realGitOps: GitOps = {
@@ -68,6 +70,7 @@ export const realGitOps: GitOps = {
   createSessionWorktree: defaultCreateSessionWorktree,
   removeSessionWorktree: defaultRemoveSessionWorktree,
   pushBranch: defaultPushBranch,
+  deleteRemoteBranch: defaultDeleteRemoteBranch,
 };
 
 export const stubGitOps: GitOps = {
@@ -75,6 +78,7 @@ export const stubGitOps: GitOps = {
   createSessionWorktree: async (_branch, path) => ({ ok: true, value: path }),
   removeSessionWorktree: async () => ({ ok: true, value: undefined as never }),
   pushBranch: async () => ({ ok: true, value: undefined as never }),
+  deleteRemoteBranch: async () => ({ ok: true, value: undefined as never }),
 };
 
 export const defaultAdmissionHandler = async (_email: string, _peerId: string): Promise<boolean> => true;
@@ -251,14 +255,16 @@ export async function createSession(
   const gitOps = params.gitOps;
   const gitRootResult = await gitOps.getGitRoot();
   if (!gitRootResult.ok) {
+    store.delete(sessionCode);
     await node.stop();
     throw new Error(`Git repository required: ${gitRootResult.error}`);
   }
 
-  const branchName = `hoop/session-${sessionCode}`;
+  const branchName = `hoop/session-${sessionCode}-${hostId}`;
   const targetPath = join(gitRootResult.value, ".hoop", "sessions", sessionCode);
   const worktreeResult = await gitOps.createSessionWorktree(branchName, targetPath);
   if (!worktreeResult.ok) {
+    store.delete(sessionCode);
     await node.stop();
     throw new Error(`Failed to create session worktree: ${worktreeResult.error}`);
   }
@@ -267,9 +273,11 @@ export async function createSession(
 
   const pushResult = await gitOps.pushBranch(branchName);
   if (!pushResult.ok) {
-    await gitOps.removeSessionWorktree(worktreePath, branchName);
+    const cleanupResult = await gitOps.removeSessionWorktree(worktreePath, branchName);
+    store.delete(sessionCode);
     await node.stop();
-    throw new Error(`Failed to push session branch: ${pushResult.error}`);
+    const cleanupDetail = cleanupResult.ok ? "" : ` (cleanup also failed: ${cleanupResult.error})`;
+    throw new Error(`Failed to push session branch: ${pushResult.error}${cleanupDetail}`);
   }
 
   store.update(sessionCode, { branchName, worktreePath });
