@@ -45,6 +45,7 @@ interface ServerState {
   hostSession: CreateSessionResult | null;
   peerSession: JoinSessionResult | null;
   stopHostUpdateMirror: (() => void) | null;
+  stopPeerDisconnectCleanup: (() => void) | null;
   pendingUpdates: StateUpdate[];
   pendingAdmissions: Map<string, PendingAdmission>;
   pendingAdmissionsWriter: PendingAdmissionsWriter | null;
@@ -96,6 +97,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     hostSession: null,
     peerSession: null,
     stopHostUpdateMirror: null,
+    stopPeerDisconnectCleanup: null,
     pendingUpdates: [],
     pendingAdmissions: new Map(),
     pendingAdmissionsWriter: null,
@@ -205,6 +207,9 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
             }),
           onPromptRequest: () => syncPromptRequests(),
           onLockChange: () => flushLockStatus(),
+          onPeerDisconnect: (peerId) => {
+            state.activeEditsTracker?.removePeer(peerId);
+          },
         });
 
         state.hostSession = result;
@@ -333,6 +338,14 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         result.onBroadcast((update) => {
           mirrorObservedUpdate(update, result.localPeerId);
         });
+
+        const peerDisconnectHandler = (evt: CustomEvent) => {
+          state.activeEditsTracker?.removePeer(evt.detail.toString());
+        };
+        result.node.addEventListener("peer:disconnect", peerDisconnectHandler);
+        state.stopPeerDisconnectCleanup = () => {
+          result.node.removeEventListener("peer:disconnect", peerDisconnectHandler);
+        };
 
         // Watch for outbound updates from PostToolUse hook
         state.outboundUpdatesReader = new OutboundUpdatesReader((outbound) => {
@@ -897,6 +910,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.peerPromptRequests.clear();
     state.stopHostUpdateMirror?.();
     state.stopHostUpdateMirror = null;
+    state.stopPeerDisconnectCleanup?.();
+    state.stopPeerDisconnectCleanup = null;
     clearSessionStatus(deps?.sessionStatusPath);
     state.role = null;
     state.hostSession = null;
@@ -922,6 +937,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       }
 
       if (state.role === "peer" && state.peerSession) {
+        state.stopPeerDisconnectCleanup?.();
+        state.stopPeerDisconnectCleanup = null;
         state.peerSession.stopAckInterval();
         await state.peerSession.node.stop();
       }
