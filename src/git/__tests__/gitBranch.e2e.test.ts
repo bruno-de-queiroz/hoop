@@ -56,10 +56,10 @@ describe("git operations (real)", () => {
         // Verify the worktree directory exists with the file
         const content = await readFile(join(result.value, "init.txt"), "utf-8");
         expect(content).toBe("init\n");
-      }
 
-      // Cleanup worktree
-      gitSync(["worktree", "remove", "--force", worktreePath], repoDir);
+        // Cleanup worktree
+        gitSync(["worktree", "remove", "--force", worktreePath], repoDir);
+      }
     });
   });
 
@@ -114,7 +114,7 @@ describe("git operations (real)", () => {
       await writeFile(join(repoDir, filePath), "completely\ndifferent\ncontent\n");
 
       // Dry-run should fail because the context doesn't match
-      const checkResult = await applyGitPatch(repoDir, diffResult.value, true);
+      const checkResult = await applyGitPatch(repoDir, diffResult.value, { check: true });
       expect(checkResult.ok).toBe(false);
     });
   });

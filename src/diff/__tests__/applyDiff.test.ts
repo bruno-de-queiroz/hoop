@@ -88,13 +88,14 @@ describe("applyFilePatch", () => {
     }
   });
 
-  it("returns result-hash-mismatch when patched content hash differs", async () => {
+  it("returns result-hash-mismatch and rolls back when patched content hash differs", async () => {
     const content = "hello";
     const baseHash = gitBranch.hashContent(content);
 
     mockApplyGitPatch
       .mockResolvedValueOnce({ ok: true, value: undefined as never }) // dry-run
-      .mockResolvedValueOnce({ ok: true, value: undefined as never }); // actual
+      .mockResolvedValueOnce({ ok: true, value: undefined as never }) // actual
+      .mockResolvedValueOnce({ ok: true, value: undefined as never }); // reverse
 
     mockReadFile.mockResolvedValueOnce("unexpected result content");
 
@@ -111,6 +112,62 @@ describe("applyFilePatch", () => {
     if (!result.ok) {
       expect(result.error).toBe("result-hash-mismatch");
     }
+    expect(mockApplyGitPatch).toHaveBeenCalledTimes(3);
+    expect(mockApplyGitPatch).toHaveBeenNthCalledWith(
+      3, "/tmp/worktree", "valid-patch", { reverse: true },
+    );
+  });
+
+  it("rolls back and returns patch-failed when readFile fails after apply", async () => {
+    const content = "hello";
+    const baseHash = gitBranch.hashContent(content);
+
+    mockApplyGitPatch
+      .mockResolvedValueOnce({ ok: true, value: undefined as never }) // dry-run
+      .mockResolvedValueOnce({ ok: true, value: undefined as never }) // actual
+      .mockResolvedValueOnce({ ok: true, value: undefined as never }); // reverse
+
+    mockReadFile.mockRejectedValueOnce(new Error("ENOENT"));
+
+    const result = await applyFilePatch(
+      "/tmp/worktree",
+      "file.txt",
+      "valid-patch",
+      content,
+      baseHash,
+      "some-result-hash",
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("patch-failed");
+      expect(result.message).toContain("Cannot read patched file");
+    }
+    expect(mockApplyGitPatch).toHaveBeenCalledTimes(3);
+    expect(mockApplyGitPatch).toHaveBeenNthCalledWith(
+      3, "/tmp/worktree", "valid-patch", { reverse: true },
+    );
+  });
+
+  it("rejects path traversal attempts", async () => {
+    const content = "hello";
+    const baseHash = gitBranch.hashContent(content);
+
+    const result = await applyFilePatch(
+      "/tmp/worktree",
+      "../../etc/passwd",
+      "patch",
+      content,
+      baseHash,
+      "some-hash",
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("patch-failed");
+      expect(result.message).toContain("Invalid file path");
+    }
+    expect(mockApplyGitPatch).not.toHaveBeenCalled();
   });
 
   it("returns success when all checks pass including result hash", async () => {

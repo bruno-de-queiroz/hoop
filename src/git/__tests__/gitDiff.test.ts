@@ -86,10 +86,10 @@ describe("applyGitPatch", () => {
     );
   });
 
-  it("runs dry-run check when check=true", async () => {
+  it("runs dry-run check when check option is set", async () => {
     simulateExecFile("");
 
-    const result = await applyGitPatch("/tmp/worktree", "patch-content", true);
+    const result = await applyGitPatch("/tmp/worktree", "patch-content", { check: true });
 
     expect(result.ok).toBe(true);
     expect(mockExecFile).toHaveBeenCalledWith(
