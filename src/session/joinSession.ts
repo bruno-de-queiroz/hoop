@@ -132,241 +132,241 @@ export async function joinSession(
     );
   }
 
-  let authenticated = false;
-  if (params.password) {
-    try {
-      const stream = await node.openStream(params.hostAddress, AUTH_PROTOCOL);
-      await writeToStream(stream, { password: params.password } as AuthRequest);
-      const response = await readFromStream<AuthResponse>(stream);
-      if (!response.accepted) {
-        throw new Error(`Authentication failed: ${response.reason ?? "Invalid password"}`);
+  try {
+    let authenticated = false;
+    if (params.password) {
+      try {
+        const stream = await node.openStream(params.hostAddress, AUTH_PROTOCOL);
+        await writeToStream(stream, { password: params.password } as AuthRequest);
+        const response = await readFromStream<AuthResponse>(stream);
+        if (!response.accepted) {
+          throw new Error(`Authentication failed: ${response.reason ?? "Invalid password"}`);
+        }
+        authenticated = true;
+      } catch (err) {
+        const isUnsupportedProtocol = err instanceof Error && err.name === "UnsupportedProtocolError";
+        if (!isUnsupportedProtocol) {
+          throw err;
+        }
+        // Host doesn't register the auth protocol — password not required, proceed
       }
-      authenticated = true;
-    } catch (err) {
-      const isUnsupportedProtocol = err instanceof Error && err.name === "UnsupportedProtocolError";
-      if (!isUnsupportedProtocol) {
-        await node.stop();
-        throw err;
+    }
+
+    let admitted = false;
+    if (params.email) {
+      try {
+        const stream = await node.openStream(params.hostAddress, ADMISSION_PROTOCOL);
+        await writeToStream(stream, { email: params.email } as AdmissionRequest);
+        const response = await readFromStream<AdmissionResponse>(stream);
+        if (!response.admitted) {
+          const retryMsg = response.retryAfterMs
+            ? ` Retry after ${Math.ceil(response.retryAfterMs / 1000)}s.`
+            : "";
+          throw new Error(`Admission denied.${retryMsg}`);
+        }
+        admitted = true;
+      } catch (err) {
+        const isUnsupportedProtocol = err instanceof Error && err.name === "UnsupportedProtocolError";
+        if (!isUnsupportedProtocol) {
+          throw err;
+        }
+        // Host doesn't register the admission protocol — admission not required, proceed
       }
-      // Host doesn't register the auth protocol — password not required, proceed
     }
-  }
 
-  let admitted = false;
-  if (params.email) {
-    try {
-      const stream = await node.openStream(params.hostAddress, ADMISSION_PROTOCOL);
-      await writeToStream(stream, { email: params.email } as AdmissionRequest);
-      const response = await readFromStream<AdmissionResponse>(stream);
-      if (!response.admitted) {
-        const retryMsg = response.retryAfterMs
-          ? ` Retry after ${Math.ceil(response.retryAfterMs / 1000)}s.`
-          : "";
-        throw new Error(`Admission denied.${retryMsg}`);
+    const syncStream = await node.openStream(params.hostAddress, SYNC_PROTOCOL);
+    await writeToStream(syncStream, { type: "state-tree" } as SyncRequest);
+    const syncResponse = await readFromStream<SyncResponse>(syncStream);
+
+    let branchName: string | undefined;
+    let worktreePath: string | undefined;
+
+    const gitRootResult = await params.gitOps.getGitRoot();
+    if (gitRootResult.ok) {
+      worktreePath = gitRootResult.value;
+    }
+
+    if (syncResponse.branchName) {
+      if (!gitRootResult.ok) {
+        throw new Error(`Git repository required: ${gitRootResult.error}`);
       }
-      admitted = true;
-    } catch (err) {
-      const isUnsupportedProtocol = err instanceof Error && err.name === "UnsupportedProtocolError";
-      if (!isUnsupportedProtocol) {
-        await node.stop();
-        throw err;
+
+      const fetchResult = await params.gitOps.fetchBranch(syncResponse.branchName);
+      if (!fetchResult.ok) {
+        throw new Error(`Failed to fetch session branch: ${fetchResult.error}`);
       }
-      // Host doesn't register the admission protocol — admission not required, proceed
-    }
-  }
 
-  const syncStream = await node.openStream(params.hostAddress, SYNC_PROTOCOL);
-  await writeToStream(syncStream, { type: "state-tree" } as SyncRequest);
-  const syncResponse = await readFromStream<SyncResponse>(syncStream);
+      const checkoutResult = await params.gitOps.checkoutBranch(syncResponse.branchName);
+      if (!checkoutResult.ok) {
+        throw new Error(`Failed to checkout session branch: ${checkoutResult.error}`);
+      }
 
-  let branchName: string | undefined;
-  let worktreePath: string | undefined;
-
-  const gitRootResult = await params.gitOps.getGitRoot();
-  if (gitRootResult.ok) {
-    worktreePath = gitRootResult.value;
-  }
-
-  if (syncResponse.branchName) {
-    if (!gitRootResult.ok) {
-      await node.stop();
-      throw new Error(`Git repository required: ${gitRootResult.error}`);
+      branchName = syncResponse.branchName;
     }
 
-    const fetchResult = await params.gitOps.fetchBranch(syncResponse.branchName);
-    if (!fetchResult.ok) {
-      await node.stop();
-      throw new Error(`Failed to fetch session branch: ${fetchResult.error}`);
-    }
+    let lockState = normalizeHoopLock(syncResponse.accumulatedState?.lock ?? createFreeHoopLock());
 
-    const checkoutResult = await params.gitOps.checkoutBranch(syncResponse.branchName);
-    if (!checkoutResult.ok) {
-      await node.stop();
-      throw new Error(`Failed to checkout session branch: ${checkoutResult.error}`);
-    }
-
-    branchName = syncResponse.branchName;
-  }
-
-  let lockState = normalizeHoopLock(syncResponse.accumulatedState?.lock ?? createFreeHoopLock());
-
-  const setLockState = (nextLock: HoopLock): HoopLock => {
-    lockState = normalizeHoopLock(nextLock);
-    params.onLockChange?.(lockState);
-    return { ...lockState };
-  };
-
-  const applyLockUpdate = (update: StateUpdate): void => {
-    if (update.type !== "lock-acquire" && update.type !== "lock-release") {
-      return;
-    }
-    lockState = applyHoopLockUpdate(lockState, update);
-    params.onLockChange?.(lockState);
-  };
-
-  const broadcastHandlers: Array<(update: StateUpdate) => void> = [];
-  let lastSeqNo = 0;
-
-  const broadcastStream = await node.openStream(params.hostAddress, BROADCAST_PROTOCOL);
-  readEvents<BroadcastEnvelope>(broadcastStream, (envelope) => {
-    if (!isBroadcastEnvelope(envelope)) return;
-    if (envelope.seqNo > lastSeqNo + 1) {
-      console.warn(
-        `[joinSession] Sequence gap detected: expected ${lastSeqNo + 1}, got ${envelope.seqNo}`,
-      );
-    }
-    lastSeqNo = envelope.seqNo;
-    applyLockUpdate(envelope.update);
-    for (const handler of broadcastHandlers) {
-      handler(envelope.update);
-    }
-  }).catch(() => {});
-
-  const sendUpdate = async (update: NonLockStateUpdate): Promise<StateUpdateResponse> => {
-    const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
-    await writeHalf(stream, update);
-    return readFromStream<StateUpdateResponse>(stream);
-  };
-
-  const sendLockAcquire = async (update: LockAcquireUpdate): Promise<LockAcquireResponse> => {
-    const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
-    await writeHalf(stream, update);
-    return readFromStream<LockAcquireResponse>(stream);
-  };
-
-  const sendLockRelease = async (update: LockReleaseUpdate): Promise<LockReleaseResponse> => {
-    const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
-    await writeHalf(stream, update);
-    return readFromStream<LockReleaseResponse>(stream);
-  };
-
-  const sendFileChange = async (
-    filePath: string,
-    oldContent: string,
-    newContent: string,
-  ): Promise<StateUpdateResponse> => {
-    const diff = await computeFileDiff(filePath, oldContent, newContent);
-    const update: FileChangeUpdate = {
-      type: "file-change",
-      peerId: node.getPeerId(),
-      filePath,
-      patch: diff.patch,
-      baseHash: diff.baseHash,
-      resultHash: diff.resultHash,
-      timestamp: Date.now(),
+    const setLockState = (nextLock: HoopLock): HoopLock => {
+      lockState = normalizeHoopLock(nextLock);
+      params.onLockChange?.(lockState);
+      return { ...lockState };
     };
-    return sendUpdate(update);
-  };
 
-  const onBroadcast = (handler: (update: StateUpdate) => void): void => {
-    broadcastHandlers.push(handler);
-  };
+    const applyLockUpdate = (update: StateUpdate): void => {
+      if (update.type !== "lock-acquire" && update.type !== "lock-release") {
+        return;
+      }
+      lockState = applyHoopLockUpdate(lockState, update);
+      params.onLockChange?.(lockState);
+    };
 
-  const getLastSeqNo = (): number => lastSeqNo;
+    const broadcastHandlers: Array<(update: StateUpdate) => void> = [];
+    let lastSeqNo = 0;
 
-  const requestReplay = async (fromSeq: number): Promise<SyncResponse> => {
-    const stream = await node.openStream(params.hostAddress, SYNC_PROTOCOL);
-    await writeToStream(stream, { type: "state-tree", replayFromSeq: fromSeq } as SyncRequest);
-    const response = await readFromStream<SyncResponse>(stream);
-    setLockState(response.accumulatedState?.lock ?? createFreeHoopLock());
-    for (const envelope of response.replayedUpdates ?? []) {
+    const broadcastStream = await node.openStream(params.hostAddress, BROADCAST_PROTOCOL);
+    readEvents<BroadcastEnvelope>(broadcastStream, (envelope) => {
+      if (!isBroadcastEnvelope(envelope)) return;
+      if (envelope.seqNo > lastSeqNo + 1) {
+        console.warn(
+          `[joinSession] Sequence gap detected: expected ${lastSeqNo + 1}, got ${envelope.seqNo}`,
+        );
+      }
+      lastSeqNo = envelope.seqNo;
       applyLockUpdate(envelope.update);
-    }
-    return response;
-  };
+      for (const handler of broadcastHandlers) {
+        handler(envelope.update);
+      }
+    }).catch(() => {});
 
-  const acquireLock = async (): Promise<{ acquired: boolean; holder: string | null }> => {
-    const update: LockAcquireUpdate = {
-      type: "lock-acquire",
-      peerId: node.getPeerId(),
-      timestamp: Date.now(),
+    const sendUpdate = async (update: NonLockStateUpdate): Promise<StateUpdateResponse> => {
+      const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
+      await writeHalf(stream, update);
+      return readFromStream<StateUpdateResponse>(stream);
     };
-    const response = await sendLockAcquire(update);
-    const lock = setLockState(response.lock);
+
+    const sendLockAcquire = async (update: LockAcquireUpdate): Promise<LockAcquireResponse> => {
+      const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
+      await writeHalf(stream, update);
+      return readFromStream<LockAcquireResponse>(stream);
+    };
+
+    const sendLockRelease = async (update: LockReleaseUpdate): Promise<LockReleaseResponse> => {
+      const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
+      await writeHalf(stream, update);
+      return readFromStream<LockReleaseResponse>(stream);
+    };
+
+    const sendFileChange = async (
+      filePath: string,
+      oldContent: string,
+      newContent: string,
+    ): Promise<StateUpdateResponse> => {
+      const diff = await computeFileDiff(filePath, oldContent, newContent);
+      const update: FileChangeUpdate = {
+        type: "file-change",
+        peerId: node.getPeerId(),
+        filePath,
+        patch: diff.patch,
+        baseHash: diff.baseHash,
+        resultHash: diff.resultHash,
+        timestamp: Date.now(),
+      };
+      return sendUpdate(update);
+    };
+
+    const onBroadcast = (handler: (update: StateUpdate) => void): void => {
+      broadcastHandlers.push(handler);
+    };
+
+    const getLastSeqNo = (): number => lastSeqNo;
+
+    const requestReplay = async (fromSeq: number): Promise<SyncResponse> => {
+      const stream = await node.openStream(params.hostAddress, SYNC_PROTOCOL);
+      await writeToStream(stream, { type: "state-tree", replayFromSeq: fromSeq } as SyncRequest);
+      const response = await readFromStream<SyncResponse>(stream);
+      setLockState(response.accumulatedState?.lock ?? createFreeHoopLock());
+      for (const envelope of response.replayedUpdates ?? []) {
+        applyLockUpdate(envelope.update);
+      }
+      return response;
+    };
+
+    const acquireLock = async (): Promise<{ acquired: boolean; holder: string | null }> => {
+      const update: LockAcquireUpdate = {
+        type: "lock-acquire",
+        peerId: node.getPeerId(),
+        timestamp: Date.now(),
+      };
+      const response = await sendLockAcquire(update);
+      const lock = setLockState(response.lock);
+      return {
+        acquired: response.acquired,
+        holder: response.holder ?? lock.holderPeerId,
+      };
+    };
+
+    const releaseLock = async (): Promise<{ released: boolean; holder: string | null }> => {
+      const update: LockReleaseUpdate = {
+        type: "lock-release",
+        peerId: node.getPeerId(),
+        timestamp: Date.now(),
+      };
+      const response = await sendLockRelease(update);
+      const lock = setLockState(response.lock);
+      return {
+        released: response.released,
+        holder: response.holder ?? lock.holderPeerId,
+      };
+    };
+
+    const getLockStatus = (): HoopLock => normalizeHoopLock(lockState);
+
+    const sendAck = async (): Promise<void> => {
+      const ack: AckMessage = {
+        type: "ack",
+        peerId: node.getPeerId(),
+        lastSeqNo,
+      };
+      const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
+      await writeToStream(stream, ack);
+    };
+
+    let ackInterval: ReturnType<typeof setInterval> | undefined;
+    ackInterval = setInterval(() => {
+      sendAck().catch(() => {});
+    }, ACK_INTERVAL_MS);
+
+    const stopAckInterval = (): void => {
+      if (ackInterval !== undefined) {
+        clearInterval(ackInterval);
+        ackInterval = undefined;
+      }
+    };
+
     return {
-      acquired: response.acquired,
-      holder: response.holder ?? lock.holderPeerId,
+      sessionCode: params.sessionCode,
+      hostAddress: params.hostAddress,
+      localPeerId: node.getPeerId(),
+      hostPeerId: connectedPeers[0].peerId,
+      authenticated,
+      admitted,
+      node,
+      stateTree: syncResponse.stateTree,
+      branchName,
+      accumulatedState: syncResponse.accumulatedState,
+      sendUpdate,
+      sendFileChange,
+      onBroadcast,
+      getLastSeqNo,
+      requestReplay,
+      acquireLock,
+      releaseLock,
+      getLockStatus,
+      sendAck,
+      stopAckInterval,
     };
-  };
-
-  const releaseLock = async (): Promise<{ released: boolean; holder: string | null }> => {
-    const update: LockReleaseUpdate = {
-      type: "lock-release",
-      peerId: node.getPeerId(),
-      timestamp: Date.now(),
-    };
-    const response = await sendLockRelease(update);
-    const lock = setLockState(response.lock);
-    return {
-      released: response.released,
-      holder: response.holder ?? lock.holderPeerId,
-    };
-  };
-
-  const getLockStatus = (): HoopLock => normalizeHoopLock(lockState);
-
-  const sendAck = async (): Promise<void> => {
-    const ack: AckMessage = {
-      type: "ack",
-      peerId: node.getPeerId(),
-      lastSeqNo,
-    };
-    const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
-    await writeToStream(stream, ack);
-  };
-
-  let ackInterval: ReturnType<typeof setInterval> | undefined;
-  ackInterval = setInterval(() => {
-    sendAck().catch(() => {});
-  }, ACK_INTERVAL_MS);
-
-  const stopAckInterval = (): void => {
-    if (ackInterval !== undefined) {
-      clearInterval(ackInterval);
-      ackInterval = undefined;
-    }
-  };
-
-  return {
-    sessionCode: params.sessionCode,
-    hostAddress: params.hostAddress,
-    localPeerId: node.getPeerId(),
-    hostPeerId: connectedPeers[0].peerId,
-    authenticated,
-    admitted,
-    node,
-    stateTree: syncResponse.stateTree,
-    branchName,
-    accumulatedState: syncResponse.accumulatedState,
-    sendUpdate,
-    sendFileChange,
-    onBroadcast,
-    getLastSeqNo,
-    requestReplay,
-    acquireLock,
-    releaseLock,
-    getLockStatus,
-    sendAck,
-    stopAckInterval,
-  };
+  } catch (err) {
+    await node.stop().catch(() => {});
+    throw err;
+  }
 }

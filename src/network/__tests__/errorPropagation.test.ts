@@ -78,4 +78,39 @@ describe('Error propagation in auth/admission', () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).name).not.toBe('UnsupportedProtocolError');
   }, 30_000);
+
+  it('malformed JSON auth response throws SyntaxError instead of being swallowed', async () => {
+    const store = new SessionStore();
+    hostResult = await createSession(
+      {
+        password: 'secret',
+        executionTarget: 'host-only',
+        networkConfig: { transportMode: 'test' },
+        gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+      store,
+    );
+
+    // Replace auth handler with one that sends invalid JSON
+    await hostResult.node.unhandle(AUTH_PROTOCOL);
+    await hostResult.node.handle(AUTH_PROTOCOL, async (stream) => {
+      await readFromStream(stream);
+      const garbage = new TextEncoder().encode('{"accepted": tru}');
+      stream.send(garbage);
+      await stream.close();
+    });
+
+    const hostAddress = hostResult.listenAddresses[0];
+
+    const err = await joinSession({
+      sessionCode: hostResult.sessionCode,
+      hostAddress,
+      password: 'secret',
+      networkConfig: { transportMode: 'test' },
+      gitOps: stubJoinGitOps,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SyntaxError);
+  }, 30_000);
 });
