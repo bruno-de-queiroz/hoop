@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { applyGitPatch, hashContent } from "../git/gitBranch.js";
 
 export interface PatchSuccess {
@@ -14,6 +16,7 @@ export type PatchResult = PatchSuccess | PatchFailure;
 
 export async function applyFilePatch(
   worktreePath: string,
+  filePath: string,
   patch: string,
   currentContent: string,
   expectedBaseHash: string,
@@ -43,6 +46,16 @@ export async function applyFilePatch(
       ok: false,
       error: "patch-failed",
       message: `Apply failed: ${applyResult.error}`,
+    };
+  }
+
+  const resultContent = await readFile(join(worktreePath, filePath), "utf-8");
+  const actualResultHash = hashContent(resultContent);
+  if (actualResultHash !== expectedResultHash) {
+    return {
+      ok: false,
+      error: "result-hash-mismatch",
+      message: `Result hash mismatch: expected ${expectedResultHash}, got ${actualResultHash}`,
     };
   }
 
