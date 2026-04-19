@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   getGitRoot,
   createSessionWorktree,
+  removeSessionWorktree,
   pushBranch,
   fetchBranch,
   checkoutBranch,
@@ -65,6 +66,39 @@ describe("git operations (real)", () => {
         // Cleanup worktree
         gitSync(["worktree", "remove", "--force", worktreePath], repoDir);
       }
+    });
+  });
+
+  describe("removeSessionWorktree", () => {
+    it("removes worktree and deletes branch", async () => {
+      const filePath = join(repoDir, "init.txt");
+      await writeFile(filePath, "init\n");
+      gitSync(["add", "."], repoDir);
+      gitSync(["commit", "-m", "initial"], repoDir);
+
+      const worktreePath = join(repoDir, ".hoop", "sessions", "rm-test");
+      await createSessionWorktree("hoop/session-rm", worktreePath, repoDir);
+
+      // Branch and worktree exist
+      const branchesBefore = gitSync(["branch", "--list"], repoDir);
+      expect(branchesBefore).toContain("hoop/session-rm");
+
+      const result = await removeSessionWorktree(worktreePath, "hoop/session-rm", repoDir);
+      expect(result.ok).toBe(true);
+
+      // Branch and worktree are gone
+      const branchesAfter = gitSync(["branch", "--list"], repoDir);
+      expect(branchesAfter).not.toContain("hoop/session-rm");
+    });
+
+    it("returns failure for nonexistent worktree path", async () => {
+      const filePath = join(repoDir, "init.txt");
+      await writeFile(filePath, "init\n");
+      gitSync(["add", "."], repoDir);
+      gitSync(["commit", "-m", "initial"], repoDir);
+
+      const result = await removeSessionWorktree("/tmp/nonexistent-wt", "hoop/session-nope", repoDir);
+      expect(result.ok).toBe(false);
     });
   });
 

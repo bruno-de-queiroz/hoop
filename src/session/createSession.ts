@@ -267,7 +267,9 @@ export async function createSession(
 
   const pushResult = await gitOps.pushBranch(branchName);
   if (!pushResult.ok) {
-    console.warn(`[hoop] Failed to push session branch to remote: ${pushResult.error}. Peers connecting over the network will not be able to fetch this branch.`);
+    await gitOps.removeSessionWorktree(worktreePath, branchName);
+    await node.stop();
+    throw new Error(`Failed to push session branch: ${pushResult.error}`);
   }
 
   store.update(sessionCode, { branchName, worktreePath });

@@ -164,35 +164,34 @@ describe("createSession", () => {
     expect(mockGitOps.pushBranch).not.toHaveBeenCalled();
   }, 30_000);
 
-  it("warns but continues when push fails after worktree creation", async () => {
-    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("throws and cleans up worktree when push fails", async () => {
     const mockGitOps: GitOps = {
       getGitRoot: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo" }),
       createSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo/.hoop/sessions/MOCK" }),
-      removeSessionWorktree: vi.fn(),
+      removeSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
       pushBranch: vi.fn().mockResolvedValue({ ok: false, error: "fatal: could not read from remote repository" }),
     };
 
     const store = new SessionStore();
 
-    result = await createSession(
-      {
-        executionTarget: "host-only",
-        networkConfig: { transportMode: "test" },
-        gitOps: mockGitOps,
-        onAdmissionRequest: defaultAdmissionHandler,
-      },
-      store,
-    );
+    await expect(
+      createSession(
+        {
+          executionTarget: "host-only",
+          networkConfig: { transportMode: "test" },
+          gitOps: mockGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
+        },
+        store,
+      ),
+    ).rejects.toThrow("Failed to push session branch");
 
     expect(mockGitOps.createSessionWorktree).toHaveBeenCalled();
     expect(mockGitOps.pushBranch).toHaveBeenCalled();
-    expect(consoleWarn).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to push session branch to remote"),
+    expect(mockGitOps.removeSessionWorktree).toHaveBeenCalledWith(
+      "/tmp/fakerepo/.hoop/sessions/MOCK",
+      expect.stringMatching(/^hoop\/session-/),
     );
-    // Session still created successfully
-    expect(result.branchName).toBeTruthy();
-    expect(result.worktreePath).toBeTruthy();
   }, 30_000);
 
   it("publishUpdate centralizes accumulation, replay buffering, and notifications", async () => {
