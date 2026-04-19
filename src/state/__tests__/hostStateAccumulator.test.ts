@@ -216,6 +216,18 @@ describe("HostStateAccumulator", () => {
         status: "free",
       });
     });
+
+    it("treats a stale lock as free before applying a new acquire", () => {
+      const staleTimestamp = Date.now() - HOOP_LOCK_TTL_MS - 1;
+      const freshTimestamp = Date.now();
+      acc.accumulate(makeLockAcquire("peer-1", staleTimestamp));
+      acc.accumulate(makeLockAcquire("peer-2", freshTimestamp));
+      expect(acc.getLockSnapshot(freshTimestamp)).toEqual({
+        holderPeerId: "peer-2",
+        acquiredAt: freshTimestamp,
+        status: "busy",
+      });
+    });
   });
 
   describe("getSnapshot()", () => {
@@ -287,34 +299,58 @@ describe("HostStateAccumulator", () => {
     });
   });
 
-  describe("releaseLockForPeer()", () => {
-    it("releases the lock when the holder disconnects", () => {
-      acc.accumulate(makeLockAcquire("peer-1", 1_000));
-      const release = acc.releaseLockForPeer("peer-1", 2_000);
-      expect(release).toEqual({ type: "lock-release", peerId: "peer-1", timestamp: 2_000 });
-      expect(acc.getLockSnapshot()).toEqual({
-        holderPeerId: null,
-        acquiredAt: null,
-        status: "free",
+  describe("deriveExpiredLockRelease()", () => {
+    it("returns a release update when the current lock is stale", () => {
+      const staleTimestamp = Date.now() - HOOP_LOCK_TTL_MS - 1;
+      const releaseTimestamp = Date.now();
+      acc.accumulate(makeLockAcquire("peer-1", staleTimestamp));
+
+      expect(acc.deriveExpiredLockRelease(releaseTimestamp)).toEqual({
+        type: "lock-release",
+        peerId: "peer-1",
+        timestamp: releaseTimestamp,
       });
     });
 
-    it("does nothing for a non-holder", () => {
+    it("returns undefined when the lock is still fresh", () => {
       acc.accumulate(makeLockAcquire("peer-1", 1_000));
-      expect(acc.releaseLockForPeer("peer-2", 2_000)).toBeUndefined();
-      expect(acc.getLockSnapshot(2_000)).toEqual({
-        holderPeerId: "peer-1",
-        acquiredAt: 1_000,
-        status: "busy",
-      });
+      expect(acc.deriveExpiredLockRelease(1_001)).toBeUndefined();
     });
   });
 
-  describe("removePeer()", () => {
+  describe("deriveLockReleaseForPeer()", () => {
+    it("returns a release update when the holder disconnects", () => {
+      acc.accumulate(makeLockAcquire("peer-1", 1_000));
+      expect(acc.deriveLockReleaseForPeer("peer-1", 2_000)).toEqual({
+        type: "lock-release",
+        peerId: "peer-1",
+        timestamp: 2_000,
+      });
+    });
+
+    it("returns the expired release when the holder disconnects after the TTL", () => {
+      const staleTimestamp = Date.now() - HOOP_LOCK_TTL_MS - 1;
+      const disconnectTimestamp = Date.now();
+      acc.accumulate(makeLockAcquire("peer-1", staleTimestamp));
+
+      expect(acc.deriveLockReleaseForPeer("peer-1", disconnectTimestamp)).toEqual({
+        type: "lock-release",
+        peerId: "peer-1",
+        timestamp: disconnectTimestamp,
+      });
+    });
+
+    it("returns undefined for a non-holder", () => {
+      acc.accumulate(makeLockAcquire("peer-1", 1_000));
+      expect(acc.deriveLockReleaseForPeer("peer-2", 2_000)).toBeUndefined();
+    });
+  });
+
+  describe("removePeerPresence()", () => {
     it("removes cursor data for the specified peer", () => {
       acc.accumulate(makeCursor("peer-1", "src/a.ts"));
       acc.accumulate(makeCursor("peer-2", "src/a.ts"));
-      acc.removePeer("peer-1");
+      acc.removePeerPresence("peer-1");
       const snapshot = acc.getSnapshot();
       expect(snapshot.cursors["peer-1"]).toBeUndefined();
       expect(snapshot.cursors["peer-2"]).toBeDefined();
@@ -323,7 +359,7 @@ describe("HostStateAccumulator", () => {
     it("removes buffer data for the specified peer", () => {
       acc.accumulate(makeBuffer("peer-1", "src/a.ts"));
       acc.accumulate(makeBuffer("peer-2", "src/a.ts"));
-      acc.removePeer("peer-1");
+      acc.removePeerPresence("peer-1");
       const snapshot = acc.getSnapshot();
       expect(snapshot.buffers["peer-1"]).toBeUndefined();
       expect(snapshot.buffers["peer-2"]).toBeDefined();
@@ -332,17 +368,26 @@ describe("HostStateAccumulator", () => {
     it("does not affect metadata or fileHashes when removing a peer", () => {
       acc.accumulate(makeMetadata("peer-1", "theme", "dark"));
       acc.accumulate(makeFileChange("peer-1", "src/a.ts", "hash-a"));
-      acc.removePeer("peer-1");
+      acc.removePeerPresence("peer-1");
       const snapshot = acc.getSnapshot();
       expect(snapshot.metadata["theme"]).toBeDefined();
       expect(snapshot.fileHashes["src/a.ts"]).toBeDefined();
     });
 
-    it("releases the lock when removing the lock holder", () => {
+    it("matches the production disconnect flow", () => {
+      acc.accumulate(makeCursor("peer-1", "src/a.ts"));
+      acc.accumulate(makeBuffer("peer-1", "src/a.ts"));
       acc.accumulate(makeLockAcquire("peer-1", 1_000));
-      const release = acc.removePeer("peer-1", 2_000);
+
+      acc.removePeerPresence("peer-1");
+      const release = acc.deriveLockReleaseForPeer("peer-1", 2_000);
       expect(release).toEqual({ type: "lock-release", peerId: "peer-1", timestamp: 2_000 });
-      expect(acc.getLockSnapshot()).toEqual({
+      acc.accumulate(release!);
+
+      const snapshot = acc.getSnapshot(2_000);
+      expect(snapshot.cursors["peer-1"]).toBeUndefined();
+      expect(snapshot.buffers["peer-1"]).toBeUndefined();
+      expect(snapshot.lock).toEqual({
         holderPeerId: null,
         acquiredAt: null,
         status: "free",
@@ -351,7 +396,7 @@ describe("HostStateAccumulator", () => {
 
     it("is a no-op for unknown peerId", () => {
       acc.accumulate(makeCursor("peer-1", "src/a.ts"));
-      acc.removePeer("peer-999");
+      acc.removePeerPresence("peer-999");
       const snapshot = acc.getSnapshot();
       expect(snapshot.cursors["peer-1"]).toBeDefined();
     });

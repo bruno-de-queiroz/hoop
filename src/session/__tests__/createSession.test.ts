@@ -7,6 +7,7 @@ describe("createSession", () => {
   let result: CreateSessionResult | undefined;
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await result?.node.stop();
     result = undefined;
   });
@@ -170,17 +171,130 @@ describe("createSession", () => {
       timestamp: 1_000,
     } as const;
     const observed: Array<{ seqNo: number; update: typeof update }> = [];
-    const unsubscribe = result.onPublishedUpdate((publication) => {
+    result.onPublishedUpdate((publication) => {
       observed.push({ seqNo: publication.seqNo, update: publication.update as typeof update });
     });
 
     const seqNo = result.publishUpdate(update);
-    unsubscribe();
 
     expect(seqNo).toBe(1);
     expect(result.accumulator.getMetadata("theme")).toEqual(update);
     expect(result.replayBuffer.replaySince(0)).toEqual([{ seqNo: 1, update }]);
     expect(observed).toEqual([{ seqNo: 1, update }]);
+  }, 30_000);
+
+  it("publishUpdate logs observer errors and continues notifying later observers", async () => {
+    result = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+    );
+
+    const boom = new Error("observer failed");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const secondObserver = vi.fn();
+
+    result.onPublishedUpdate(() => {
+      throw boom;
+    });
+    result.onPublishedUpdate(secondObserver);
+
+    const update = {
+      type: "metadata-update",
+      peerId: "peer-1",
+      key: "language",
+      value: "typescript",
+      timestamp: 2_000,
+    } as const;
+
+    const seqNo = result.publishUpdate(update);
+
+    expect(seqNo).toBe(1);
+    expect(result.accumulator.getMetadata("language")).toEqual(update);
+    expect(secondObserver).toHaveBeenCalledWith({ seqNo: 1, update, excludePeerId: undefined });
+    expect(consoleError).toHaveBeenCalledWith("[hoop] publishUpdate observer error:", boom);
+  }, 30_000);
+
+  it("unsubscribe stops published update delivery", async () => {
+    result = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+    );
+
+    const observer = vi.fn();
+    const unsubscribe = result.onPublishedUpdate(observer);
+
+    result.publishUpdate({
+      type: "metadata-update",
+      peerId: "peer-1",
+      key: "first",
+      value: true,
+      timestamp: 1_000,
+    });
+    unsubscribe();
+    result.publishUpdate({
+      type: "metadata-update",
+      peerId: "peer-1",
+      key: "second",
+      value: true,
+      timestamp: 2_000,
+    });
+
+    expect(observer).toHaveBeenCalledTimes(1);
+    expect(observer).toHaveBeenCalledWith({
+      seqNo: 1,
+      update: {
+        type: "metadata-update",
+        peerId: "peer-1",
+        key: "first",
+        value: true,
+        timestamp: 1_000,
+      },
+      excludePeerId: undefined,
+    });
+  }, 30_000);
+
+  it("publishUpdate notifies onLockChange for lock updates", async () => {
+    const onLockChange = vi.fn();
+    result = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+        onLockChange,
+      },
+    );
+
+    result.publishUpdate({
+      type: "lock-acquire",
+      peerId: "peer-1",
+      timestamp: 1_000,
+    });
+    result.publishUpdate({
+      type: "lock-release",
+      peerId: "peer-1",
+      timestamp: 2_000,
+    });
+
+    expect(onLockChange).toHaveBeenCalledTimes(2);
+    expect(onLockChange).toHaveBeenNthCalledWith(1, {
+      holderPeerId: "peer-1",
+      acquiredAt: 1_000,
+      status: "busy",
+    });
+    expect(onLockChange).toHaveBeenNthCalledWith(2, {
+      holderPeerId: null,
+      acquiredAt: null,
+      status: "free",
+    });
   }, 30_000);
 
   it("forceReleaseLock releases another peer's lock", async () => {
