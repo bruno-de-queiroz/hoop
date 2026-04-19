@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { resolve } from "node:path";
+import { writeFile, rm, mkdtemp } from "node:fs/promises";
+import { resolve, join } from "node:path";
+import { tmpdir } from "node:os";
 
 export interface GitSuccess<T = void> {
   ok: true;
@@ -127,6 +129,56 @@ export async function computeGitDiff(
     return { ok: true, value: diff };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
+  }
+}
+
+export async function computeContentDiff(
+  filePath: string,
+  oldContent: string,
+  newContent: string,
+): Promise<GitResult<string>> {
+  if (oldContent === newContent) {
+    return { ok: true, value: "" };
+  }
+
+  const tmpDir = await mkdtemp(join(tmpdir(), "hoop-diff-"));
+  const oldFile = join(tmpDir, "old");
+  const newFile = join(tmpDir, "new");
+
+  try {
+    await writeFile(oldFile, oldContent);
+    await writeFile(newFile, newContent);
+
+    const diff = await new Promise<string>((resolve, reject) => {
+      execFile(
+        "git",
+        ["diff", "--no-index", "--no-color", "--", oldFile, newFile],
+        (error, stdout, stderr) => {
+          // git diff --no-index exits with 1 when files differ — that's expected.
+          // The exit code is a number at runtime but typed as string|undefined.
+          const exitCode = (error as unknown as { code?: number } | null)?.code;
+          if (error && exitCode !== 1) {
+            reject(new Error(stderr.trim() || error.message));
+          } else {
+            resolve(stdout);
+          }
+        },
+      );
+    });
+
+    // Replace temp file paths with the actual filePath so git apply works correctly.
+    // git diff --no-index strips the leading "/" from absolute paths in headers.
+    const oldLabel = oldFile.replace(/^\//, "");
+    const newLabel = newFile.replace(/^\//, "");
+    const fixed = diff
+      .replaceAll(`a/${oldLabel}`, `a/${filePath}`)
+      .replaceAll(`b/${newLabel}`, `b/${filePath}`);
+
+    return { ok: true, value: fixed };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 

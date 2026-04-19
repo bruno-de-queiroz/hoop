@@ -266,7 +266,7 @@ export async function joinSession(
     if (!worktreePath) {
       throw new Error("Git repository required to send file changes");
     }
-    const diff = await computeFileDiff(worktreePath, filePath, oldContent, newContent);
+    const diff = await computeFileDiff(filePath, oldContent, newContent);
     const update: FileChangeUpdate = {
       type: "file-change",
       peerId: node.getPeerId(),

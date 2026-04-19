@@ -1,4 +1,4 @@
-import { computeGitDiff, hashContent } from "../git/gitBranch.js";
+import { computeContentDiff, hashContent } from "../git/gitBranch.js";
 
 export interface DiffResult {
   patch: string;
@@ -7,7 +7,6 @@ export interface DiffResult {
 }
 
 export async function computeFileDiff(
-  worktreePath: string,
   filePath: string,
   oldContent: string,
   newContent: string,
@@ -15,7 +14,7 @@ export async function computeFileDiff(
   const baseHash = hashContent(oldContent);
   const resultHash = hashContent(newContent);
 
-  const diffResult = await computeGitDiff(worktreePath, filePath);
+  const diffResult = await computeContentDiff(filePath, oldContent, newContent);
   if (!diffResult.ok) {
     throw new Error(`Failed to compute diff: ${diffResult.error}`);
   }
