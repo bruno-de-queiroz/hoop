@@ -56,40 +56,44 @@ describe("computeFileDiff → applyFilePatch (real git)", () => {
     const bufferNew = "line A\nline B modified\nline C\n";
     const diskContent = "line X\nline Y\nline Z\n";
 
-    // Set up the repo with bufferOld as the committed state
-    await writeFile(join(repoDir, filePath), bufferOld);
-    gitSync(["add", "."], repoDir);
-    gitSync(["commit", "-m", "initial"], repoDir);
-
-    // Simulate disk state diverging from the buffer content
+    // Commit disk content that is completely different from the buffer
     await writeFile(join(repoDir, filePath), diskContent);
+    gitSync(["add", "."], repoDir);
+    gitSync(["commit", "-m", "initial with divergent content"], repoDir);
 
-    // computeFileDiff should diff the *provided* content, not the disk state
+    // computeFileDiff diffs the provided content, not the disk state
     const diff = await computeFileDiff(filePath, bufferOld, bufferNew);
 
-    // The patch should reflect the buffer changes, not the disk changes
+    // Patch reflects the buffer changes, not the disk changes
     expect(diff.patch).toContain("-line B");
     expect(diff.patch).toContain("+line B modified");
     expect(diff.patch).not.toContain("line X");
     expect(diff.patch).not.toContain("line Y");
     expect(diff.patch).not.toContain("line Z");
 
-    // Restore the file to match bufferOld so the patch can be applied
-    gitSync(["checkout", "--", filePath], repoDir);
+    // Apply to a fresh repo that starts from bufferOld
+    const applyRepo = await createTempRepo("hoop-computediff-apply-");
+    try {
+      await writeFile(join(applyRepo, filePath), bufferOld);
+      gitSync(["add", "."], applyRepo);
+      gitSync(["commit", "-m", "start from bufferOld"], applyRepo);
 
-    const result = await applyFilePatch(
-      repoDir,
-      filePath,
-      diff.patch,
-      bufferOld,
-      diff.baseHash,
-      diff.resultHash,
-    );
+      const result = await applyFilePatch(
+        applyRepo,
+        filePath,
+        diff.patch,
+        bufferOld,
+        diff.baseHash,
+        diff.resultHash,
+      );
 
-    expect(result.ok).toBe(true);
+      expect(result.ok).toBe(true);
 
-    const actualContent = await readFile(join(repoDir, filePath), "utf-8");
-    expect(actualContent).toBe(bufferNew);
+      const actualContent = await readFile(join(applyRepo, filePath), "utf-8");
+      expect(actualContent).toBe(bufferNew);
+    } finally {
+      await removeTempRepo(applyRepo);
+    }
   });
 
   it("returns empty patch and matching hashes for identical content", async () => {

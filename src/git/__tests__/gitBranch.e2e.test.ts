@@ -9,7 +9,7 @@ import {
   pushBranch,
   fetchBranch,
   checkoutBranch,
-  computeGitDiff,
+  computeContentDiff,
   applyGitPatch,
   hashContent,
 } from "../gitBranch.js";
@@ -202,31 +202,25 @@ describe("git operations (real)", () => {
     });
   });
 
-  describe("computeGitDiff + applyGitPatch round-trip", () => {
-    it("generates a diff that can be applied to reproduce the change", async () => {
-      // Setup: create and commit a file
+  describe("computeContentDiff + applyGitPatch round-trip", () => {
+    it("generates a diff from content that can be applied to reproduce the change", async () => {
       const filePath = "src/index.ts";
       const originalContent = "const a = 1;\nconst b = 2;\nconst c = 3;\n";
+      const modifiedContent = "const a = 1;\nconst b = 42;\nconst c = 3;\n";
+
       await mkdir(join(repoDir, "src"), { recursive: true });
       await writeFile(join(repoDir, filePath), originalContent);
       gitSync(["add", "."], repoDir);
       gitSync(["commit", "-m", "add index.ts"], repoDir);
 
-      // Modify the file (unstaged change)
-      const modifiedContent = "const a = 1;\nconst b = 42;\nconst c = 3;\n";
-      await writeFile(join(repoDir, filePath), modifiedContent);
-
-      // Generate diff
-      const diffResult = await computeGitDiff(repoDir, filePath);
+      // Generate diff purely from content strings
+      const diffResult = await computeContentDiff(filePath, originalContent, modifiedContent);
       expect(diffResult.ok).toBe(true);
       if (!diffResult.ok) return;
 
       const patch = diffResult.value;
       expect(patch).toContain("-const b = 2;");
       expect(patch).toContain("+const b = 42;");
-
-      // Restore original via git checkout
-      gitSync(["checkout", "--", filePath], repoDir);
 
       // Apply the patch
       const applyResult = await applyGitPatch(repoDir, patch);
@@ -239,18 +233,17 @@ describe("git operations (real)", () => {
 
     it("dry-run rejects a patch that does not match current file state", async () => {
       const filePath = "file.txt";
-      await writeFile(join(repoDir, filePath), "line1\nline2\nline3\n");
+      const originalContent = "line1\nline2\nline3\n";
+      const modifiedContent = "line1\nLINE2\nline3\n";
+
+      await writeFile(join(repoDir, filePath), "completely\ndifferent\ncontent\n");
       gitSync(["add", "."], repoDir);
       gitSync(["commit", "-m", "add file"], repoDir);
 
-      // Modify and get diff
-      await writeFile(join(repoDir, filePath), "line1\nLINE2\nline3\n");
-      const diffResult = await computeGitDiff(repoDir, filePath);
+      // Generate a diff from content that doesn't match what's on disk
+      const diffResult = await computeContentDiff(filePath, originalContent, modifiedContent);
       expect(diffResult.ok).toBe(true);
       if (!diffResult.ok) return;
-
-      // Now change the file to something completely different
-      await writeFile(join(repoDir, filePath), "completely\ndifferent\ncontent\n");
 
       // Dry-run should fail because the context doesn't match
       const checkResult = await applyGitPatch(repoDir, diffResult.value, { check: true });
