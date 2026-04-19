@@ -139,7 +139,6 @@ export async function joinSession(
       await writeToStream(stream, { password: params.password } as AuthRequest);
       const response = await readFromStream<AuthResponse>(stream);
       if (!response.accepted) {
-        await node.stop();
         throw new Error(`Authentication failed: ${response.reason ?? "Invalid password"}`);
       }
       authenticated = true;
@@ -160,7 +159,6 @@ export async function joinSession(
       await writeToStream(stream, { email: params.email } as AdmissionRequest);
       const response = await readFromStream<AdmissionResponse>(stream);
       if (!response.admitted) {
-        await node.stop();
         const retryMsg = response.retryAfterMs
           ? ` Retry after ${Math.ceil(response.retryAfterMs / 1000)}s.`
           : "";
