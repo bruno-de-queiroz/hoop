@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { getGitRoot, createSessionWorktree, fetchBranch, checkoutBranch } from "../gitBranch.js";
+import { getGitRoot, createSessionWorktree, fetchBranch, checkoutBranch, pushBranch } from "../gitBranch.js";
 import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 
@@ -119,6 +119,94 @@ describe("createSessionWorktree", () => {
     expect(result).toEqual({
       ok: false,
       error: "spawn git ENOENT",
+    });
+  });
+});
+
+describe("pushBranch", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("pushes branch to default remote on success", async () => {
+    simulateExecFile("");
+
+    const result = await pushBranch("hoop/session-ABC-XYZ");
+
+    expect(result.ok).toBe(true);
+    expect(mockExecFile).toHaveBeenCalledWith(
+      "git",
+      ["push", "origin", "hoop/session-ABC-XYZ"],
+      { cwd: undefined },
+      expect.any(Function),
+    );
+  });
+
+  it("uses custom remote when specified", async () => {
+    simulateExecFile("");
+
+    await pushBranch("hoop/session-ABC-XYZ", "upstream");
+
+    expect(mockExecFile).toHaveBeenCalledWith(
+      "git",
+      ["push", "upstream", "hoop/session-ABC-XYZ"],
+      { cwd: undefined },
+      expect.any(Function),
+    );
+  });
+
+  it("passes cwd to git", async () => {
+    simulateExecFile("");
+
+    await pushBranch("hoop/session-ABC-XYZ", "origin", "/some/repo");
+
+    expect(mockExecFile).toHaveBeenCalledWith(
+      "git",
+      ["push", "origin", "hoop/session-ABC-XYZ"],
+      { cwd: "/some/repo" },
+      expect.any(Function),
+    );
+  });
+
+  it("returns failure when remote is unreachable", async () => {
+    simulateExecFileError(
+      "exit code 128",
+      "fatal: could not read from remote repository",
+    );
+
+    const result = await pushBranch("hoop/session-ABC-XYZ");
+
+    expect(result).toEqual({
+      ok: false,
+      error: "fatal: could not read from remote repository",
+    });
+  });
+
+  it("returns failure on permission denied", async () => {
+    simulateExecFileError(
+      "exit code 128",
+      "fatal: unable to access 'https://github.com/...': The requested URL returned error: 403",
+    );
+
+    const result = await pushBranch("hoop/session-ABC-XYZ");
+
+    expect(result).toEqual({
+      ok: false,
+      error: "fatal: unable to access 'https://github.com/...': The requested URL returned error: 403",
+    });
+  });
+
+  it("returns failure when remote does not exist", async () => {
+    simulateExecFileError(
+      "exit code 128",
+      "fatal: 'nonexistent' does not appear to be a git repository",
+    );
+
+    const result = await pushBranch("hoop/session-ABC-XYZ", "nonexistent");
+
+    expect(result).toEqual({
+      ok: false,
+      error: "fatal: 'nonexistent' does not appear to be a git repository",
     });
   });
 });

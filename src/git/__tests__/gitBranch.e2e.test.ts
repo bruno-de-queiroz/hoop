@@ -5,11 +5,15 @@ import { join } from "node:path";
 import {
   getGitRoot,
   createSessionWorktree,
+  pushBranch,
+  fetchBranch,
   computeGitDiff,
   applyGitPatch,
   hashContent,
 } from "../gitBranch.js";
 import { gitSync, createTempRepo, removeTempRepo } from "../../__tests__/helpers/gitTestRepo.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 
 describe("git operations (real)", () => {
   let repoDir: string;
@@ -59,6 +63,94 @@ describe("git operations (real)", () => {
 
         // Cleanup worktree
         gitSync(["worktree", "remove", "--force", worktreePath], repoDir);
+      }
+    });
+  });
+
+  describe("pushBranch", () => {
+    let bareRemote: string;
+
+    beforeEach(async () => {
+      bareRemote = await mkdtemp(join(tmpdir(), "hoop-bare-"));
+      gitSync(["init", "--bare"], bareRemote);
+    });
+
+    afterEach(async () => {
+      await rm(bareRemote, { recursive: true, force: true });
+    });
+
+    it("pushes a session branch to a bare remote", async () => {
+      const filePath = join(repoDir, "init.txt");
+      await writeFile(filePath, "init\n");
+      gitSync(["add", "."], repoDir);
+      gitSync(["commit", "-m", "initial"], repoDir);
+      gitSync(["remote", "add", "origin", bareRemote], repoDir);
+
+      const worktreePath = join(repoDir, ".hoop", "sessions", "push-test");
+      await createSessionWorktree("hoop/session-push", worktreePath, repoDir);
+
+      const result = await pushBranch("hoop/session-push", "origin", repoDir);
+      expect(result.ok).toBe(true);
+
+      // Verify the branch exists on the bare remote
+      const remoteBranches = gitSync(["branch", "--list"], bareRemote);
+      expect(remoteBranches).toContain("hoop/session-push");
+
+      gitSync(["worktree", "remove", "--force", worktreePath], repoDir);
+    });
+
+    it("allows a peer to fetch a pushed session branch", async () => {
+      // Host: create repo, commit, add remote, create worktree, push
+      const filePath = join(repoDir, "init.txt");
+      await writeFile(filePath, "init\n");
+      gitSync(["add", "."], repoDir);
+      gitSync(["commit", "-m", "initial"], repoDir);
+      gitSync(["remote", "add", "origin", bareRemote], repoDir);
+
+      const worktreePath = join(repoDir, ".hoop", "sessions", "fetch-test");
+      await createSessionWorktree("hoop/session-fetch", worktreePath, repoDir);
+      await pushBranch("hoop/session-fetch", "origin", repoDir);
+
+      // Peer: clone from bare remote, fetch the session branch
+      const peerDir = await mkdtemp(join(tmpdir(), "hoop-peer-"));
+      gitSync(["clone", bareRemote, peerDir], peerDir);
+
+      const fetchResult = await fetchBranch("hoop/session-fetch", "origin", peerDir);
+      expect(fetchResult.ok).toBe(true);
+
+      await rm(peerDir, { recursive: true, force: true });
+      gitSync(["worktree", "remove", "--force", worktreePath], repoDir);
+    });
+
+    it("returns failure when remote does not exist", async () => {
+      const filePath = join(repoDir, "init.txt");
+      await writeFile(filePath, "init\n");
+      gitSync(["add", "."], repoDir);
+      gitSync(["commit", "-m", "initial"], repoDir);
+
+      const worktreePath = join(repoDir, ".hoop", "sessions", "no-remote");
+      await createSessionWorktree("hoop/session-noremote", worktreePath, repoDir);
+
+      const result = await pushBranch("hoop/session-noremote", "origin", repoDir);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("origin");
+      }
+
+      gitSync(["worktree", "remove", "--force", worktreePath], repoDir);
+    });
+
+    it("returns failure when pushing a nonexistent branch", async () => {
+      const filePath = join(repoDir, "init.txt");
+      await writeFile(filePath, "init\n");
+      gitSync(["add", "."], repoDir);
+      gitSync(["commit", "-m", "initial"], repoDir);
+      gitSync(["remote", "add", "origin", bareRemote], repoDir);
+
+      const result = await pushBranch("hoop/session-nonexistent", "origin", repoDir);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatch(/src refspec|error/i);
       }
     });
   });

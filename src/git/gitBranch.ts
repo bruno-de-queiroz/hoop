@@ -55,9 +55,10 @@ export async function getGitRoot(cwd?: string): Promise<GitResult<string>> {
 export async function fetchBranch(
   branchName: string,
   remote = "origin",
+  cwd?: string,
 ): Promise<GitResult> {
   try {
-    await git(["fetch", remote, branchName]);
+    await git(["fetch", remote, branchName], cwd);
     return { ok: true, value: undefined as never };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
@@ -66,9 +67,23 @@ export async function fetchBranch(
 
 export async function checkoutBranch(
   branchName: string,
+  cwd?: string,
 ): Promise<GitResult> {
   try {
-    await git(["checkout", branchName]);
+    await git(["checkout", branchName], cwd);
+    return { ok: true, value: undefined as never };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+export async function pushBranch(
+  branchName: string,
+  remote = "origin",
+  cwd?: string,
+): Promise<GitResult> {
+  try {
+    await git(["push", remote, branchName], cwd);
     return { ok: true, value: undefined as never };
   } catch (err) {
     return { ok: false, error: (err as Error).message };

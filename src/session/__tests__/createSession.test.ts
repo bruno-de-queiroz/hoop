@@ -79,10 +79,11 @@ describe("createSession", () => {
     expect(session!.passwordHash).toBeUndefined();
   }, 30_000);
 
-  it("creates worktree and stores branch info on successful git init", async () => {
+  it("creates worktree, pushes branch, and stores branch info on successful git init", async () => {
     const mockGitOps: GitOps = {
       getGitRoot: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo" }),
       createSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo/.hoop/sessions/MOCK" }),
+      pushBranch: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
     };
 
     const store = new SessionStore();
@@ -103,6 +104,9 @@ describe("createSession", () => {
       `hoop/session-${result.sessionCode}`,
       expect.stringContaining(result.sessionCode),
     );
+    expect(mockGitOps.pushBranch).toHaveBeenCalledWith(
+      `hoop/session-${result.sessionCode}`,
+    );
 
     const session = store.get(result.sessionCode);
     expect(session!.branchName).toBe(result.branchName);
@@ -113,6 +117,7 @@ describe("createSession", () => {
     const mockGitOps: GitOps = {
       getGitRoot: vi.fn().mockResolvedValue({ ok: false, error: "fatal: not a git repository" }),
       createSessionWorktree: vi.fn(),
+      pushBranch: vi.fn(),
     };
 
     const store = new SessionStore();
@@ -136,6 +141,7 @@ describe("createSession", () => {
     const mockGitOps: GitOps = {
       getGitRoot: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo" }),
       createSessionWorktree: vi.fn().mockResolvedValue({ ok: false, error: "branch already exists" }),
+      pushBranch: vi.fn(),
     };
 
     const store = new SessionStore();
@@ -151,6 +157,33 @@ describe("createSession", () => {
         store,
       ),
     ).rejects.toThrow("Failed to create session worktree");
+
+    expect(mockGitOps.pushBranch).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it("throws when push fails after worktree creation", async () => {
+    const mockGitOps: GitOps = {
+      getGitRoot: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo" }),
+      createSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: "/tmp/fakerepo/.hoop/sessions/MOCK" }),
+      pushBranch: vi.fn().mockResolvedValue({ ok: false, error: "fatal: could not read from remote repository" }),
+    };
+
+    const store = new SessionStore();
+
+    await expect(
+      createSession(
+        {
+          executionTarget: "host-only",
+          networkConfig: { transportMode: "test" },
+          gitOps: mockGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
+        },
+        store,
+      ),
+    ).rejects.toThrow("Failed to push session branch");
+
+    expect(mockGitOps.createSessionWorktree).toHaveBeenCalled();
+    expect(mockGitOps.pushBranch).toHaveBeenCalled();
   }, 30_000);
 
   it("publishUpdate centralizes accumulation, replay buffering, and notifications", async () => {
