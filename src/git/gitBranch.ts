@@ -36,7 +36,7 @@ function gitWithStdin(args: string[], stdin: string, cwd?: string): Promise<stri
       if (error) {
         reject(new Error(stderr.trim() || error.message));
       } else {
-        resolve(stdout.trim());
+        resolve(stdout);
       }
     });
     child.stdin!.end(stdin);
@@ -101,16 +101,20 @@ export async function computeGitDiff(
   }
 }
 
+export interface ApplyPatchOptions {
+  check?: boolean;
+  reverse?: boolean;
+}
+
 export async function applyGitPatch(
   worktreePath: string,
   patch: string,
-  check = false,
-  reverse = false,
+  options: ApplyPatchOptions = {},
 ): Promise<GitResult> {
   try {
     const args = ["apply", "--whitespace=nowarn"];
-    if (check) args.push("--check");
-    if (reverse) args.push("--reverse");
+    if (options.check) args.push("--check");
+    if (options.reverse) args.push("--reverse");
     args.push("-");
     await gitWithStdin(args, patch, worktreePath);
     return { ok: true, value: undefined as never };
