@@ -487,6 +487,113 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     expect(conflictResult.conflict!.type).toBe("file-change");
   }, 60_000);
 
+  it("host clears active edit conflicts when a peer disconnects", async () => {
+    const session = await setupConnectedSession();
+    ({ host, peer, hostDeps: hDeps, peerDeps: pDeps } = session);
+
+    await peer.client.callTool({
+      name: "hoop_send_update",
+      arguments: {
+        type: "buffer-update",
+        filePath: "src/shared.ts",
+        contentHash: "peer-buffer-hash",
+        version: 1,
+        dirty: true,
+      },
+    });
+
+    await waitFor(
+      () => host!.state.pendingUpdates.length > 0,
+      "waiting for peer dirty buffer update to reach host",
+    );
+
+    const beforeDisconnect = parseJson(
+      await host.client.callTool({
+        name: "hoop_check_conflicts",
+        arguments: { filePath: "src/shared.ts" },
+      }),
+    );
+    expect(beforeDisconnect).toEqual({
+      hasConflict: true,
+      conflict: {
+        peerId: session.peerData.localPeerId,
+        filePath: "src/shared.ts",
+        type: "dirty-buffer",
+        timestamp: expect.any(Number),
+      },
+    });
+
+    await peer.client.callTool({ name: "hoop_leave_session", arguments: {} });
+
+    await waitFor(
+      () => host!.state.hostSession?.broadcastHub.getSubscriberCount() === 0,
+      "waiting for host to clear disconnected peer subscriptions",
+    );
+
+    const afterDisconnect = parseJson(
+      await host.client.callTool({
+        name: "hoop_check_conflicts",
+        arguments: { filePath: "src/shared.ts" },
+      }),
+    );
+    expect(afterDisconnect).toEqual({ hasConflict: false, conflict: null });
+  }, 60_000);
+
+  it("peer clears active edit conflicts when the host disconnects", async () => {
+    const session = await setupConnectedSession();
+    ({ host, peer, hostDeps: hDeps, peerDeps: pDeps } = session);
+
+    await host.client.callTool({
+      name: "hoop_send_update",
+      arguments: {
+        type: "buffer-update",
+        filePath: "src/shared.ts",
+        contentHash: "host-buffer-hash",
+        version: 1,
+        dirty: true,
+      },
+    });
+
+    await waitFor(
+      () => peer!.state.pendingUpdates.length > 0,
+      "waiting for host dirty buffer update to reach peer",
+    );
+
+    const beforeDisconnect = parseJson(
+      await peer.client.callTool({
+        name: "hoop_check_conflicts",
+        arguments: { filePath: "src/shared.ts" },
+      }),
+    );
+    expect(beforeDisconnect).toEqual({
+      hasConflict: true,
+      conflict: {
+        peerId: session.hostData.peerId,
+        filePath: "src/shared.ts",
+        type: "dirty-buffer",
+        timestamp: expect.any(Number),
+      },
+    });
+
+    await host.client.callTool({ name: "hoop_leave_session", arguments: {} });
+
+    await waitFor(
+      () => {
+        const tracker = peer!.state.activeEditsTracker;
+        return tracker !== null && !tracker.checkConflict("src/shared.ts").hasConflict;
+      },
+      "waiting for peer to clear disconnected host conflicts",
+    );
+
+    const afterDisconnect = parseJson(
+      await peer.client.callTool({
+        name: "hoop_check_conflicts",
+        arguments: { filePath: "src/shared.ts" },
+      }),
+    );
+    expect(afterDisconnect).toEqual({ hasConflict: false, conflict: null });
+  }, 60_000);
+
   // ── No orphaned processes after both leave ───────────────────────
 
   it("no active state remains after both instances leave", async () => {

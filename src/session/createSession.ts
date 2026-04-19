@@ -84,6 +84,7 @@ export interface CreateSessionParams {
   onAdmissionRequest: (email: string, peerId: string) => Promise<boolean>;
   onLockChange?: (lock: HoopLock) => void;
   onPromptRequest?: (request: PromptRequest) => void;
+  onPeerDisconnect?: (peerId: string) => void;
   executionTarget: ExecutionTarget;
   autoExecutePrompts?: boolean;
   networkConfig?: NetworkConfig;
@@ -625,6 +626,11 @@ export async function createSession(
     const peerId = evt.detail.toString();
     broadcastHub.unsubscribe(peerId);
     accumulator.removePeerPresence(peerId);
+    try {
+      params.onPeerDisconnect?.(peerId);
+    } catch (err) {
+      console.error("[hoop] peer disconnect cleanup error:", err);
+    }
 
     const releaseUpdate = accumulator.deriveLockReleaseForPeer(peerId);
     if (releaseUpdate) {
