@@ -39,10 +39,12 @@ import { type HoopLock } from "../state/hoopLock.js";
 import { isValidUnifiedDiff } from "../diff/validatePatch.js";
 import {
   PromptRequestQueue,
-  isPromptRequest,
+  isPromptRequestMessage,
+  isPromptStatusQuery,
   type PromptRequest,
   type PromptResponse,
 } from "../state/promptRequest.js";
+import { randomUUID } from "node:crypto";
 import { type ExecutionTarget, type Session, SessionStore } from "./session.js";
 import { generateSessionCode } from "./sessionCode.js";
 import { type StateTree, createEmptyStateTree } from "../state/stateTree.js";
@@ -383,28 +385,46 @@ export async function createSession(
         reason: "not-authenticated",
         timestamp: Date.now(),
       } as PromptResponse);
+      await stream.close();
       return;
     }
 
     try {
-      const request = await readFromStream<unknown>(stream);
-      if (!isPromptRequest(request)) {
-        await writeToStream(stream, {
-          id: "",
-          status: "failed",
-          error: "invalid-prompt-request",
-          timestamp: Date.now(),
-        } as PromptResponse);
+      const message = await readFromStream<unknown>(stream);
+
+      if (isPromptStatusQuery(message)) {
+        const entry = promptRequestQueue.get(message.id);
+        const response: PromptResponse = entry
+          ? { id: message.id, status: entry.status, timestamp: Date.now() }
+          : { id: message.id, status: "failed", error: "not-found", timestamp: Date.now() };
+        await writeToStream(stream, response);
+        await stream.close();
         return;
       }
 
-      const response = promptRequestQueue.enqueue(
-        request,
-        () => {},
-        autoExecutePrompts,
-      );
-      params.onPromptRequest?.(request);
-      await writeToStream(stream, response);
+      if (isPromptRequestMessage(message)) {
+        const id = randomUUID();
+        const request: PromptRequest = {
+          id,
+          prompt: message.prompt,
+          model: message.model,
+          requestedBy: remotePeerId,
+          timestamp: Date.now(),
+        };
+        const response = promptRequestQueue.enqueue(request, autoExecutePrompts);
+        params.onPromptRequest?.(request);
+        await writeToStream(stream, response);
+        await stream.close();
+        return;
+      }
+
+      await writeToStream(stream, {
+        id: "",
+        status: "failed",
+        error: "invalid-message",
+        timestamp: Date.now(),
+      } as PromptResponse);
+      await stream.close();
     } catch {
       await writeToStream(stream, {
         id: "",
@@ -412,6 +432,7 @@ export async function createSession(
         error: "internal-error",
         timestamp: Date.now(),
       } as PromptResponse);
+      await stream.close();
     }
   });
 

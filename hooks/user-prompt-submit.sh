@@ -62,7 +62,7 @@ if [ "$ROLE" = "host" ] && [ -f "$PROMPT_REQUESTS_FILE" ]; then
         "\n\nApprove, Reject, or chat about it.\nUse hoop_approve_prompt_request(\"" + .id + "\") or hoop_deny_prompt_request(\"" + .id + "\", reason)."
       ) | join("\n\n---\n\n"))
     end
-  ' "$PROMPT_REQUESTS_FILE" 2>/dev/null) || PROMPT_REQUESTS_CONTEXT=""
+  ' "$PROMPT_REQUESTS_FILE" 2> >(cat >&2)) || PROMPT_REQUESTS_CONTEXT=""
 fi
 
 UPDATES_CONTEXT=$(format_peer_changes_context "$UPDATES_FILE" "$MAX_PATCH_LINES" "$MAX_FILES")

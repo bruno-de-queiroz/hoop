@@ -51,7 +51,15 @@ export class PendingPromptRequestsWriter {
     const path = registryPath ?? defaultPendingPromptRequestsPath();
     try {
       const data = readFileSync(path, "utf-8");
-      return JSON.parse(data) as PendingPromptRequestsRegistry;
+      const parsed: unknown = JSON.parse(data);
+      if (
+        typeof parsed !== "object" || parsed === null ||
+        !Array.isArray((parsed as Record<string, unknown>)["requests"]) ||
+        typeof (parsed as Record<string, unknown>)["updatedAt"] !== "number"
+      ) {
+        return null;
+      }
+      return parsed as PendingPromptRequestsRegistry;
     } catch {
       return null;
     }
