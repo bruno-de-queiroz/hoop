@@ -53,7 +53,6 @@ import {
   createSessionWorktree as defaultCreateSessionWorktree,
   removeSessionWorktree as defaultRemoveSessionWorktree,
   pushBranch as defaultPushBranch,
-  deleteRemoteBranch as defaultDeleteRemoteBranch,
   type GitResult,
 } from "../git/gitBranch.js";
 
@@ -62,7 +61,6 @@ export interface GitOps {
   createSessionWorktree: (branchName: string, worktreePath: string) => Promise<GitResult<string>>;
   removeSessionWorktree: (worktreePath: string, branchName: string) => Promise<GitResult>;
   pushBranch: (branchName: string, remote?: string) => Promise<GitResult>;
-  deleteRemoteBranch: (branchName: string, remote?: string) => Promise<GitResult>;
 }
 
 export const realGitOps: GitOps = {
@@ -70,7 +68,6 @@ export const realGitOps: GitOps = {
   createSessionWorktree: defaultCreateSessionWorktree,
   removeSessionWorktree: defaultRemoveSessionWorktree,
   pushBranch: defaultPushBranch,
-  deleteRemoteBranch: defaultDeleteRemoteBranch,
 };
 
 export const stubGitOps: GitOps = {
@@ -78,7 +75,6 @@ export const stubGitOps: GitOps = {
   createSessionWorktree: async (_branch, path) => ({ ok: true, value: path }),
   removeSessionWorktree: async () => ({ ok: true, value: undefined as never }),
   pushBranch: async () => ({ ok: true, value: undefined as never }),
-  deleteRemoteBranch: async () => ({ ok: true, value: undefined as never }),
 };
 
 export const defaultAdmissionHandler = async (_email: string, _peerId: string): Promise<boolean> => true;
@@ -260,7 +256,8 @@ export async function createSession(
     throw new Error(`Git repository required: ${gitRootResult.error}`);
   }
 
-  const branchName = `hoop/session-${sessionCode}-${hostId}`;
+  const branchSuffix = randomBytes(4).toString("hex");
+  const branchName = `hoop/session-${sessionCode}-${branchSuffix}`;
   const targetPath = join(gitRootResult.value, ".hoop", "sessions", sessionCode);
   const worktreeResult = await gitOps.createSessionWorktree(branchName, targetPath);
   if (!worktreeResult.ok) {
