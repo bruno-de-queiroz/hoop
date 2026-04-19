@@ -669,7 +669,7 @@ describe("hoop MCP server", () => {
     expect(data.hasConflict).toBe(false);
   });
 
-  it("hoop_check_conflicts detects peer edit via accumulator", async () => {
+  it("hoop_check_conflicts detects peer edit via published update", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -677,9 +677,9 @@ describe("hoop MCP server", () => {
       arguments: { executionTarget: "host-only" },
     });
 
-    // Simulate a peer's dirty buffer arriving through the accumulator interceptor
+    // Simulate a peer's dirty buffer arriving through the unified publish path
     const hostSession = state!.hostSession!;
-    hostSession.accumulator.accumulate({
+    hostSession.publishUpdate({
       type: "buffer-update",
       peerId: "peer-alice",
       filePath: "src/main.ts",
@@ -713,7 +713,7 @@ describe("hoop MCP server", () => {
     const hostPeerId = (parseJson(createResult) as { peerId: string }).peerId;
 
     // Host's own buffer update should NOT be tracked as a conflict
-    state!.hostSession!.accumulator.accumulate({
+    state!.hostSession!.publishUpdate({
       type: "buffer-update",
       peerId: hostPeerId,
       filePath: "src/main.ts",
@@ -740,7 +740,7 @@ describe("hoop MCP server", () => {
       arguments: { executionTarget: "host-only" },
     });
 
-    state!.hostSession!.accumulator.accumulate({
+    state!.hostSession!.publishUpdate({
       type: "buffer-update",
       peerId: "peer-alice",
       filePath: "src/main.ts",
@@ -765,7 +765,7 @@ describe("hoop MCP server", () => {
     expect(data.hasConflict).toBe(false);
   }, 30_000);
 
-  it("pending updates writer tracks peer file changes via accumulator", async () => {
+  it("pending updates writer tracks peer file changes via published update", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -773,8 +773,8 @@ describe("hoop MCP server", () => {
       arguments: { executionTarget: "host-only" },
     });
 
-    // Simulate a peer file-change arriving through the accumulator
-    state!.hostSession!.accumulator.accumulate({
+    // Simulate a peer file-change arriving through the unified publish path
+    state!.hostSession!.publishUpdate({
       type: "file-change",
       peerId: "peer-alice",
       filePath: "src/main.ts",
@@ -802,7 +802,7 @@ describe("hoop MCP server", () => {
     const hostPeerId = (parseJson(createResult) as { peerId: string }).peerId;
 
     // Host's own file-change should NOT be written to registry
-    state!.hostSession!.accumulator.accumulate({
+    state!.hostSession!.publishUpdate({
       type: "file-change",
       peerId: hostPeerId,
       filePath: "src/main.ts",
@@ -824,7 +824,7 @@ describe("hoop MCP server", () => {
       arguments: { executionTarget: "host-only" },
     });
 
-    state!.hostSession!.accumulator.accumulate({
+    state!.hostSession!.publishUpdate({
       type: "file-change",
       peerId: "peer-alice",
       filePath: "src/main.ts",

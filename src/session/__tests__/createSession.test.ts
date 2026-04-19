@@ -152,6 +152,37 @@ describe("createSession", () => {
     ).rejects.toThrow("Failed to create session worktree");
   }, 30_000);
 
+  it("publishUpdate centralizes accumulation, replay buffering, and notifications", async () => {
+    result = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+    );
+
+    const update = {
+      type: "metadata-update",
+      peerId: "peer-1",
+      key: "theme",
+      value: "dark",
+      timestamp: 1_000,
+    } as const;
+    const observed: Array<{ seqNo: number; update: typeof update }> = [];
+    const unsubscribe = result.onPublishedUpdate((publication) => {
+      observed.push({ seqNo: publication.seqNo, update: publication.update as typeof update });
+    });
+
+    const seqNo = result.publishUpdate(update);
+    unsubscribe();
+
+    expect(seqNo).toBe(1);
+    expect(result.accumulator.getMetadata("theme")).toEqual(update);
+    expect(result.replayBuffer.replaySince(0)).toEqual([{ seqNo: 1, update }]);
+    expect(observed).toEqual([{ seqNo: 1, update }]);
+  }, 30_000);
+
   it("forceReleaseLock releases another peer's lock", async () => {
     result = await createSession(
       {
