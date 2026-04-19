@@ -36,12 +36,22 @@ function makeParams(overrides?: Partial<DestroySessionParams>): DestroySessionPa
 }
 
 describe("destroySession", () => {
-  it("cleans up all resources and returns no errors on success", async () => {
-    const params = makeParams();
+  it("cleans up all resources in order and returns no errors on success", async () => {
+    const callOrder: string[] = [];
+    const params = makeParams({
+      node: {
+        stop: vi.fn<() => Promise<void>>().mockImplementation(async () => { callOrder.push("node.stop"); }),
+      } as unknown as HoopNode,
+      gitOps: {
+        deleteRemoteBranch: vi.fn().mockImplementation(async () => { callOrder.push("deleteRemoteBranch"); return { ok: true, value: undefined as never }; }),
+        removeSessionWorktree: vi.fn().mockImplementation(async () => { callOrder.push("removeSessionWorktree"); return { ok: true, value: undefined as never }; }),
+      },
+    });
+
     const result = await destroySession(params);
 
     expect(result.errors).toEqual([]);
-    expect(params.node.stop).toHaveBeenCalled();
+    expect(callOrder).toEqual(["node.stop", "deleteRemoteBranch", "removeSessionWorktree"]);
     expect(params.gitOps.deleteRemoteBranch).toHaveBeenCalledWith("hoop/session-ABCD12-abc123");
     expect(params.gitOps.removeSessionWorktree).toHaveBeenCalledWith(
       "/tmp/hoop-sessions/ABCD12",
