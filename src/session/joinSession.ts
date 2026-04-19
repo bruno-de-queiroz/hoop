@@ -179,12 +179,8 @@ export async function joinSession(
     const syncResponse = await readFromStream<SyncResponse>(syncStream);
 
     let branchName: string | undefined;
-    let worktreePath: string | undefined;
 
     const gitRootResult = await params.gitOps.getGitRoot();
-    if (gitRootResult.ok) {
-      worktreePath = gitRootResult.value;
-    }
 
     if (syncResponse.branchName) {
       if (!gitRootResult.ok) {
@@ -236,7 +232,9 @@ export async function joinSession(
       for (const handler of broadcastHandlers) {
         handler(envelope.update);
       }
-    }).catch(() => {});
+    }).catch((err) => {
+      console.warn("[joinSession] Broadcast stream closed:", err);
+    });
 
     const sendUpdate = async (update: NonLockStateUpdate): Promise<StateUpdateResponse> => {
       const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
@@ -366,6 +364,7 @@ export async function joinSession(
       stopAckInterval,
     };
   } catch (err) {
+    console.error("[joinSession] Join failed, stopping node:", err);
     await node.stop().catch(() => {});
     throw err;
   }
