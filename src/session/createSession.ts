@@ -411,6 +411,7 @@ export async function createSession(
     const response: SyncResponse = {
       stateTree,
       branchName,
+      executionTarget: params.executionTarget,
       accumulatedState: accumulator.getSnapshot(),
       currentSeqNo: broadcastHub.getCurrentSeqNo(),
     };

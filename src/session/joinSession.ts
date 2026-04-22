@@ -86,6 +86,7 @@ export interface JoinSessionResult {
   node: HoopNode;
   stateTree: StateTree;
   branchName?: string;
+  executionTarget?: string;
   accumulatedState?: AccumulatedState;
   sendUpdate: (update: NonLockStateUpdate) => Promise<StateUpdateResponse>;
   sendFileChange: (filePath: string, oldContent: string, newContent: string) => Promise<StateUpdateResponse>;
@@ -179,6 +180,7 @@ export async function joinSession(
     const syncResponse = await readFromStream<SyncResponse>(syncStream);
 
     let branchName: string | undefined;
+    const executionTarget = syncResponse.executionTarget;
 
     const gitRootResult = await params.gitOps.getGitRoot();
 
@@ -351,6 +353,7 @@ export async function joinSession(
       node,
       stateTree: syncResponse.stateTree,
       branchName,
+      executionTarget,
       accumulatedState: syncResponse.accumulatedState,
       sendUpdate,
       sendFileChange,
