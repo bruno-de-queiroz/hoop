@@ -214,6 +214,37 @@ export async function applyGitPatch(
   }
 }
 
+export async function addAndCommit(
+  message: string,
+  cwd?: string,
+): Promise<GitResult<boolean>> {
+  try {
+    await git(["add", "-A"], cwd);
+    // Exit code 1 means there are staged changes; 0 means clean.
+    const exitCode = await new Promise<number>((resolve, reject) => {
+      execFile("git", ["diff", "--cached", "--quiet"], { cwd }, (error) => {
+        if (error) {
+          const code = typeof error.code === "number" ? error.code : undefined;
+          if (code === 1) {
+            resolve(1);
+          } else {
+            reject(new Error((error as { stderr?: string }).stderr ?? error.message));
+          }
+        } else {
+          resolve(0);
+        }
+      });
+    });
+    if (exitCode === 0) {
+      return { ok: true, value: false };
+    }
+    await git(["commit", "-m", message], cwd);
+    return { ok: true, value: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
 export function hashContent(content: string): string {
   return createHash("md5").update(content).digest("hex");
 }

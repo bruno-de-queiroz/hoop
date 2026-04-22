@@ -86,6 +86,7 @@ describe("createSession", () => {
       removeSessionWorktree: vi.fn(),
       pushBranch: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
       deleteRemoteBranch: vi.fn(),
+      addAndCommit: vi.fn().mockResolvedValue({ ok: true, value: false }),
     };
 
     const store = new SessionStore();
@@ -122,6 +123,7 @@ describe("createSession", () => {
       removeSessionWorktree: vi.fn(),
       pushBranch: vi.fn(),
       deleteRemoteBranch: vi.fn(),
+      addAndCommit: vi.fn().mockResolvedValue({ ok: true, value: false }),
     };
 
     const store = new SessionStore();
@@ -150,6 +152,7 @@ describe("createSession", () => {
       removeSessionWorktree: vi.fn(),
       pushBranch: vi.fn(),
       deleteRemoteBranch: vi.fn(),
+      addAndCommit: vi.fn().mockResolvedValue({ ok: true, value: false }),
     };
 
     const store = new SessionStore();
@@ -177,6 +180,7 @@ describe("createSession", () => {
       removeSessionWorktree: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
       pushBranch: vi.fn().mockResolvedValue({ ok: false, error: "fatal: could not read from remote repository" }),
       deleteRemoteBranch: vi.fn(),
+      addAndCommit: vi.fn().mockResolvedValue({ ok: true, value: false }),
     };
 
     const store = new SessionStore();
@@ -209,6 +213,7 @@ describe("createSession", () => {
       removeSessionWorktree: vi.fn().mockResolvedValue({ ok: false, error: "worktree locked" }),
       pushBranch: vi.fn().mockResolvedValue({ ok: false, error: "remote unreachable" }),
       deleteRemoteBranch: vi.fn(),
+      addAndCommit: vi.fn().mockResolvedValue({ ok: true, value: false }),
     };
 
     const store = new SessionStore();
@@ -370,6 +375,126 @@ describe("createSession", () => {
       acquiredAt: null,
       status: "free",
     });
+  }, 30_000);
+
+  it("lock-release triggers addAndCommit and pushBranch", async () => {
+    const mockGitOps: GitOps = {
+      ...stubGitOps,
+      addAndCommit: vi.fn().mockResolvedValue({ ok: true, value: true }),
+      pushBranch: vi.fn().mockResolvedValue({ ok: true, value: undefined as never }),
+    };
+    result = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: mockGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+    );
+
+    result.publishUpdate({
+      type: "lock-acquire",
+      peerId: "peer-1",
+      timestamp: 1_000,
+    });
+    result.publishUpdate({
+      type: "lock-release",
+      peerId: "peer-1",
+      timestamp: 2_000,
+    });
+
+    // Wait for the async push to complete
+    await vi.waitFor(() => {
+      expect(mockGitOps.addAndCommit).toHaveBeenCalledTimes(1);
+    });
+
+    expect(mockGitOps.addAndCommit).toHaveBeenCalledWith(
+      "hoop: sync after lock release by peer-1",
+      result.worktreePath,
+    );
+    expect(mockGitOps.pushBranch).toHaveBeenCalledWith(result.branchName);
+  }, 30_000);
+
+  it("lock-release skips push when nothing was committed", async () => {
+    const pushBranch = vi.fn().mockResolvedValue({ ok: true, value: undefined as never });
+    const mockGitOps: GitOps = {
+      ...stubGitOps,
+      addAndCommit: vi.fn().mockResolvedValue({ ok: true, value: false }),
+      pushBranch,
+    };
+    result = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: mockGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+    );
+
+    // Reset after session creation's initial push
+    pushBranch.mockClear();
+
+    result.publishUpdate({
+      type: "lock-acquire",
+      peerId: "peer-1",
+      timestamp: 1_000,
+    });
+    result.publishUpdate({
+      type: "lock-release",
+      peerId: "peer-1",
+      timestamp: 2_000,
+    });
+
+    await vi.waitFor(() => {
+      expect(mockGitOps.addAndCommit).toHaveBeenCalledTimes(1);
+    });
+
+    expect(pushBranch).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it("push failure does not block subsequent lock operations", async () => {
+    const pushBranch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, value: undefined as never }) // initial session push
+      .mockResolvedValue({ ok: false, error: "remote unavailable" }); // auto-push
+    const mockGitOps: GitOps = {
+      ...stubGitOps,
+      addAndCommit: vi.fn().mockResolvedValue({ ok: true, value: true }),
+      pushBranch,
+    };
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    result = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: mockGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+    );
+
+    result.publishUpdate({
+      type: "lock-acquire",
+      peerId: "peer-1",
+      timestamp: 1_000,
+    });
+    result.publishUpdate({
+      type: "lock-release",
+      peerId: "peer-1",
+      timestamp: 2_000,
+    });
+
+    await vi.waitFor(() => {
+      expect(pushBranch).toHaveBeenCalledTimes(2); // initial + auto-push
+    });
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      "[hoop] auto-push failed:",
+      "remote unavailable",
+    );
+
+    // Lock can still be acquired after failed push
+    const acquire = result.acquireLock("peer-2");
+    expect(acquire.acquired).toBe(true);
+    consoleSpy.mockRestore();
   }, 30_000);
 
   it("forceReleaseLock releases another peer's lock", async () => {
