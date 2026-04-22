@@ -54,6 +54,7 @@ import {
   removeSessionWorktree as defaultRemoveSessionWorktree,
   pushBranch as defaultPushBranch,
   deleteRemoteBranch as defaultDeleteRemoteBranch,
+  addAndCommit as defaultAddAndCommit,
   type GitResult,
 } from "../git/gitBranch.js";
 
@@ -63,6 +64,7 @@ export interface GitOps {
   removeSessionWorktree: (worktreePath: string, branchName: string) => Promise<GitResult>;
   pushBranch: (branchName: string, remote?: string) => Promise<GitResult>;
   deleteRemoteBranch: (branchName: string, remote?: string) => Promise<GitResult>;
+  addAndCommit: (message: string, cwd?: string) => Promise<GitResult<boolean>>;
 }
 
 export const realGitOps: GitOps = {
@@ -71,6 +73,7 @@ export const realGitOps: GitOps = {
   removeSessionWorktree: defaultRemoveSessionWorktree,
   pushBranch: defaultPushBranch,
   deleteRemoteBranch: defaultDeleteRemoteBranch,
+  addAndCommit: defaultAddAndCommit,
 };
 
 export const stubGitOps: GitOps = {
@@ -79,6 +82,7 @@ export const stubGitOps: GitOps = {
   removeSessionWorktree: async () => ({ ok: true, value: undefined as never }),
   pushBranch: async () => ({ ok: true, value: undefined as never }),
   deleteRemoteBranch: async () => ({ ok: true, value: undefined as never }),
+  addAndCommit: async () => ({ ok: true, value: false }),
 };
 
 export const defaultAdmissionHandler = async (_email: string, _peerId: string): Promise<boolean> => true;
@@ -290,6 +294,7 @@ export async function createSession(
   const promptRequestQueue = new PromptRequestQueue();
   const autoExecutePrompts = params.autoExecutePrompts ?? false;
   const publishedUpdateListeners = new Set<PublishedUpdateListener>();
+  let pendingPush: Promise<void> | null = null;
 
   const onPublishedUpdate = (listener: PublishedUpdateListener): (() => void) => {
     publishedUpdateListeners.add(listener);
@@ -311,6 +316,27 @@ export async function createSession(
 
     if (update.type === "lock-acquire" || update.type === "lock-release") {
       params.onLockChange?.(accumulator.getLockSnapshot(update.timestamp));
+    }
+
+    if (update.type === "lock-release") {
+      pendingPush = (async () => {
+        try {
+          const commitResult = await gitOps.addAndCommit(
+            `hoop: sync after lock release by ${update.peerId}`,
+            worktreePath,
+          );
+          if (commitResult.ok && commitResult.value) {
+            const pushResult = await gitOps.pushBranch(branchName);
+            if (!pushResult.ok) {
+              console.error("[hoop] auto-push failed:", pushResult.error);
+            }
+          }
+        } catch (err) {
+          console.error("[hoop] auto-push failed:", err);
+        } finally {
+          pendingPush = null;
+        }
+      })();
     }
 
     for (const listener of publishedUpdateListeners) {
@@ -538,6 +564,9 @@ export async function createSession(
     }
 
     if (update.type === "lock-acquire") {
+      if (pendingPush) {
+        await pendingPush;
+      }
       const result = acquireLock(update.peerId, update.timestamp, remotePeerId);
       const response: LockAcquireResponse = result.acquired
         ? {

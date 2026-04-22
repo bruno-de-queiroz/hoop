@@ -11,6 +11,7 @@ import {
   checkoutBranch,
   computeContentDiff,
   applyGitPatch,
+  addAndCommit,
   hashContent,
 } from "../gitBranch.js";
 import { gitSync, createTempRepo, removeTempRepo } from "../../__tests__/helpers/gitTestRepo.js";
@@ -248,6 +249,50 @@ describe("git operations (real)", () => {
       // Dry-run should fail because the context doesn't match
       const checkResult = await applyGitPatch(repoDir, diffResult.value, { check: true });
       expect(checkResult.ok).toBe(false);
+    });
+  });
+
+  describe("addAndCommit", () => {
+    it("commits staged changes and returns true", async () => {
+      await writeFile(join(repoDir, "init.txt"), "init\n");
+      gitSync(["add", "."], repoDir);
+      gitSync(["commit", "-m", "initial"], repoDir);
+
+      await writeFile(join(repoDir, "new-file.txt"), "hello\n");
+
+      const result = await addAndCommit("hoop: test commit", repoDir);
+      expect(result).toEqual({ ok: true, value: true });
+
+      const log = gitSync(["log", "--oneline", "-1"], repoDir);
+      expect(log).toContain("hoop: test commit");
+    });
+
+    it("returns false when there is nothing to commit", async () => {
+      await writeFile(join(repoDir, "init.txt"), "init\n");
+      gitSync(["add", "."], repoDir);
+      gitSync(["commit", "-m", "initial"], repoDir);
+
+      const result = await addAndCommit("hoop: empty", repoDir);
+      expect(result).toEqual({ ok: true, value: false });
+    });
+
+    it("stages deletions and modifications", async () => {
+      await writeFile(join(repoDir, "a.txt"), "aaa\n");
+      await writeFile(join(repoDir, "b.txt"), "bbb\n");
+      gitSync(["add", "."], repoDir);
+      gitSync(["commit", "-m", "initial"], repoDir);
+
+      // Modify a.txt, delete b.txt
+      await writeFile(join(repoDir, "a.txt"), "modified\n");
+      const { rm: rmFile } = await import("node:fs/promises");
+      await rmFile(join(repoDir, "b.txt"));
+
+      const result = await addAndCommit("hoop: modify and delete", repoDir);
+      expect(result).toEqual({ ok: true, value: true });
+
+      const show = gitSync(["show", "--stat", "--oneline", "HEAD"], repoDir);
+      expect(show).toContain("a.txt");
+      expect(show).toContain("b.txt");
     });
   });
 
