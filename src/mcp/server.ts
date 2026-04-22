@@ -318,6 +318,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
             sessionCode: result.sessionCode,
             branchName: result.branchName,
             hostPeerId: result.hostPeerId,
+            executionTarget: result.executionTarget,
           }, deps?.sessionStatusPath);
         }
         state.activeEditsTracker = new ActiveEditsTracker(
@@ -692,6 +693,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           authenticated: s.authenticated,
           admitted: s.admitted,
           branchName: s.branchName,
+          executionTarget: s.executionTarget,
           lastSeqNo: s.getLastSeqNo(),
           pendingUpdates: state.pendingUpdates.length,
           lock: s.getLockStatus(),

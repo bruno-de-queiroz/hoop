@@ -1039,4 +1039,65 @@ describe("E2E: two claude-code instances in a hoop session", () => {
       spy.mockRestore();
     }
   }, 60_000);
+
+  it("peer hoop_get_status returns executionTarget from host", async () => {
+    const session = await setupConnectedSession();
+    host = session.host;
+    peer = session.peer;
+    hDeps = session.hostDeps;
+    pDeps = session.peerDeps;
+
+    const peerStatus = parseJson(
+      await peer.client.callTool({ name: "hoop_get_status", arguments: {} }),
+    ) as Record<string, unknown>;
+
+    expect(peerStatus.active).toBe(true);
+    expect(peerStatus.role).toBe("peer");
+    expect(peerStatus.executionTarget).toBe("host-only");
+  }, 30_000);
+
+  it("peer hoop_get_status returns proponent-side executionTarget", async () => {
+    hDeps = makeDeps("host");
+    pDeps = makeDeps("peer");
+    host = await createMcpInstance(hDeps);
+    peer = await createMcpInstance(pDeps);
+
+    const createResult = await host.client.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "proponent-side" },
+    });
+    const hostData = parseJson(createResult) as { sessionCode: string; listenAddresses: string[] };
+
+    const joinPromise = peer.client.callTool({
+      name: "hoop_join_session",
+      arguments: {
+        sessionCode: hostData.sessionCode,
+        hostAddress: hostData.listenAddresses[0],
+        email: "peer@example.com",
+      },
+    });
+
+    await waitFor(
+      () => host!.state.pendingAdmissions.size > 0,
+      "waiting for admission request",
+    );
+
+    const admissions = parseJson(
+      await host.client.callTool({ name: "hoop_check_admissions", arguments: {} }),
+    ) as { requests: Array<{ peerId: string }> };
+    await host.client.callTool({
+      name: "hoop_admit_peer",
+      arguments: { peerId: admissions.requests[0].peerId },
+    });
+
+    await joinPromise;
+
+    const peerStatus = parseJson(
+      await peer.client.callTool({ name: "hoop_get_status", arguments: {} }),
+    ) as Record<string, unknown>;
+
+    expect(peerStatus.active).toBe(true);
+    expect(peerStatus.role).toBe("peer");
+    expect(peerStatus.executionTarget).toBe("proponent-side");
+  }, 30_000);
 });

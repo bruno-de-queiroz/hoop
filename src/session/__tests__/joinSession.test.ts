@@ -38,7 +38,32 @@ describe("joinSession", () => {
     expect(joinResult.hostPeerId).toBe(hostResult.peerId);
     expect(joinResult.localPeerId).toBeTruthy();
     expect(joinResult.authenticated).toBe(false);
+    expect(joinResult.executionTarget).toBe("host-only");
     expect(joinResult.node.getState()).toBe("listening");
+  }, 30_000);
+
+  it("propagates proponent-side executionTarget to joining peer", async () => {
+    const store = new SessionStore();
+
+    hostResult = await createSession(
+      {
+        executionTarget: "proponent-side",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+      store,
+    );
+
+    joinResult = await joinSession({
+      sessionCode: hostResult.sessionCode,
+      hostAddress: hostResult.listenAddresses[0],
+      email: 'test@example.com',
+      networkConfig: { transportMode: "test" },
+      gitOps: stubJoinGitOps,
+    });
+
+    expect(joinResult.executionTarget).toBe("proponent-side");
   }, 30_000);
 
   it("reports password provided when given", async () => {

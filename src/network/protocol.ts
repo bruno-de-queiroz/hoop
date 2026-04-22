@@ -39,6 +39,7 @@ export interface SyncRequest {
 export interface SyncResponse {
   stateTree: StateTree;
   branchName?: string;
+  executionTarget?: string;
   accumulatedState?: AccumulatedState;
   currentSeqNo?: number;
   replayedUpdates?: BroadcastEnvelope[];
