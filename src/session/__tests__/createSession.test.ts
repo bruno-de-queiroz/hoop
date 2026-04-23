@@ -459,12 +459,11 @@ describe("createSession", () => {
   }, 30_000);
 
   it("push failure does not block subsequent lock operations", async () => {
-    const pushBranch = vi.fn()
-      .mockResolvedValueOnce({ ok: true, value: undefined as never }) // initial session push
-      .mockResolvedValue({ ok: false, error: "remote unavailable" }); // auto-push
+    const addAndCommit = vi.fn().mockResolvedValue({ ok: true, value: true });
+    const pushBranch = vi.fn().mockResolvedValue({ ok: true, value: undefined as never });
     const mockGitOps: GitOps = {
       ...stubGitOps,
-      addAndCommit: vi.fn().mockResolvedValue({ ok: true, value: true }),
+      addAndCommit,
       pushBranch,
     };
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -476,6 +475,10 @@ describe("createSession", () => {
         onAdmissionRequest: defaultAdmissionHandler,
       },
     );
+
+    // Reset after session creation's initial push, then fail subsequent pushes
+    pushBranch.mockClear();
+    pushBranch.mockResolvedValue({ ok: false, error: "remote unavailable" });
 
     result.publishUpdate({
       type: "lock-acquire",
@@ -489,7 +492,7 @@ describe("createSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(pushBranch).toHaveBeenCalledTimes(2); // initial + auto-push
+      expect(pushBranch).toHaveBeenCalledTimes(1);
     });
 
     expect(consoleSpy).toHaveBeenCalledWith(
@@ -536,6 +539,55 @@ describe("createSession", () => {
       );
     });
     consoleSpy.mockRestore();
+  }, 30_000);
+
+  it("consecutive rapid lock-releases chain sequentially", async () => {
+    const callOrder: string[] = [];
+    const addAndCommit = vi.fn().mockImplementation(async (msg: string) => {
+      callOrder.push(`commit-start:${msg.includes("peer-1") ? "1" : "2"}`);
+      // Simulate async work so second release can fire before first resolves
+      await new Promise((r) => setTimeout(r, 50));
+      callOrder.push(`commit-end:${msg.includes("peer-1") ? "1" : "2"}`);
+      return { ok: true, value: true };
+    });
+    const pushBranch = vi.fn().mockResolvedValue({ ok: true, value: undefined as never });
+    const mockGitOps: GitOps = {
+      ...stubGitOps,
+      addAndCommit,
+      pushBranch,
+    };
+    result = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: mockGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+    );
+
+    // Reset after session creation's initial push
+    pushBranch.mockClear();
+
+    // First lock cycle
+    result.publishUpdate({ type: "lock-acquire", peerId: "peer-1", timestamp: 1_000 });
+    result.publishUpdate({ type: "lock-release", peerId: "peer-1", timestamp: 2_000 });
+
+    // Second lock cycle fires immediately — before first push resolves
+    result.publishUpdate({ type: "lock-acquire", peerId: "peer-2", timestamp: 3_000 });
+    result.publishUpdate({ type: "lock-release", peerId: "peer-2", timestamp: 4_000 });
+
+    await vi.waitFor(() => {
+      expect(addAndCommit).toHaveBeenCalledTimes(2);
+      expect(pushBranch).toHaveBeenCalledTimes(2);
+    });
+
+    // The key assertion: second commit starts AFTER first commit ends (sequential chaining)
+    expect(callOrder).toEqual([
+      "commit-start:1",
+      "commit-end:1",
+      "commit-start:2",
+      "commit-end:2",
+    ]);
   }, 30_000);
 
   it("forceReleaseLock releases another peer's lock", async () => {
