@@ -319,13 +319,18 @@ export async function createSession(
     }
 
     if (update.type === "lock-release") {
-      pendingPush = (async () => {
+      const previous = pendingPush ?? Promise.resolve();
+      const current = previous.then(async () => {
         try {
           const commitResult = await gitOps.addAndCommit(
             `hoop: sync after lock release by ${update.peerId}`,
             worktreePath,
           );
-          if (commitResult.ok && commitResult.value) {
+          if (!commitResult.ok) {
+            console.error("[hoop] auto-commit failed:", commitResult.error);
+            return;
+          }
+          if (commitResult.value) {
             const pushResult = await gitOps.pushBranch(branchName);
             if (!pushResult.ok) {
               console.error("[hoop] auto-push failed:", pushResult.error);
@@ -334,9 +339,12 @@ export async function createSession(
         } catch (err) {
           console.error("[hoop] auto-push failed:", err);
         } finally {
-          pendingPush = null;
+          if (pendingPush === current) {
+            pendingPush = null;
+          }
         }
-      })();
+      });
+      pendingPush = current;
     }
 
     for (const listener of publishedUpdateListeners) {
@@ -362,6 +370,9 @@ export async function createSession(
     return accumulator.getLockSnapshot(timestamp);
   };
 
+  // Host-local acquires skip the pendingPush gate because the host already
+  // has the latest worktree state on disk — it IS the filesystem authority.
+  // Remote peers are gated in the UPDATE_PROTOCOL handler instead.
   const acquireLock = (
     peerId: string = node.getPeerId(),
     timestamp: number = Date.now(),
