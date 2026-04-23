@@ -147,6 +147,8 @@ export interface CreateSessionResult {
   releaseLock: (peerId?: string, timestamp?: number) => LockReleaseResult;
   forceReleaseLock: (timestamp?: number) => LockReleaseResult;
   getLockStatus: () => HoopLock;
+  /** Resolves when any in-flight auto-push completes. Call before teardown. */
+  drainPendingPush: () => Promise<void>;
 }
 
 export async function createSession(
@@ -318,6 +320,13 @@ export async function createSession(
       params.onLockChange?.(accumulator.getLockSnapshot(update.timestamp));
     }
 
+    // Auto-push fires for every lock-release regardless of origin (normal release,
+    // force release, TTL expiry, peer disconnect). This is intentional: the host
+    // worktree is the single source of truth, and any transition to "free" means
+    // the next agent needs the latest state on the remote branch. Even if the
+    // previous holder timed out or crashed, the worktree already contains whatever
+    // partial work was applied — pushing it ensures remote peers start from reality
+    // rather than a stale snapshot.
     if (update.type === "lock-release") {
       const previous = pendingPush ?? Promise.resolve();
       const current = previous.then(async () => {
@@ -331,9 +340,9 @@ export async function createSession(
             return;
           }
           if (commitResult.value) {
-            const pushResult = await gitOps.pushBranch(branchName);
-            if (!pushResult.ok) {
-              console.error("[hoop] auto-push failed:", pushResult.error);
+            const autoPushResult = await gitOps.pushBranch(branchName);
+            if (!autoPushResult.ok) {
+              console.error("[hoop] auto-push failed:", autoPushResult.error);
             }
           }
         } catch (err) {
@@ -683,6 +692,10 @@ export async function createSession(
     }
   });
 
+  const drainPendingPush = async (): Promise<void> => {
+    if (pendingPush) await pendingPush;
+  };
+
   return {
     sessionCode,
     hostId,
@@ -705,5 +718,6 @@ export async function createSession(
     releaseLock,
     forceReleaseLock,
     getLockStatus,
+    drainPendingPush,
   };
 }

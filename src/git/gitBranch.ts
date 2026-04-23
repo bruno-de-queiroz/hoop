@@ -214,6 +214,11 @@ export async function applyGitPatch(
   }
 }
 
+/**
+ * Stages all changes (`git add -A` — tracked, untracked, and deletions) then
+ * commits with the given message. Returns `true` when a commit was created,
+ * `false` when the working tree was already clean.
+ */
 export async function addAndCommit(
   message: string,
   cwd?: string,

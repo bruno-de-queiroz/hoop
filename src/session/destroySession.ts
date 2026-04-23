@@ -9,6 +9,7 @@ export interface DestroySessionParams {
   node: HoopNode;
   store: SessionStore;
   gitOps: Pick<GitOps, "removeSessionWorktree" | "deleteRemoteBranch">;
+  drainPendingPush?: () => Promise<void>;
 }
 
 export interface DestroySessionResult {
@@ -18,8 +19,17 @@ export interface DestroySessionResult {
 export async function destroySession(
   params: DestroySessionParams,
 ): Promise<DestroySessionResult> {
-  const { sessionCode, branchName, worktreePath, node, store, gitOps } = params;
+  const { sessionCode, branchName, worktreePath, node, store, gitOps, drainPendingPush } = params;
   const errors: string[] = [];
+
+  if (drainPendingPush) {
+    try {
+      await drainPendingPush();
+    } catch (err) {
+      console.error("[hoop] destroySession: failed to drain pending push:", err);
+      errors.push(`Failed to drain pending push: ${(err as Error).message}`);
+    }
+  }
 
   try {
     await node.stop();

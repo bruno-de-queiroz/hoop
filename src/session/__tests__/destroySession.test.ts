@@ -147,6 +147,41 @@ describe("destroySession", () => {
     expect(params.store.exists("ABCD12")).toBe(false);
   });
 
+  it("awaits drainPendingPush before cleanup when provided", async () => {
+    const callOrder: string[] = [];
+    const drainPendingPush = vi.fn<() => Promise<void>>().mockImplementation(async () => {
+      callOrder.push("drain");
+    });
+    const params = makeParams({
+      drainPendingPush,
+      node: {
+        stop: vi.fn<() => Promise<void>>().mockImplementation(async () => { callOrder.push("node.stop"); }),
+      } as unknown as HoopNode,
+      gitOps: {
+        deleteRemoteBranch: vi.fn().mockImplementation(async () => { callOrder.push("deleteRemoteBranch"); return { ok: true, value: undefined as never }; }),
+        removeSessionWorktree: vi.fn().mockImplementation(async () => { callOrder.push("removeSessionWorktree"); return { ok: true, value: undefined as never }; }),
+      },
+    });
+
+    const result = await destroySession(params);
+
+    expect(result.errors).toEqual([]);
+    expect(drainPendingPush).toHaveBeenCalledTimes(1);
+    expect(callOrder).toEqual(["drain", "node.stop", "deleteRemoteBranch", "removeSessionWorktree"]);
+  });
+
+  it("continues cleanup when drainPendingPush throws", async () => {
+    const drainPendingPush = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("push in progress failed"));
+    const params = makeParams({ drainPendingPush });
+
+    const result = await destroySession(params);
+
+    expect(result.errors).toEqual(["Failed to drain pending push: push in progress failed"]);
+    expect(params.gitOps.deleteRemoteBranch).toHaveBeenCalled();
+    expect(params.gitOps.removeSessionWorktree).toHaveBeenCalled();
+    expect(params.store.exists("ABCD12")).toBe(false);
+  });
+
   it("handles session already removed from store gracefully", async () => {
     const params = makeParams();
     params.store.delete("ABCD12");
