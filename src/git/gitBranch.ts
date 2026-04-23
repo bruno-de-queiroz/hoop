@@ -220,22 +220,8 @@ export async function addAndCommit(
 ): Promise<GitResult<boolean>> {
   try {
     await git(["add", "-A"], cwd);
-    // Exit code 1 means there are staged changes; 0 means clean.
-    const exitCode = await new Promise<number>((resolve, reject) => {
-      execFile("git", ["diff", "--cached", "--quiet"], { cwd }, (error) => {
-        if (error) {
-          const code = typeof error.code === "number" ? error.code : undefined;
-          if (code === 1) {
-            resolve(1);
-          } else {
-            reject(new Error((error as { stderr?: string }).stderr ?? error.message));
-          }
-        } else {
-          resolve(0);
-        }
-      });
-    });
-    if (exitCode === 0) {
+    const staged = await git(["diff", "--cached", "--name-only"], cwd);
+    if (staged === "") {
       return { ok: true, value: false };
     }
     await git(["commit", "-m", message], cwd);

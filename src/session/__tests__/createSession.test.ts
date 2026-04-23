@@ -378,10 +378,12 @@ describe("createSession", () => {
   }, 30_000);
 
   it("lock-release triggers addAndCommit and pushBranch", async () => {
+    const addAndCommit = vi.fn().mockResolvedValue({ ok: true, value: true });
+    const pushBranch = vi.fn().mockResolvedValue({ ok: true, value: undefined as never });
     const mockGitOps: GitOps = {
       ...stubGitOps,
-      addAndCommit: vi.fn().mockResolvedValue({ ok: true, value: true }),
-      pushBranch: vi.fn().mockResolvedValue({ ok: true, value: undefined as never }),
+      addAndCommit,
+      pushBranch,
     };
     result = await createSession(
       {
@@ -391,6 +393,9 @@ describe("createSession", () => {
         onAdmissionRequest: defaultAdmissionHandler,
       },
     );
+
+    // Reset after session creation's initial push
+    pushBranch.mockClear();
 
     result.publishUpdate({
       type: "lock-acquire",
@@ -405,14 +410,15 @@ describe("createSession", () => {
 
     // Wait for the async push to complete
     await vi.waitFor(() => {
-      expect(mockGitOps.addAndCommit).toHaveBeenCalledTimes(1);
+      expect(addAndCommit).toHaveBeenCalledTimes(1);
     });
 
-    expect(mockGitOps.addAndCommit).toHaveBeenCalledWith(
+    expect(addAndCommit).toHaveBeenCalledWith(
       "hoop: sync after lock release by peer-1",
       result.worktreePath,
     );
-    expect(mockGitOps.pushBranch).toHaveBeenCalledWith(result.branchName);
+    expect(pushBranch).toHaveBeenCalledTimes(1);
+    expect(pushBranch).toHaveBeenCalledWith(result.branchName);
   }, 30_000);
 
   it("lock-release skips push when nothing was committed", async () => {
@@ -494,6 +500,41 @@ describe("createSession", () => {
     // Lock can still be acquired after failed push
     const acquire = result.acquireLock("peer-2");
     expect(acquire.acquired).toBe(true);
+    consoleSpy.mockRestore();
+  }, 30_000);
+
+  it("addAndCommit failure is logged", async () => {
+    const mockGitOps: GitOps = {
+      ...stubGitOps,
+      addAndCommit: vi.fn().mockResolvedValue({ ok: false, error: "index.lock exists" }),
+    };
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    result = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: mockGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+    );
+
+    result.publishUpdate({
+      type: "lock-acquire",
+      peerId: "peer-1",
+      timestamp: 1_000,
+    });
+    result.publishUpdate({
+      type: "lock-release",
+      peerId: "peer-1",
+      timestamp: 2_000,
+    });
+
+    await vi.waitFor(() => {
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "[hoop] auto-commit failed:",
+        "index.lock exists",
+      );
+    });
     consoleSpy.mockRestore();
   }, 30_000);
 

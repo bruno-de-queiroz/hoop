@@ -284,8 +284,7 @@ describe("git operations (real)", () => {
 
       // Modify a.txt, delete b.txt
       await writeFile(join(repoDir, "a.txt"), "modified\n");
-      const { rm: rmFile } = await import("node:fs/promises");
-      await rmFile(join(repoDir, "b.txt"));
+      await rm(join(repoDir, "b.txt"));
 
       const result = await addAndCommit("hoop: modify and delete", repoDir);
       expect(result).toEqual({ ok: true, value: true });
