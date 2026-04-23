@@ -2,6 +2,8 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { joinSession, stubJoinGitOps, type JoinSessionResult, type JoinGitOps } from "../joinSession.js";
 import { createSession, stubGitOps, defaultAdmissionHandler, type CreateSessionResult } from "../createSession.js";
 import { SessionStore } from "../session.js";
+import { SYNC_PROTOCOL, readFromStream, writeToStream, type SyncRequest, type SyncResponse } from "../../network/protocol.js";
+import { createEmptyStateTree } from "../../state/stateTree.js";
 
 describe("joinSession", () => {
   let hostResult: CreateSessionResult | undefined;
@@ -64,6 +66,89 @@ describe("joinSession", () => {
     });
 
     expect(joinResult.executionTarget).toBe("proponent-side");
+  }, 30_000);
+
+  it("defaults executionTarget to host-only when host omits it (legacy host)", async () => {
+    const store = new SessionStore();
+
+    hostResult = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+      store,
+    );
+
+    // Replace SYNC_PROTOCOL handler with one that omits executionTarget
+    await hostResult.node.unhandle(SYNC_PROTOCOL);
+    await hostResult.node.handle(SYNC_PROTOCOL, async (stream) => {
+      await readFromStream<SyncRequest>(stream);
+      const response: Omit<SyncResponse, "executionTarget"> = {
+        stateTree: createEmptyStateTree(),
+      };
+      await writeToStream(stream, response);
+    });
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    joinResult = await joinSession({
+      sessionCode: hostResult.sessionCode,
+      hostAddress: hostResult.listenAddresses[0],
+      email: "test@example.com",
+      networkConfig: { transportMode: "test" },
+      gitOps: stubJoinGitOps,
+    });
+
+    expect(joinResult.executionTarget).toBe("host-only");
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Host did not send a valid executionTarget"),
+      "undefined",
+    );
+    errorSpy.mockRestore();
+  }, 30_000);
+
+  it("defaults executionTarget to host-only when host sends invalid value", async () => {
+    const store = new SessionStore();
+
+    hostResult = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: stubGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+      store,
+    );
+
+    // Replace SYNC_PROTOCOL handler with one that sends a bogus executionTarget
+    await hostResult.node.unhandle(SYNC_PROTOCOL);
+    await hostResult.node.handle(SYNC_PROTOCOL, async (stream) => {
+      await readFromStream<SyncRequest>(stream);
+      const response = {
+        stateTree: createEmptyStateTree(),
+        executionTarget: "garbage-value",
+      };
+      await writeToStream(stream, response);
+    });
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    joinResult = await joinSession({
+      sessionCode: hostResult.sessionCode,
+      hostAddress: hostResult.listenAddresses[0],
+      email: "test@example.com",
+      networkConfig: { transportMode: "test" },
+      gitOps: stubJoinGitOps,
+    });
+
+    expect(joinResult.executionTarget).toBe("host-only");
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Host did not send a valid executionTarget"),
+      "garbage-value",
+    );
+    errorSpy.mockRestore();
   }, 30_000);
 
   it("reports password provided when given", async () => {

@@ -40,6 +40,7 @@ import {
   type HoopLock,
 } from "../state/hoopLock.js";
 import { computeFileDiff } from "../diff/computeDiff.js";
+import type { ExecutionTarget } from "./session.js";
 import { validateSessionCode } from "./sessionCode.js";
 import {
   getGitRoot as defaultGetGitRoot,
@@ -86,7 +87,7 @@ export interface JoinSessionResult {
   node: HoopNode;
   stateTree: StateTree;
   branchName?: string;
-  executionTarget?: string;
+  executionTarget: ExecutionTarget;
   accumulatedState?: AccumulatedState;
   sendUpdate: (update: NonLockStateUpdate) => Promise<StateUpdateResponse>;
   sendFileChange: (filePath: string, oldContent: string, newContent: string) => Promise<StateUpdateResponse>;
@@ -180,7 +181,14 @@ export async function joinSession(
     const syncResponse = await readFromStream<SyncResponse>(syncStream);
 
     let branchName: string | undefined;
-    const executionTarget = syncResponse.executionTarget;
+    const validTargets: readonly string[] = ["host-only", "proponent-side"] as const;
+    let executionTarget: ExecutionTarget;
+    if (syncResponse.executionTarget && validTargets.includes(syncResponse.executionTarget)) {
+      executionTarget = syncResponse.executionTarget;
+    } else {
+      executionTarget = "host-only";
+      console.error("[joinSession] Host did not send a valid executionTarget (got %s), defaulting to host-only", syncResponse.executionTarget ?? "undefined");
+    }
 
     const gitRootResult = await params.gitOps.getGitRoot();
 
