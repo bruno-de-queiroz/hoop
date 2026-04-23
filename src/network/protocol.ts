@@ -3,6 +3,7 @@ import type { StateTree } from "../state/stateTree.js";
 import type { StateUpdate, BroadcastEnvelope } from "../state/stateUpdate.js";
 import type { AccumulatedState } from "../state/hostStateAccumulator.js";
 import type { HoopLock } from "../state/hoopLock.js";
+import type { ExecutionTarget } from "../session/session.js";
 
 export const AUTH_PROTOCOL = "/hoop/auth/1.0.0";
 export const AUTH_TIMEOUT_MS = 10_000;
@@ -39,7 +40,7 @@ export interface SyncRequest {
 export interface SyncResponse {
   stateTree: StateTree;
   branchName?: string;
-  executionTarget?: string;
+  executionTarget?: ExecutionTarget;
   accumulatedState?: AccumulatedState;
   currentSeqNo?: number;
   replayedUpdates?: BroadcastEnvelope[];

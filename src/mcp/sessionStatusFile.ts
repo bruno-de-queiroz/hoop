@@ -1,5 +1,6 @@
 import { writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import type { ExecutionTarget } from "../session/session.js";
 
 export interface SessionStatusData {
   active: true;
@@ -8,7 +9,7 @@ export interface SessionStatusData {
   branchName: string;
   pid: number;
   startedAt: number;
-  executionTarget?: string;
+  executionTarget?: ExecutionTarget;
   worktreePath?: string;
   passwordProtected?: boolean;
   hostPeerId?: string;
