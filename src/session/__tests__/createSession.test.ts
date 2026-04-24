@@ -507,9 +507,11 @@ describe("createSession", () => {
   }, 30_000);
 
   it("addAndCommit failure is logged", async () => {
+    const pushBranch = vi.fn().mockResolvedValue({ ok: true, value: undefined as never });
     const mockGitOps: GitOps = {
       ...stubGitOps,
       addAndCommit: vi.fn().mockResolvedValue({ ok: false, error: "index.lock exists" }),
+      pushBranch,
     };
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     result = await createSession(
@@ -520,6 +522,9 @@ describe("createSession", () => {
         onAdmissionRequest: defaultAdmissionHandler,
       },
     );
+
+    // Reset after session creation's initial push
+    pushBranch.mockClear();
 
     result.publishUpdate({
       type: "lock-acquire",
@@ -538,18 +543,29 @@ describe("createSession", () => {
         "index.lock exists",
       );
     });
+
+    // pushBranch should not be called when addAndCommit fails
+    expect(pushBranch).not.toHaveBeenCalled();
     consoleSpy.mockRestore();
   }, 30_000);
 
   it("consecutive rapid lock-releases chain sequentially", async () => {
     const callOrder: string[] = [];
-    const addAndCommit = vi.fn().mockImplementation(async (msg: string) => {
-      callOrder.push(`commit-start:${msg.includes("peer-1") ? "1" : "2"}`);
-      // Simulate async work so second release can fire before first resolves
-      await new Promise((r) => setTimeout(r, 50));
-      callOrder.push(`commit-end:${msg.includes("peer-1") ? "1" : "2"}`);
-      return { ok: true, value: true };
-    });
+    let resolveFirst!: (v: { ok: true; value: true }) => void;
+    let resolveSecond!: (v: { ok: true; value: true }) => void;
+    const addAndCommit = vi.fn()
+      .mockImplementationOnce(() => {
+        callOrder.push("commit-start:1");
+        return new Promise((resolve) => {
+          resolveFirst = () => { callOrder.push("commit-end:1"); resolve({ ok: true, value: true }); };
+        });
+      })
+      .mockImplementationOnce(() => {
+        callOrder.push("commit-start:2");
+        return new Promise((resolve) => {
+          resolveSecond = () => { callOrder.push("commit-end:2"); resolve({ ok: true, value: true }); };
+        });
+      });
     const pushBranch = vi.fn().mockResolvedValue({ ok: true, value: undefined as never });
     const mockGitOps: GitOps = {
       ...stubGitOps,
@@ -576,12 +592,19 @@ describe("createSession", () => {
     result.publishUpdate({ type: "lock-acquire", peerId: "peer-2", timestamp: 3_000 });
     result.publishUpdate({ type: "lock-release", peerId: "peer-2", timestamp: 4_000 });
 
-    await vi.waitFor(() => {
-      expect(addAndCommit).toHaveBeenCalledTimes(2);
-      expect(pushBranch).toHaveBeenCalledTimes(2);
-    });
+    // First commit started, second must not have started yet (chaining)
+    await vi.waitFor(() => { expect(callOrder).toContain("commit-start:1"); });
+    expect(callOrder).not.toContain("commit-start:2");
 
-    // The key assertion: second commit starts AFTER first commit ends (sequential chaining)
+    // Resolve first — second should start only after first completes
+    resolveFirst({ ok: true, value: true });
+    await vi.waitFor(() => { expect(callOrder).toContain("commit-start:2"); });
+
+    // Resolve second
+    resolveSecond({ ok: true, value: true });
+    await vi.waitFor(() => { expect(pushBranch).toHaveBeenCalledTimes(2); });
+
+    // The key assertion: strict sequential ordering
     expect(callOrder).toEqual([
       "commit-start:1",
       "commit-end:1",

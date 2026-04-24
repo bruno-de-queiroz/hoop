@@ -147,8 +147,8 @@ export interface CreateSessionResult {
   releaseLock: (peerId?: string, timestamp?: number) => LockReleaseResult;
   forceReleaseLock: (timestamp?: number) => LockReleaseResult;
   getLockStatus: () => HoopLock;
-  /** Resolves when any in-flight auto-push completes. Call before teardown. */
-  drainPendingPush: () => Promise<void>;
+  /** Resolves when any in-flight auto-push completes. Rejects on timeout. Call during teardown. */
+  drainPendingPush: (timeoutMs?: number) => Promise<void>;
 }
 
 export async function createSession(
@@ -691,8 +691,16 @@ export async function createSession(
     }
   });
 
-  const drainPendingPush = async (): Promise<void> => {
-    if (pendingPush) await pendingPush;
+  const DRAIN_TIMEOUT_MS = 10_000;
+
+  const drainPendingPush = async (timeoutMs: number = DRAIN_TIMEOUT_MS): Promise<void> => {
+    if (!pendingPush) return;
+    await Promise.race([
+      pendingPush,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("drainPendingPush timed out")), timeoutMs),
+      ),
+    ]);
   };
 
   return {

@@ -147,7 +147,7 @@ describe("destroySession", () => {
     expect(params.store.exists("ABCD12")).toBe(false);
   });
 
-  it("awaits drainPendingPush before cleanup when provided", async () => {
+  it("drains pending push after node.stop and before git cleanup", async () => {
     const callOrder: string[] = [];
     const drainPendingPush = vi.fn<() => Promise<void>>().mockImplementation(async () => {
       callOrder.push("drain");
@@ -167,7 +167,8 @@ describe("destroySession", () => {
 
     expect(result.errors).toEqual([]);
     expect(drainPendingPush).toHaveBeenCalledTimes(1);
-    expect(callOrder).toEqual(["drain", "node.stop", "deleteRemoteBranch", "removeSessionWorktree"]);
+    // node.stop fires disconnect events → lock releases → auto-pushes, so drain must come after stop
+    expect(callOrder).toEqual(["node.stop", "drain", "deleteRemoteBranch", "removeSessionWorktree"]);
   });
 
   it("continues cleanup when drainPendingPush throws", async () => {

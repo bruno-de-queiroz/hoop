@@ -22,6 +22,16 @@ export async function destroySession(
   const { sessionCode, branchName, worktreePath, node, store, gitOps, drainPendingPush } = params;
   const errors: string[] = [];
 
+  // Stop the node first — this fires peer:disconnect events which may trigger
+  // final lock-releases and their auto-pushes. Drain runs afterward to await
+  // any pushes created during shutdown.
+  try {
+    await node.stop();
+  } catch (err) {
+    console.error("[hoop] destroySession: failed to stop node:", err);
+    errors.push(`Failed to stop node: ${(err as Error).message}`);
+  }
+
   if (drainPendingPush) {
     try {
       await drainPendingPush();
@@ -29,13 +39,6 @@ export async function destroySession(
       console.error("[hoop] destroySession: failed to drain pending push:", err);
       errors.push(`Failed to drain pending push: ${(err as Error).message}`);
     }
-  }
-
-  try {
-    await node.stop();
-  } catch (err) {
-    console.error("[hoop] destroySession: failed to stop node:", err);
-    errors.push(`Failed to stop node: ${(err as Error).message}`);
   }
 
   try {
