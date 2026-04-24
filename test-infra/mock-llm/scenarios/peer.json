@@ -1,0 +1,24 @@
+[
+  {
+    "stop_reason": "tool_use",
+    "content": [
+      { "type": "text", "text": "I'll join the hoop session now." },
+      {
+        "type": "tool_use",
+        "id": "toolu_peer_join_01",
+        "name": "mcp__hoop__hoop_join_session",
+        "input": {
+          "sessionCode": "{SESSION_CODE}",
+          "hostAddress": "{HOST_ADDRESS}",
+          "email": "peer@test.com"
+        }
+      }
+    ]
+  },
+  {
+    "stop_reason": "end_turn",
+    "content": [
+      { "type": "text", "text": "Successfully joined the hoop session {SESSION_CODE}." }
+    ]
+  }
+]

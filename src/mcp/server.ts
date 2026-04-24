@@ -234,6 +234,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           executionTarget: result.executionTarget,
           worktreePath: result.worktreePath,
           passwordProtected: result.passwordProtected,
+          listenAddresses: result.listenAddresses,
         }, deps?.sessionStatusPath);
         state.activeEditsTracker = new ActiveEditsTracker(
           result.peerId,
@@ -935,7 +936,10 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.stopHostUpdateMirror = null;
     state.stopPeerDisconnectCleanup?.();
     state.stopPeerDisconnectCleanup = null;
-    clearSessionStatus(deps?.sessionStatusPath);
+    // Intentionally do NOT clearSessionStatus here — signal-triggered shutdowns
+    // (SIGTERM/SIGINT) should leave the status file so external tooling can
+    // detect the zombie session.  Explicit hoop_leave_session clears it after
+    // gracefulShutdown returns.
     state.role = null;
     state.hostSession = null;
     state.peerSession = null;
@@ -1057,6 +1061,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
       try {
         const result = await gracefulShutdown();
+        clearSessionStatus(deps?.sessionStatusPath);
         return jsonResult(result);
       } catch (e) {
         return errorResult(

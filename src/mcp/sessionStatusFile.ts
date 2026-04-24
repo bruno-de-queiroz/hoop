@@ -13,10 +13,15 @@ export interface SessionStatusData {
   worktreePath?: string;
   passwordProtected?: boolean;
   hostPeerId?: string;
+  listenAddresses?: string[];
 }
 
 export function getSessionStatusPath(customPath?: string): string {
-  return customPath ?? join(process.env.TMPDIR || "/tmp", "hoop-session-status.json");
+  return (
+    customPath ??
+    process.env.HOOP_SESSION_STATUS_PATH ??
+    join(process.env.TMPDIR || "/tmp", "hoop-session-status.json")
+  );
 }
 
 export function writeSessionStatus(

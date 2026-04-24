@@ -3,6 +3,7 @@ import { defineConfig } from 'vitest/config';
 // Run all:             npx vitest run
 // Run unit only:       npx vitest run --project unit
 // Run integration only: npx vitest run --project integration
+// Run docker only:     npx vitest run --project docker  (requires running services — see docker-compose.test.yml)
 
 const sharedAlias = {
   // node-datachannel is a native WebRTC addon that requires a compiled binary.
@@ -42,6 +43,20 @@ export default defineConfig({
           name: 'integration',
           environment: 'node',
           include: ['src/**/*.e2e.test.ts'],
+          exclude: ['src/**/*.docker.e2e.test.ts'],
+          server: { deps: sharedDeps },
+        },
+      },
+      {
+        resolve: { alias: sharedAlias },
+        test: {
+          name: 'docker',
+          environment: 'node',
+          include: [
+            'src/**/*.docker.e2e.test.ts',
+            'src/__tests__/claudeCodeSkill.docker.e2e.test.ts',
+          ],
+          testTimeout: 60_000,
           server: { deps: sharedDeps },
         },
       },

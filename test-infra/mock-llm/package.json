@@ -1,0 +1,8 @@
+{
+  "name": "mock-llm",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  }
+}

@@ -1,0 +1,23 @@
+[
+  {
+    "stop_reason": "tool_use",
+    "content": [
+      { "type": "text", "text": "I'll create a new hoop session now." },
+      {
+        "type": "tool_use",
+        "id": "toolu_host_create_01",
+        "name": "mcp__hoop__hoop_create_session",
+        "input": { "executionTarget": "host-only" }
+      }
+    ]
+  },
+  {
+    "stop_reason": "end_turn",
+    "content": [
+      {
+        "type": "text",
+        "text": "Hoop session created successfully. Session code: {SESSION_CODE}. Peers can connect using address: {HOST_ADDRESS}"
+      }
+    ]
+  }
+]

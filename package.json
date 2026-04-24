@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:docker": "vitest run --project docker"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

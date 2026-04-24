@@ -30,3 +30,40 @@ jobs:
 
       - name: Test
         run: npm test
+
+  docker-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Build claude-runner image
+        run: docker build -t hoop-claude-runner test-infra/claude-runner/
+
+      - name: Start test services
+        run: docker compose -f docker-compose.test.yml up -d --wait
+
+      - name: Initialise Gitea and export env vars
+        run: bash scripts/setup-gitea.sh >> "$GITHUB_ENV"
+
+      - name: Run docker tests
+        run: MOCK_LLM_URL=http://localhost:4000 npm run test:docker
+
+      - name: Stop test services
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v

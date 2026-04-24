@@ -1,0 +1,28 @@
+services:
+  gitea:
+    image: gitea/gitea:1.22-rootless
+    ports:
+      - "3000:3000"
+    environment:
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__server__HTTP_PORT: "3000"
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__server__DOMAIN: localhost
+      GITEA__server__ROOT_URL: "http://localhost:3000/"
+      GITEA__service__DISABLE_REGISTRATION: "false"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/healthz"]
+      interval: 5s
+      timeout: 10s
+      retries: 15
+
+  mock-llm:
+    build:
+      context: ./test-infra/mock-llm
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
