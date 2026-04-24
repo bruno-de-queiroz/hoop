@@ -19,7 +19,7 @@ export function isZeroTrustThreshold(value: unknown): value is ZeroTrustThreshol
   if (typeof value === "string") {
     return (ZERO_TRUST_NAMED_THRESHOLDS as readonly string[]).includes(value);
   }
-  return typeof value === "number" && Number.isInteger(value) && value > 0;
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 export interface Session {

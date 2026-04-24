@@ -1661,35 +1661,24 @@ describe("hoop MCP server", () => {
     expect(status.zeroTrustThreshold).toBe("majority");
   }, 30_000);
 
-  it("peer mirrors zero-trust threshold from metadata update", async () => {
+  it("mirrorObservedUpdate applies zero-trust threshold from published update", async () => {
     ({ server, state, client } = await setup());
 
-    // Simulate peer receiving a threshold metadata update
-    state!.observedGovernanceMode = "zero-trust";
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
 
-    const thresholdUpdate = {
-      type: "metadata-update" as const,
-      peerId: "host-peer",
+    // Publish a threshold metadata update through the host session.
+    // The mirrorObservedUpdate callback should update observedZeroTrustThreshold.
+    state!.hostSession!.publishUpdate({
+      type: "metadata-update",
+      peerId: state!.hostSession!.peerId,
       key: ZERO_TRUST_THRESHOLD_KEY,
       value: "consensus",
       timestamp: Date.now(),
-    };
-
-    // Directly invoke the mirror logic by pushing to pendingUpdates
-    // and checking state update
-    state!.role = "peer";
-    state!.pendingUpdates.push(thresholdUpdate);
-
-    // The mirrorObservedUpdate is internal, but we can verify the state
-    // by checking that the internal function processes it correctly
-    // Since we can't call mirrorObservedUpdate directly, we verify via state
-    // The mirror is tested indirectly — set state and verify get_status
-
-    state!.observedZeroTrustThreshold = "consensus";
+    });
 
     expect(state!.observedZeroTrustThreshold).toBe("consensus");
-
-    // Reset for cleanup
-    state!.role = null;
-  });
+  }, 30_000);
 });
