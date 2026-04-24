@@ -973,6 +973,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.peerSession = null;
     state.pendingUpdates.length = 0;
     state.observedGovernanceConfig = DEFAULT_GOVERNANCE_CONFIG;
+    state.governanceAlert = null;
   }
 
   async function gracefulShutdown(): Promise<{ left: boolean; previousRole: string | null; sessionCode: string | undefined }> {
@@ -1077,6 +1078,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           && current.threshold === newConfig.threshold));
 
       if (unchanged) {
+        state.governanceAlert = null;
         return jsonResult({ accepted: true, governance: newConfig, seqNo: null, unchanged: true });
       }
 
@@ -1122,5 +1124,5 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  return { server, state, gracefulShutdown };
+  return { server, state, gracefulShutdown, revalidateGovernanceThreshold };
 }

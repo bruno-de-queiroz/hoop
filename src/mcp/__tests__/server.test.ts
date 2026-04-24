@@ -28,7 +28,7 @@ const TEST_DEPS: HoopMcpDeps = {
 };
 
 async function setup(deps = TEST_DEPS) {
-  const { server, state } = createHoopMcpServer(deps);
+  const { server, state, revalidateGovernanceThreshold } = createHoopMcpServer(deps);
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -36,7 +36,7 @@ async function setup(deps = TEST_DEPS) {
   const client = new Client({ name: "test-client", version: "0.1.0" });
   await client.connect(clientTransport);
 
-  return { server, state, client };
+  return { server, state, client, revalidateGovernanceThreshold };
 }
 
 type CallToolResult = Awaited<ReturnType<Client["callTool"]>>;
@@ -51,6 +51,7 @@ describe("hoop MCP server", () => {
   let client: Client | undefined;
   let server: Awaited<ReturnType<typeof createHoopMcpServer>>["server"] | undefined;
   let state: Awaited<ReturnType<typeof createHoopMcpServer>>["state"] | undefined;
+  let revalidateGovernanceThreshold: Awaited<ReturnType<typeof createHoopMcpServer>>["revalidateGovernanceThreshold"] | undefined;
 
   afterEach(async () => {
     // Clean up session if active
@@ -1797,7 +1798,7 @@ describe("hoop MCP server", () => {
   }, 30_000);
 
   it("peer disconnect triggers governance fallback when threshold exceeds new party size", async () => {
-    ({ server, state, client } = await setup());
+    ({ server, state, client, revalidateGovernanceThreshold } = await setup());
 
     await client!.callTool({
       name: "hoop_create_session",
@@ -1817,26 +1818,16 @@ describe("hoop MCP server", () => {
 
     expect(state!.observedGovernanceConfig).toEqual({ mode: "zero-trust", threshold: 3 });
 
-    // Disconnect one peer — party size drops to 2, threshold 3 > 2 → fallback
-    // The onPeerDisconnect callback calls revalidateGovernanceThreshold
+    // Simulate disconnect: remove peer from hub then drive the real revalidation
     hub.unsubscribe("fake-peer-1");
-    // Fire the disconnect callback the same way the server wires it up
-    state!.activeEditsTracker?.removePeer("fake-peer-1");
-    // Directly call the revalidation since unsubscribe doesn't trigger the server callback
-    // (the callback is wired in createSession's onPeerDisconnect, not in broadcastHub)
-    // We verify the logic by checking state after manually invoking what the callback does:
-    const config = state!.observedGovernanceConfig;
-    if (config.mode === "zero-trust" && typeof config.threshold === "number") {
-      const partySize = 1 + hub.getSubscriberCount();
-      if (config.threshold > partySize) {
-        const newConfig = { mode: "zero-trust" as const, threshold: "consensus" as const };
-        state!.observedGovernanceConfig = newConfig;
-        state!.governanceAlert = `Peer disconnected. Threshold ${config.threshold} exceeds party size ${partySize}. Falling back to consensus.`;
-      }
-    }
+    revalidateGovernanceThreshold!();
 
     expect(state!.observedGovernanceConfig).toEqual({ mode: "zero-trust", threshold: "consensus" });
     expect(state!.governanceAlert).toContain("Peer disconnected");
+
+    // Verify the fallback was also published to the accumulator
+    const configMeta = state!.hostSession!.accumulator.getMetadata(GOVERNANCE_CONFIG_KEY);
+    expect(configMeta!.value).toEqual({ mode: "zero-trust", threshold: "consensus" });
 
     hub.unsubscribe("fake-peer-2");
   }, 30_000);
@@ -1865,6 +1856,61 @@ describe("hoop MCP server", () => {
     const data2 = parseJson(result2) as { governance: { threshold: string }; warning?: string };
     expect(data2.governance.threshold).toBe("consensus");
     expect(data2).not.toHaveProperty("warning");
+  }, 30_000);
+
+  it("governanceAlert does not leak into a new session after leave", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    // Trigger fallback to set alert
+    await client!.callTool({
+      name: "hoop_set_mode",
+      arguments: { mode: "zero-trust", threshold: 5 },
+    });
+    expect(state!.governanceAlert).not.toBeNull();
+
+    // Leave and create a fresh session
+    await client!.callTool({ name: "hoop_leave_session", arguments: {} });
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const status = parseJson(
+      await client!.callTool({ name: "hoop_get_status", arguments: {} }),
+    ) as Record<string, unknown>;
+    expect(status).not.toHaveProperty("governanceAlert");
+    expect(state!.governanceAlert).toBeNull();
+  }, 30_000);
+
+  it("idempotent hoop_set_mode clears stale governance alert", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    // Trigger fallback — threshold 3 exceeds party size 1 → falls back to consensus
+    await client!.callTool({
+      name: "hoop_set_mode",
+      arguments: { mode: "zero-trust", threshold: 3 },
+    });
+    expect(state!.governanceAlert).not.toBeNull();
+    expect(state!.observedGovernanceConfig).toEqual({ mode: "zero-trust", threshold: "consensus" });
+
+    // Re-apply consensus explicitly — unchanged path should still clear the alert
+    const result = await client!.callTool({
+      name: "hoop_set_mode",
+      arguments: { mode: "zero-trust", threshold: "consensus" },
+    });
+    const data = parseJson(result) as { unchanged: boolean };
+    expect(data.unchanged).toBe(true);
+    expect(state!.governanceAlert).toBeNull();
   }, 30_000);
 
   it("mirrorObservedUpdate ignores invalid governance config values", async () => {
