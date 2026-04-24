@@ -153,6 +153,14 @@ describe("HostStateAccumulator", () => {
       expect(snapshot.metadata["key"]).toEqual(existing);
     });
 
+    it("same peer overwrites own value at the same timestamp", () => {
+      acc.accumulate(makeMetadata("peer-1", "key", "first", 1000));
+      const second = makeMetadata("peer-1", "key", "second", 1000);
+      acc.accumulate(second);
+      const snapshot = acc.getSnapshot();
+      expect(snapshot.metadata["key"]).toEqual(second);
+    });
+
     it("tracks multiple metadata keys independently", () => {
       const m1 = makeMetadata("peer-1", "theme", "dark");
       const m2 = makeMetadata("peer-1", "language", "typescript");

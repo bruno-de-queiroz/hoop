@@ -53,7 +53,7 @@ export class HostStateAccumulator {
         if (
           !existing ||
           update.timestamp > existing.timestamp ||
-          (update.timestamp === existing.timestamp && update.peerId > existing.peerId)
+          (update.timestamp === existing.timestamp && update.peerId >= existing.peerId)
         ) {
           this.metadata.set(update.key, update);
         }
