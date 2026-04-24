@@ -9,7 +9,7 @@ export interface DestroySessionParams {
   node: HoopNode;
   store: SessionStore;
   gitOps: Pick<GitOps, "removeSessionWorktree" | "deleteRemoteBranch">;
-  drainPendingPush?: () => Promise<void>;
+  drainPendingPush?: (timeoutMs?: number) => Promise<void>;
 }
 
 export interface DestroySessionResult {

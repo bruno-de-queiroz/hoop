@@ -696,12 +696,13 @@ export async function createSession(
 
   const drainPendingPush = async (timeoutMs: number = DRAIN_TIMEOUT_MS): Promise<void> => {
     if (!pendingPush) return;
+    let timer: ReturnType<typeof setTimeout>;
     await Promise.race([
       pendingPush,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("drainPendingPush timed out")), timeoutMs),
-      ),
-    ]);
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("drainPendingPush timed out")), timeoutMs);
+      }),
+    ]).finally(() => clearTimeout(timer!));
   };
 
   return {

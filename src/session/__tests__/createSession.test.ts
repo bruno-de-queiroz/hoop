@@ -613,6 +613,28 @@ describe("createSession", () => {
     ]);
   }, 30_000);
 
+  it("drainPendingPush rejects when push exceeds timeout", async () => {
+    const pushBranch = vi.fn().mockResolvedValue({ ok: true, value: undefined as never });
+    const mockGitOps: GitOps = {
+      ...stubGitOps,
+      addAndCommit: vi.fn().mockImplementation(() => new Promise(() => {})), // never resolves
+      pushBranch,
+    };
+    result = await createSession(
+      {
+        executionTarget: "host-only",
+        networkConfig: { transportMode: "test" },
+        gitOps: mockGitOps,
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+    );
+
+    result.publishUpdate({ type: "lock-acquire", peerId: "peer-1", timestamp: 1_000 });
+    result.publishUpdate({ type: "lock-release", peerId: "peer-1", timestamp: 2_000 });
+
+    await expect(result.drainPendingPush(50)).rejects.toThrow("timed out");
+  }, 30_000);
+
   it("forceReleaseLock releases another peer's lock", async () => {
     result = await createSession(
       {
