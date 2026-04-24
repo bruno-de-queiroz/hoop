@@ -653,7 +653,7 @@ export async function createSession(
     if (update.type === "metadata-update") {
       const existing = accumulator.getMetadata(update.key);
       if (existing && (update.timestamp < existing.timestamp ||
-          (update.timestamp === existing.timestamp && update.peerId <= existing.peerId))) {
+          (update.timestamp === existing.timestamp && update.peerId < existing.peerId))) {
         const response: StateUpdateResponse = {
           kind: "state-update",
           accepted: false,
