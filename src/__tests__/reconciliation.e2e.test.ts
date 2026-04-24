@@ -10,7 +10,7 @@ import {
   stubJoinGitOps,
   type JoinSessionResult,
 } from "../session/joinSession.js";
-import { SessionStore } from "../session/session.js";
+import { SessionStore, GOVERNANCE_CONFIG_KEY } from "../session/session.js";
 import type {
   StateUpdate,
   CursorUpdate,
@@ -579,6 +579,41 @@ describe("State reconciliation and concurrency handling", () => {
         value: "dark",
         timestamp: 1000,
       });
+    }, 30_000);
+
+    it("peer cannot set reserved governance-config metadata key", async () => {
+      const store = new SessionStore();
+
+      hostResult = await createSession(
+        {
+          executionTarget: "host-only",
+          networkConfig: { transportMode: "test" },
+          gitOps: stubGitOps,
+          onAdmissionRequest: defaultAdmissionHandler,
+        },
+        store,
+      );
+
+      joinResult = await joinSession({
+        sessionCode: hostResult.sessionCode,
+        hostAddress: hostResult.listenAddresses[0],
+        email: 'test@example.com',
+        networkConfig: { transportMode: "test" },
+        gitOps: stubJoinGitOps,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const forgedConfig: MetadataUpdate = {
+        type: "metadata-update",
+        peerId: joinResult.localPeerId,
+        key: GOVERNANCE_CONFIG_KEY,
+        value: { mode: "yolo" },
+        timestamp: Date.now(),
+      };
+      const response = await joinResult.sendUpdate(forgedConfig);
+      expect(response.accepted).toBe(false);
+      expect(response.reason).toBe("reserved-metadata-key");
     }, 30_000);
   });
 

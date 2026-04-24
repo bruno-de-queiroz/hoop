@@ -45,7 +45,7 @@ import {
   type PromptResponse,
 } from "../state/promptRequest.js";
 import { randomUUID } from "node:crypto";
-import { type ExecutionTarget, type Session, SessionStore } from "./session.js";
+import { type ExecutionTarget, type Session, SessionStore, GOVERNANCE_CONFIG_KEY } from "./session.js";
 import { generateSessionCode } from "./sessionCode.js";
 import { type StateTree, createEmptyStateTree } from "../state/stateTree.js";
 import {
@@ -633,6 +633,17 @@ export async function createSession(
         kind: "state-update",
         accepted: false,
         reason: "invalid-patch",
+      };
+      await writeToStream(stream, response);
+      return;
+    }
+
+    // Reserved keys: only the host may set governance config
+    if (update.type === "metadata-update" && update.key === GOVERNANCE_CONFIG_KEY) {
+      const response: StateUpdateResponse = {
+        kind: "state-update",
+        accepted: false,
+        reason: "reserved-metadata-key",
       };
       await writeToStream(stream, response);
       return;

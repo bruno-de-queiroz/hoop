@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { Session, SessionStore } from "../session.js";
+import { Session, SessionStore, isGovernanceConfig, isZeroTrustThreshold } from "../session.js";
 
 describe("SessionStore", () => {
   let store: SessionStore;
@@ -168,5 +168,75 @@ describe("SessionStore", () => {
 
     expect(retrieved?.peerId).toBe("12D3KooWRoundTripPeer");
     expect(retrieved?.listenAddresses).toEqual(["/ip4/10.0.0.1/tcp/9000"]);
+  });
+});
+
+describe("isZeroTrustThreshold", () => {
+  it("accepts named thresholds", () => {
+    expect(isZeroTrustThreshold("majority")).toBe(true);
+    expect(isZeroTrustThreshold("consensus")).toBe(true);
+  });
+
+  it("accepts positive safe integers", () => {
+    expect(isZeroTrustThreshold(1)).toBe(true);
+    expect(isZeroTrustThreshold(100)).toBe(true);
+  });
+
+  it("rejects zero, negative, and non-integer numbers", () => {
+    expect(isZeroTrustThreshold(0)).toBe(false);
+    expect(isZeroTrustThreshold(-1)).toBe(false);
+    expect(isZeroTrustThreshold(2.5)).toBe(false);
+    expect(isZeroTrustThreshold(Infinity)).toBe(false);
+    expect(isZeroTrustThreshold(NaN)).toBe(false);
+  });
+
+  it("rejects unsafe integers", () => {
+    expect(isZeroTrustThreshold(Number.MAX_SAFE_INTEGER + 1)).toBe(false);
+  });
+
+  it("rejects non-threshold strings and other types", () => {
+    expect(isZeroTrustThreshold("all")).toBe(false);
+    expect(isZeroTrustThreshold("")).toBe(false);
+    expect(isZeroTrustThreshold(null)).toBe(false);
+    expect(isZeroTrustThreshold(undefined)).toBe(false);
+    expect(isZeroTrustThreshold({})).toBe(false);
+  });
+});
+
+describe("isGovernanceConfig", () => {
+  it("accepts valid configs", () => {
+    expect(isGovernanceConfig({ mode: "host-only" })).toBe(true);
+    expect(isGovernanceConfig({ mode: "yolo" })).toBe(true);
+    expect(isGovernanceConfig({ mode: "zero-trust", threshold: "majority" })).toBe(true);
+    expect(isGovernanceConfig({ mode: "zero-trust", threshold: "consensus" })).toBe(true);
+    expect(isGovernanceConfig({ mode: "zero-trust", threshold: 3 })).toBe(true);
+  });
+
+  it("rejects zero-trust without threshold", () => {
+    expect(isGovernanceConfig({ mode: "zero-trust" })).toBe(false);
+  });
+
+  it("rejects non-zero-trust with threshold", () => {
+    expect(isGovernanceConfig({ mode: "host-only", threshold: "majority" })).toBe(false);
+    expect(isGovernanceConfig({ mode: "yolo", threshold: 5 })).toBe(false);
+  });
+
+  it("rejects invalid modes", () => {
+    expect(isGovernanceConfig({ mode: "custom" })).toBe(false);
+    expect(isGovernanceConfig({ mode: "" })).toBe(false);
+    expect(isGovernanceConfig({ mode: 42 })).toBe(false);
+  });
+
+  it("rejects non-objects", () => {
+    expect(isGovernanceConfig(null)).toBe(false);
+    expect(isGovernanceConfig(undefined)).toBe(false);
+    expect(isGovernanceConfig("host-only")).toBe(false);
+    expect(isGovernanceConfig(42)).toBe(false);
+  });
+
+  it("rejects zero-trust with invalid threshold", () => {
+    expect(isGovernanceConfig({ mode: "zero-trust", threshold: 0 })).toBe(false);
+    expect(isGovernanceConfig({ mode: "zero-trust", threshold: -1 })).toBe(false);
+    expect(isGovernanceConfig({ mode: "zero-trust", threshold: "all" })).toBe(false);
   });
 });
