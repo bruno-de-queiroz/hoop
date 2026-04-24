@@ -9,6 +9,7 @@ import { stubGitOps } from "../../session/createSession.js";
 import { stubJoinGitOps } from "../../session/joinSession.js";
 import { PendingUpdatesWriter } from "../../state/pendingUpdatesWriter.js";
 import { PendingPromptRequestsWriter } from "../../state/pendingPromptRequestsWriter.js";
+import { GOVERNANCE_MODE_KEY } from "../../session/session.js";
 
 const CONFLICT_REGISTRY = join(tmpdir(), "hoop-conflict-test.json");
 const PENDING_UPDATES_REGISTRY = join(tmpdir(), "hoop-pending-updates-test.json");
@@ -1349,7 +1350,7 @@ describe("hoop MCP server", () => {
       arguments: { mode: "yolo" },
     });
 
-    const metadata = state!.hostSession!.accumulator.getMetadata("governance-mode");
+    const metadata = state!.hostSession!.accumulator.getMetadata(GOVERNANCE_MODE_KEY);
     expect(metadata).toBeDefined();
     expect(metadata!.value).toBe("yolo");
   }, 30_000);
@@ -1378,5 +1379,49 @@ describe("hoop MCP server", () => {
       await client!.callTool({ name: "hoop_get_status", arguments: {} }),
     ) as { governanceMode: string };
     expect(status.governanceMode).toBe("host-only");
+  }, 30_000);
+
+  it("hoop_set_mode rejects when called by a peer", async () => {
+    ({ server, state, client } = await setup());
+
+    // Simulate a peer session by setting role directly
+    state!.role = "peer";
+
+    const result = await client!.callTool({
+      name: "hoop_set_mode",
+      arguments: { mode: "yolo" },
+    });
+
+    expect(result.isError).toBe(true);
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+    expect(text).toContain("Only the host");
+
+    // Reset so afterEach cleanup doesn't try to leave a non-existent session
+    state!.role = null;
+  });
+
+  it("hoop_set_mode returns unchanged when setting the same mode", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    await client!.callTool({
+      name: "hoop_set_mode",
+      arguments: { mode: "yolo" },
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_set_mode",
+      arguments: { mode: "yolo" },
+    });
+
+    const data = parseJson(result) as { accepted: boolean; mode: string; seqNo: null; unchanged: boolean };
+    expect(data.accepted).toBe(true);
+    expect(data.mode).toBe("yolo");
+    expect(data.seqNo).toBeNull();
+    expect(data.unchanged).toBe(true);
   }, 30_000);
 });
