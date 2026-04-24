@@ -100,18 +100,32 @@ function endTurn(text) {
   };
 }
 
-function buildVars(messages, preset) {
-  const extract = (re) => {
-    for (const m of messages ?? []) {
-      const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
-      const match = text.match(re);
-      if (match) return match[1];
+// Walk messages in reverse looking for a tool_result whose text is JSON.
+// Returns the parsed object, or null if none found.  Regex over the
+// JSON.stringify'd form doesn't work because nested JSON gets double-escaped.
+function extractLastToolResultJson(messages) {
+  for (let i = (messages?.length ?? 0) - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (!Array.isArray(m?.content)) continue;
+    for (const block of m.content) {
+      if (block?.type !== "tool_result" || !Array.isArray(block.content)) continue;
+      for (const tc of block.content) {
+        if (tc?.type !== "text" || typeof tc.text !== "string") continue;
+        try {
+          const obj = JSON.parse(tc.text);
+          if (obj && typeof obj === "object") return obj;
+        } catch { /* not JSON — skip */ }
+      }
     }
-    return null;
-  };
+  }
+  return null;
+}
+
+function buildVars(messages, preset) {
+  const parsed = extractLastToolResultJson(messages);
   return {
-    SESSION_CODE: extract(/"sessionCode"\s*:\s*"([A-Z0-9-]+)"/) ?? preset.SESSION_CODE,
-    HOST_ADDRESS: extract(/"listenAddresses"\s*:\s*\["([^"]+)"/) ?? preset.HOST_ADDRESS,
+    SESSION_CODE: parsed?.sessionCode ?? preset.SESSION_CODE,
+    HOST_ADDRESS: parsed?.listenAddresses?.[0] ?? preset.HOST_ADDRESS,
     ...preset,
   };
 }

@@ -47,8 +47,13 @@ function runClaude(
     extraArgs?: string[];
   },
 ): Promise<string> {
+  // The claude-runner image has /root/.claude/plugins/hoop/ symlinked to /build.
+  // Mount the repo at /build so those symlinks resolve into skills, hooks, and
+  // dist/ — Claude Code discovers them via the plugin manifest.
   const mcpConfig = JSON.stringify({
-    mcpServers: { hoop: { command: "node", args: ["/hoop/dist/mcp/main.js"] } },
+    mcpServers: {
+      hoop: { command: "node", args: ["/root/.claude/plugins/hoop/dist/mcp/main.js"] },
+    },
   });
 
   const claudeArgs = [
@@ -69,8 +74,7 @@ function runClaude(
     "--network", "host",
     "-v", `${opts.cwd}:/repo`,
     "-v", `${opts.hoopTmpDir}:/hoop-tmp`,
-    "-v", `${HOOP_ROOT}/dist:/hoop/dist:ro`,
-    "-v", `${HOOP_ROOT}/node_modules:/hoop/node_modules:ro`,
+    "-v", `${HOOP_ROOT}:/build:ro`,
     "-w", "/repo",
     "-e", `HOOP_SESSION_STATUS_PATH=/repo/.hoop-session-status.json`,
     "-e", `ANTHROPIC_BASE_URL=${MOCK_LLM_URL}/${opts.scenarioPrefix}`,
@@ -163,6 +167,9 @@ describe.skipIf(skip)("Claude Code skill flow — hoop session via mock LLM", ()
     }
 
     expect(result).toMatch(/session/i);
+    // Mock-llm now substitutes {SESSION_CODE} with the real code from the
+    // MCP tool_result, mirroring what a real LLM would summarize.
+    expect(result).toMatch(/[A-Z0-9]{3}-[A-Z0-9]{3}/);
 
     // The MCP server writes this file on successful session creation.
     // Claude Code sandboxes MCP servers with a mount namespace, so writes to

@@ -2,6 +2,24 @@
 
 P2P collaborative coding harness for agent-augmented development.
 
+## Install
+
+Install hoop as a Claude Code plugin at `~/.claude/plugins/hoop/`:
+
+```bash
+npm ci
+npm run build
+bash scripts/install-hoop.sh
+```
+
+`scripts/install-hoop.sh` is env-driven:
+
+- `HOOP_SRC` — source checkout (default: `$PWD`)
+- `HOOP_DEST` — install dir (default: `$HOME/.claude/plugins/hoop`)
+- `HOOP_INSTALL_MODE` — `copy` (default) or `symlink`. Symlink mode is useful for
+  dev (edit source → live reload) and for containers where the source tree is
+  bind-mounted.
+
 ## Testing
 
 ### Unit and integration tests
@@ -30,10 +48,10 @@ The `docker` test project covers:
 **1. Build the claude-runner image**
 
 ```bash
-docker build -t hoop-claude-runner test-infra/claude-runner/
+docker build -t hoop-claude-runner -f test-infra/claude-runner/Dockerfile .
 ```
 
-Builds the isolated container used to run each `claude` CLI instance during skill-flow tests. Do this once (or after changes to `test-infra/claude-runner/`).
+Builds the isolated container used to run each `claude` CLI instance during skill-flow tests. The build context is the repo root so the Dockerfile can `COPY scripts/install-hoop.sh`. The installer runs at image-build time in symlink mode and wires `/root/.claude/plugins/hoop/` to the `/build` mount (the repo is bind-mounted at `/build` at runtime). Do this once (or after changes to `test-infra/claude-runner/` or `scripts/install-hoop.sh`).
 
 **2. Start the services**
 
