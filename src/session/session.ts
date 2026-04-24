@@ -4,9 +4,22 @@ export const GOVERNANCE_MODES = ["host-only", "zero-trust", "yolo"] as const;
 export type GovernanceMode = (typeof GOVERNANCE_MODES)[number];
 
 export const GOVERNANCE_MODE_KEY = "governance-mode";
+export const ZERO_TRUST_THRESHOLD_KEY = "zero-trust-threshold";
+
+export const ZERO_TRUST_NAMED_THRESHOLDS = ["majority", "consensus"] as const;
+export type ZeroTrustThreshold = (typeof ZERO_TRUST_NAMED_THRESHOLDS)[number] | number;
+
+export const DEFAULT_ZERO_TRUST_THRESHOLD: ZeroTrustThreshold = "majority";
 
 export function isGovernanceMode(value: unknown): value is GovernanceMode {
   return typeof value === "string" && (GOVERNANCE_MODES as readonly string[]).includes(value);
+}
+
+export function isZeroTrustThreshold(value: unknown): value is ZeroTrustThreshold {
+  if (typeof value === "string") {
+    return (ZERO_TRUST_NAMED_THRESHOLDS as readonly string[]).includes(value);
+  }
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 export interface Session {

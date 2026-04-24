@@ -16,7 +16,16 @@ import {
   type JoinSessionResult,
 } from "../session/joinSession.js";
 import type { StateUpdate, MetadataUpdate, NonLockStateUpdate } from "../state/stateUpdate.js";
-import { type GovernanceMode, GOVERNANCE_MODES, GOVERNANCE_MODE_KEY, isGovernanceMode } from "../session/session.js";
+import {
+  type GovernanceMode,
+  type ZeroTrustThreshold,
+  GOVERNANCE_MODES,
+  GOVERNANCE_MODE_KEY,
+  ZERO_TRUST_THRESHOLD_KEY,
+  DEFAULT_ZERO_TRUST_THRESHOLD,
+  isGovernanceMode,
+  isZeroTrustThreshold,
+} from "../session/session.js";
 import { createFreeHoopLock } from "../state/hoopLock.js";
 import { ActiveEditsTracker } from "../state/activeEditsTracker.js";
 import { PendingUpdatesWriter } from "../state/pendingUpdatesWriter.js";
@@ -57,6 +66,7 @@ interface ServerState {
   outboundUpdatesReader: OutboundUpdatesReader | null;
   lockStatusWriter: LockStatusWriter | null;
   observedGovernanceMode: GovernanceMode;
+  observedZeroTrustThreshold: ZeroTrustThreshold;
 }
 
 export interface HoopMcpDeps {
@@ -110,6 +120,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     outboundUpdatesReader: null,
     lockStatusWriter: null,
     observedGovernanceMode: "host-only",
+    observedZeroTrustThreshold: DEFAULT_ZERO_TRUST_THRESHOLD,
   };
 
   const server = new McpServer({ name: "hoop", version: "0.1.0" });
@@ -148,6 +159,9 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     }
     if (update.type === "metadata-update" && update.key === GOVERNANCE_MODE_KEY && isGovernanceMode(update.value)) {
       state.observedGovernanceMode = update.value;
+    }
+    if (update.type === "metadata-update" && update.key === ZERO_TRUST_THRESHOLD_KEY && isZeroTrustThreshold(update.value)) {
+      state.observedZeroTrustThreshold = update.value;
     }
     state.activeEditsTracker?.handleUpdate(update);
     state.pendingUpdatesWriter?.handleUpdate(update);
@@ -676,6 +690,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           peerId: s.peerId,
           executionTarget: s.executionTarget,
           governanceMode: state.observedGovernanceMode,
+          ...(state.observedGovernanceMode === "zero-trust" ? { zeroTrustThreshold: state.observedZeroTrustThreshold } : {}),
           autoExecutePrompts: s.autoExecutePrompts,
           passwordProtected: s.passwordProtected,
           connectedPeers: s.broadcastHub.getSubscribers(),
@@ -702,6 +717,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           branchName: s.branchName,
           executionTarget: s.executionTarget,
           governanceMode: state.observedGovernanceMode,
+          ...(state.observedGovernanceMode === "zero-trust" ? { zeroTrustThreshold: state.observedZeroTrustThreshold } : {}),
           lastSeqNo: s.getLastSeqNo(),
           pendingUpdates: state.pendingUpdates.length,
           lock: s.getLockStatus(),
@@ -928,6 +944,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.peerSession = null;
     state.pendingUpdates.length = 0;
     state.observedGovernanceMode = "host-only";
+    state.observedZeroTrustThreshold = DEFAULT_ZERO_TRUST_THRESHOLD;
   }
 
   async function gracefulShutdown(): Promise<{ left: boolean; previousRole: string | null; sessionCode: string | undefined }> {
@@ -966,12 +983,17 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     "hoop_set_mode",
     {
       description:
-        "Set the session governance mode. Host only. Broadcasts the change to all peers instantly.",
+        "Set the session governance mode. Host only. Broadcasts the change to all peers instantly. When mode is 'zero-trust', an optional threshold parameter specifies the approval requirement: 'majority' (>50%), 'consensus' (100%), or an exact integer count.",
       inputSchema: z.object({
         mode: z.enum(GOVERNANCE_MODES),
+        threshold: z.union([
+          z.literal("majority"),
+          z.literal("consensus"),
+          z.number().int().positive(),
+        ]).optional().describe("Approval threshold for zero-trust mode: 'majority' (>50%), 'consensus' (100%), or an exact peer count"),
       }),
     },
-    async ({ mode }) => {
+    async ({ mode, threshold }) => {
       if (state.role !== "host") {
         return errorResult("Only the host can set the governance mode.");
       }
@@ -979,22 +1001,54 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         return errorResult("No active host session.");
       }
 
-      if (mode === state.observedGovernanceMode) {
-        return jsonResult({ accepted: true, mode, seqNo: null, unchanged: true });
+      if (mode !== "zero-trust" && threshold !== undefined) {
+        return errorResult("Threshold is only valid for zero-trust mode.");
       }
 
-      const update: MetadataUpdate = {
-        type: "metadata-update",
-        peerId: state.hostSession.peerId,
-        key: GOVERNANCE_MODE_KEY,
-        value: mode,
-        timestamp: Date.now(),
-      };
+      const effectiveThreshold = mode === "zero-trust"
+        ? (threshold ?? state.observedZeroTrustThreshold)
+        : state.observedZeroTrustThreshold;
 
-      const seqNo = state.hostSession.publishUpdate(update);
-      state.observedGovernanceMode = mode;
+      const modeUnchanged = mode === state.observedGovernanceMode;
+      const thresholdUnchanged = effectiveThreshold === state.observedZeroTrustThreshold;
 
-      return jsonResult({ accepted: true, mode, seqNo });
+      if (modeUnchanged && thresholdUnchanged) {
+        return jsonResult({ accepted: true, mode, threshold: effectiveThreshold, seqNo: null, unchanged: true });
+      }
+
+      const now = Date.now();
+      let lastSeqNo: number | null = null;
+
+      if (!modeUnchanged) {
+        const modeUpdate: MetadataUpdate = {
+          type: "metadata-update",
+          peerId: state.hostSession.peerId,
+          key: GOVERNANCE_MODE_KEY,
+          value: mode,
+          timestamp: now,
+        };
+        lastSeqNo = state.hostSession.publishUpdate(modeUpdate);
+        state.observedGovernanceMode = mode;
+      }
+
+      if (!thresholdUnchanged) {
+        const thresholdUpdate: MetadataUpdate = {
+          type: "metadata-update",
+          peerId: state.hostSession.peerId,
+          key: ZERO_TRUST_THRESHOLD_KEY,
+          value: effectiveThreshold,
+          timestamp: now,
+        };
+        lastSeqNo = state.hostSession.publishUpdate(thresholdUpdate);
+        state.observedZeroTrustThreshold = effectiveThreshold;
+      }
+
+      return jsonResult({
+        accepted: true,
+        mode,
+        ...(mode === "zero-trust" ? { threshold: effectiveThreshold } : {}),
+        seqNo: lastSeqNo,
+      });
     },
   );
 
