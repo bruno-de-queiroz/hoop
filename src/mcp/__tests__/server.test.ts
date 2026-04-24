@@ -9,7 +9,7 @@ import { stubGitOps } from "../../session/createSession.js";
 import { stubJoinGitOps } from "../../session/joinSession.js";
 import { PendingUpdatesWriter } from "../../state/pendingUpdatesWriter.js";
 import { PendingPromptRequestsWriter } from "../../state/pendingPromptRequestsWriter.js";
-import { GOVERNANCE_MODE_KEY, ZERO_TRUST_THRESHOLD_KEY } from "../../session/session.js";
+import { GOVERNANCE_CONFIG_KEY } from "../../session/session.js";
 
 const CONFLICT_REGISTRY = join(tmpdir(), "hoop-conflict-test.json");
 const PENDING_UPDATES_REGISTRY = join(tmpdir(), "hoop-pending-updates-test.json");
@@ -1298,9 +1298,9 @@ describe("hoop MCP server", () => {
       arguments: { mode: "yolo" },
     });
 
-    const data = parseJson(result) as { accepted: boolean; mode: string; seqNo: number };
+    const data = parseJson(result) as { accepted: boolean; governance: { mode: string }; seqNo: number };
     expect(data.accepted).toBe(true);
-    expect(data.mode).toBe("yolo");
+    expect(data.governance.mode).toBe("yolo");
     expect(typeof data.seqNo).toBe("number");
   }, 30_000);
 
@@ -1314,8 +1314,8 @@ describe("hoop MCP server", () => {
 
     const status = parseJson(
       await client!.callTool({ name: "hoop_get_status", arguments: {} }),
-    ) as { governanceMode: string };
-    expect(status.governanceMode).toBe("host-only");
+    ) as { governance: { mode: string } };
+    expect(status.governance.mode).toBe("host-only");
   }, 30_000);
 
   it("hoop_get_status reflects governance mode after hoop_set_mode", async () => {
@@ -1333,8 +1333,8 @@ describe("hoop MCP server", () => {
 
     const status = parseJson(
       await client!.callTool({ name: "hoop_get_status", arguments: {} }),
-    ) as { governanceMode: string };
-    expect(status.governanceMode).toBe("zero-trust");
+    ) as { governance: { mode: string } };
+    expect(status.governance.mode).toBe("zero-trust");
   }, 30_000);
 
   it("hoop_set_mode publishes metadata update to accumulator", async () => {
@@ -1350,9 +1350,9 @@ describe("hoop MCP server", () => {
       arguments: { mode: "yolo" },
     });
 
-    const metadata = state!.hostSession!.accumulator.getMetadata(GOVERNANCE_MODE_KEY);
+    const metadata = state!.hostSession!.accumulator.getMetadata(GOVERNANCE_CONFIG_KEY);
     expect(metadata).toBeDefined();
-    expect(metadata!.value).toBe("yolo");
+    expect(metadata!.value).toEqual({ mode: "yolo" });
   }, 30_000);
 
   it("governance mode resets to host-only after leaving and creating a new session", async () => {
@@ -1377,8 +1377,8 @@ describe("hoop MCP server", () => {
 
     const status = parseJson(
       await client!.callTool({ name: "hoop_get_status", arguments: {} }),
-    ) as { governanceMode: string };
-    expect(status.governanceMode).toBe("host-only");
+    ) as { governance: { mode: string } };
+    expect(status.governance.mode).toBe("host-only");
   }, 30_000);
 
   it("hoop_set_mode rejects when called by a peer", async () => {
@@ -1418,9 +1418,9 @@ describe("hoop MCP server", () => {
       arguments: { mode: "yolo" },
     });
 
-    const data = parseJson(result) as { accepted: boolean; mode: string; seqNo: null; unchanged: boolean };
+    const data = parseJson(result) as { accepted: boolean; governance: { mode: string }; seqNo: null; unchanged: boolean };
     expect(data.accepted).toBe(true);
-    expect(data.mode).toBe("yolo");
+    expect(data.governance.mode).toBe("yolo");
     expect(data.seqNo).toBeNull();
     expect(data.unchanged).toBe(true);
   }, 30_000);
@@ -1440,10 +1440,10 @@ describe("hoop MCP server", () => {
       arguments: { mode: "zero-trust", threshold: "majority" },
     });
 
-    const data = parseJson(result) as { accepted: boolean; mode: string; threshold: string; seqNo: number };
+    const data = parseJson(result) as { accepted: boolean; governance: { mode: string; threshold: string }; seqNo: number };
     expect(data.accepted).toBe(true);
-    expect(data.mode).toBe("zero-trust");
-    expect(data.threshold).toBe("majority");
+    expect(data.governance.mode).toBe("zero-trust");
+    expect(data.governance.threshold).toBe("majority");
     expect(typeof data.seqNo).toBe("number");
   }, 30_000);
 
@@ -1460,10 +1460,10 @@ describe("hoop MCP server", () => {
       arguments: { mode: "zero-trust", threshold: "consensus" },
     });
 
-    const data = parseJson(result) as { accepted: boolean; mode: string; threshold: string };
+    const data = parseJson(result) as { accepted: boolean; governance: { mode: string; threshold: string } };
     expect(data.accepted).toBe(true);
-    expect(data.mode).toBe("zero-trust");
-    expect(data.threshold).toBe("consensus");
+    expect(data.governance.mode).toBe("zero-trust");
+    expect(data.governance.threshold).toBe("consensus");
   }, 30_000);
 
   it("hoop_set_mode accepts integer threshold for zero-trust", async () => {
@@ -1479,10 +1479,10 @@ describe("hoop MCP server", () => {
       arguments: { mode: "zero-trust", threshold: 3 },
     });
 
-    const data = parseJson(result) as { accepted: boolean; mode: string; threshold: number };
+    const data = parseJson(result) as { accepted: boolean; governance: { mode: string; threshold: number } };
     expect(data.accepted).toBe(true);
-    expect(data.mode).toBe("zero-trust");
-    expect(data.threshold).toBe(3);
+    expect(data.governance.mode).toBe("zero-trust");
+    expect(data.governance.threshold).toBe(3);
   }, 30_000);
 
   it("hoop_set_mode defaults threshold to majority when switching to zero-trust without threshold", async () => {
@@ -1498,9 +1498,9 @@ describe("hoop MCP server", () => {
       arguments: { mode: "zero-trust" },
     });
 
-    const data = parseJson(result) as { accepted: boolean; mode: string; threshold: string };
+    const data = parseJson(result) as { accepted: boolean; governance: { mode: string; threshold: string } };
     expect(data.accepted).toBe(true);
-    expect(data.threshold).toBe("majority");
+    expect(data.governance.threshold).toBe("majority");
   }, 30_000);
 
   it("hoop_set_mode rejects threshold for non-zero-trust modes", async () => {
@@ -1521,7 +1521,7 @@ describe("hoop MCP server", () => {
     expect(text).toContain("only valid for zero-trust");
   }, 30_000);
 
-  it("hoop_get_status includes zeroTrustThreshold when mode is zero-trust", async () => {
+  it("hoop_get_status includes threshold when mode is zero-trust", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1536,12 +1536,12 @@ describe("hoop MCP server", () => {
 
     const status = parseJson(
       await client!.callTool({ name: "hoop_get_status", arguments: {} }),
-    ) as { governanceMode: string; zeroTrustThreshold: string };
-    expect(status.governanceMode).toBe("zero-trust");
-    expect(status.zeroTrustThreshold).toBe("consensus");
+    ) as { governance: { mode: string; threshold: string } };
+    expect(status.governance.mode).toBe("zero-trust");
+    expect(status.governance.threshold).toBe("consensus");
   }, 30_000);
 
-  it("hoop_get_status omits zeroTrustThreshold when mode is not zero-trust", async () => {
+  it("hoop_get_status omits threshold when mode is not zero-trust", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1551,9 +1551,9 @@ describe("hoop MCP server", () => {
 
     const status = parseJson(
       await client!.callTool({ name: "hoop_get_status", arguments: {} }),
-    ) as Record<string, unknown>;
-    expect(status.governanceMode).toBe("host-only");
-    expect(status).not.toHaveProperty("zeroTrustThreshold");
+    ) as { governance: { mode: string } };
+    expect(status.governance.mode).toBe("host-only");
+    expect(status.governance).not.toHaveProperty("threshold");
   }, 30_000);
 
   it("hoop_set_mode publishes threshold as metadata update", async () => {
@@ -1569,9 +1569,9 @@ describe("hoop MCP server", () => {
       arguments: { mode: "zero-trust", threshold: 5 },
     });
 
-    const thresholdMeta = state!.hostSession!.accumulator.getMetadata(ZERO_TRUST_THRESHOLD_KEY);
-    expect(thresholdMeta).toBeDefined();
-    expect(thresholdMeta!.value).toBe(5);
+    const configMeta = state!.hostSession!.accumulator.getMetadata(GOVERNANCE_CONFIG_KEY);
+    expect(configMeta).toBeDefined();
+    expect(configMeta!.value).toEqual({ mode: "zero-trust", threshold: 5 });
   }, 30_000);
 
   it("hoop_set_mode returns unchanged when mode and threshold are the same", async () => {
@@ -1592,10 +1592,10 @@ describe("hoop MCP server", () => {
       arguments: { mode: "zero-trust", threshold: "consensus" },
     });
 
-    const data = parseJson(result) as { accepted: boolean; unchanged: boolean; threshold: string };
+    const data = parseJson(result) as { accepted: boolean; unchanged: boolean; governance: { mode: string; threshold: string } };
     expect(data.accepted).toBe(true);
     expect(data.unchanged).toBe(true);
-    expect(data.threshold).toBe("consensus");
+    expect(data.governance.threshold).toBe("consensus");
   }, 30_000);
 
   it("hoop_set_mode updates only threshold when mode stays zero-trust", async () => {
@@ -1616,17 +1616,14 @@ describe("hoop MCP server", () => {
       arguments: { mode: "zero-trust", threshold: 3 },
     });
 
-    const data = parseJson(result) as { accepted: boolean; mode: string; threshold: number; seqNo: number };
+    const data = parseJson(result) as { accepted: boolean; governance: { mode: string; threshold: number }; seqNo: number };
     expect(data.accepted).toBe(true);
-    expect(data.mode).toBe("zero-trust");
-    expect(data.threshold).toBe(3);
+    expect(data.governance.mode).toBe("zero-trust");
+    expect(data.governance.threshold).toBe(3);
     expect(typeof data.seqNo).toBe("number");
 
-    // Only threshold update should have been published (mode was already zero-trust)
-    const modeMeta = state!.hostSession!.accumulator.getMetadata(GOVERNANCE_MODE_KEY);
-    expect(modeMeta!.value).toBe("zero-trust");
-    const thresholdMeta = state!.hostSession!.accumulator.getMetadata(ZERO_TRUST_THRESHOLD_KEY);
-    expect(thresholdMeta!.value).toBe(3);
+    const configMeta = state!.hostSession!.accumulator.getMetadata(GOVERNANCE_CONFIG_KEY);
+    expect(configMeta!.value).toEqual({ mode: "zero-trust", threshold: 3 });
   }, 30_000);
 
   it("zero-trust threshold resets to default after leave and recreate", async () => {
@@ -1657,11 +1654,11 @@ describe("hoop MCP server", () => {
 
     const status = parseJson(
       await client!.callTool({ name: "hoop_get_status", arguments: {} }),
-    ) as { zeroTrustThreshold: string };
-    expect(status.zeroTrustThreshold).toBe("majority");
+    ) as { governance: { threshold: string } };
+    expect(status.governance.threshold).toBe("majority");
   }, 30_000);
 
-  it("mirrorObservedUpdate applies zero-trust threshold from published update", async () => {
+  it("mirrorObservedUpdate ignores invalid governance config values", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1669,16 +1666,37 @@ describe("hoop MCP server", () => {
       arguments: { executionTarget: "host-only" },
     });
 
-    // Publish a threshold metadata update through the host session.
-    // The mirrorObservedUpdate callback should update observedZeroTrustThreshold.
+    // Publish an invalid governance config — should be ignored
     state!.hostSession!.publishUpdate({
       type: "metadata-update",
       peerId: state!.hostSession!.peerId,
-      key: ZERO_TRUST_THRESHOLD_KEY,
-      value: "consensus",
+      key: GOVERNANCE_CONFIG_KEY,
+      value: { mode: "invalid-mode" },
       timestamp: Date.now(),
     });
 
-    expect(state!.observedZeroTrustThreshold).toBe("consensus");
+    // Should still be the default
+    expect(state!.observedGovernanceConfig).toEqual({ mode: "host-only" });
+  }, 30_000);
+
+  it("mirrorObservedUpdate applies governance config from published update", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    // Publish a governance config update through the host session.
+    // The mirrorObservedUpdate callback should update observedGovernanceConfig.
+    state!.hostSession!.publishUpdate({
+      type: "metadata-update",
+      peerId: state!.hostSession!.peerId,
+      key: GOVERNANCE_CONFIG_KEY,
+      value: { mode: "zero-trust", threshold: "consensus" },
+      timestamp: Date.now(),
+    });
+
+    expect(state!.observedGovernanceConfig).toEqual({ mode: "zero-trust", threshold: "consensus" });
   }, 30_000);
 });

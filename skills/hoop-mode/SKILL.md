@@ -16,9 +16,9 @@ The user invokes this skill as `/hoop-mode <mode> [threshold]`. Parse the args s
    ```
 
 2. If the mode is `zero-trust`, an optional second token is the **threshold**:
-   - `majority` — requires >50% of connected peers to approve
-   - `consensus` — requires 100% of connected peers to approve
-   - A positive integer (e.g. `3`) — requires exactly that many peer approvals
+   - `majority` — >50% of connected peers
+   - `consensus` — all connected peers (100%)
+   - A positive integer (e.g. `3`) — an exact peer count
 
    If the second token is present but not recognized as `majority`, `consensus`, or a positive integer, display an error and stop:
 

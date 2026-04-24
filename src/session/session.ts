@@ -3,15 +3,19 @@ export type ExecutionTarget = "host-only" | "proponent-side";
 export const GOVERNANCE_MODES = ["host-only", "zero-trust", "yolo"] as const;
 export type GovernanceMode = (typeof GOVERNANCE_MODES)[number];
 
-export const GOVERNANCE_MODE_KEY = "governance-mode";
-export const ZERO_TRUST_THRESHOLD_KEY = "zero-trust-threshold";
+export const GOVERNANCE_CONFIG_KEY = "governance-config";
 
 export const ZERO_TRUST_NAMED_THRESHOLDS = ["majority", "consensus"] as const;
 export type ZeroTrustThreshold = (typeof ZERO_TRUST_NAMED_THRESHOLDS)[number] | number;
 
-export const DEFAULT_ZERO_TRUST_THRESHOLD: ZeroTrustThreshold = "majority";
+export type GovernanceConfig =
+  | { mode: "host-only" }
+  | { mode: "yolo" }
+  | { mode: "zero-trust"; threshold: ZeroTrustThreshold };
 
-export function isGovernanceMode(value: unknown): value is GovernanceMode {
+export const DEFAULT_GOVERNANCE_CONFIG: GovernanceConfig = { mode: "host-only" };
+
+function isGovernanceMode(value: unknown): value is GovernanceMode {
   return typeof value === "string" && (GOVERNANCE_MODES as readonly string[]).includes(value);
 }
 
@@ -20,6 +24,14 @@ export function isZeroTrustThreshold(value: unknown): value is ZeroTrustThreshol
     return (ZERO_TRUST_NAMED_THRESHOLDS as readonly string[]).includes(value);
   }
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+export function isGovernanceConfig(value: unknown): value is GovernanceConfig {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  if (!isGovernanceMode(v["mode"])) return false;
+  if (v["mode"] === "zero-trust") return isZeroTrustThreshold(v["threshold"]);
+  return v["threshold"] === undefined;
 }
 
 export interface Session {
