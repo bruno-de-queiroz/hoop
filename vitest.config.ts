@@ -58,6 +58,15 @@ export default defineConfig({
           ],
           testTimeout: 60_000,
           server: { deps: sharedDeps },
+          // Ensure git commits work on CI runners where no global git identity
+          // is configured.  Child git processes spawned via execFileSync inherit
+          // these from the vitest process.
+          env: {
+            GIT_AUTHOR_NAME: 'hoop-test',
+            GIT_AUTHOR_EMAIL: 'test@hoop.test',
+            GIT_COMMITTER_NAME: 'hoop-test',
+            GIT_COMMITTER_EMAIL: 'test@hoop.test',
+          },
         },
       },
     ],
