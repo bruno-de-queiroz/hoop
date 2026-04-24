@@ -16,7 +16,7 @@ import {
   type JoinSessionResult,
 } from "../session/joinSession.js";
 import type { StateUpdate, MetadataUpdate, NonLockStateUpdate } from "../state/stateUpdate.js";
-import { type GovernanceMode, GOVERNANCE_MODE_KEY } from "../session/session.js";
+import { type GovernanceMode, GOVERNANCE_MODES, GOVERNANCE_MODE_KEY, isGovernanceMode } from "../session/session.js";
 import { createFreeHoopLock } from "../state/hoopLock.js";
 import { ActiveEditsTracker } from "../state/activeEditsTracker.js";
 import { PendingUpdatesWriter } from "../state/pendingUpdatesWriter.js";
@@ -146,8 +146,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     if (update.peerId !== selfPeerId && shouldQueuePendingUpdate(update)) {
       state.pendingUpdates.push(update);
     }
-    if (update.type === "metadata-update" && update.key === GOVERNANCE_MODE_KEY) {
-      state.observedGovernanceMode = update.value as GovernanceMode;
+    if (update.type === "metadata-update" && update.key === GOVERNANCE_MODE_KEY && isGovernanceMode(update.value)) {
+      state.observedGovernanceMode = update.value;
     }
     state.activeEditsTracker?.handleUpdate(update);
     state.pendingUpdatesWriter?.handleUpdate(update);
@@ -968,7 +968,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       description:
         "Set the session governance mode. Host only. Broadcasts the change to all peers instantly.",
       inputSchema: z.object({
-        mode: z.enum(["host-only", "zero-trust", "yolo"]),
+        mode: z.enum(GOVERNANCE_MODES),
       }),
     },
     async ({ mode }) => {
@@ -977,6 +977,10 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       }
       if (!state.hostSession) {
         return errorResult("No active host session.");
+      }
+
+      if (mode === state.observedGovernanceMode) {
+        return jsonResult({ accepted: true, mode, seqNo: null, unchanged: true });
       }
 
       const update: MetadataUpdate = {

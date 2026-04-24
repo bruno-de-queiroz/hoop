@@ -1,8 +1,13 @@
 export type ExecutionTarget = "host-only" | "proponent-side";
 
-export type GovernanceMode = "host-only" | "zero-trust" | "yolo";
+export const GOVERNANCE_MODES = ["host-only", "zero-trust", "yolo"] as const;
+export type GovernanceMode = (typeof GOVERNANCE_MODES)[number];
 
 export const GOVERNANCE_MODE_KEY = "governance-mode";
+
+export function isGovernanceMode(value: unknown): value is GovernanceMode {
+  return typeof value === "string" && (GOVERNANCE_MODES as readonly string[]).includes(value);
+}
 
 export interface Session {
   sessionCode: string;
