@@ -15,7 +15,8 @@ import {
   type JoinGitOps,
   type JoinSessionResult,
 } from "../session/joinSession.js";
-import type { StateUpdate, NonLockStateUpdate } from "../state/stateUpdate.js";
+import type { StateUpdate, MetadataUpdate, NonLockStateUpdate } from "../state/stateUpdate.js";
+import { type GovernanceMode, GOVERNANCE_MODE_KEY } from "../session/session.js";
 import { createFreeHoopLock } from "../state/hoopLock.js";
 import { ActiveEditsTracker } from "../state/activeEditsTracker.js";
 import { PendingUpdatesWriter } from "../state/pendingUpdatesWriter.js";
@@ -55,6 +56,7 @@ interface ServerState {
   pendingUpdatesWriter: PendingUpdatesWriter | null;
   outboundUpdatesReader: OutboundUpdatesReader | null;
   lockStatusWriter: LockStatusWriter | null;
+  observedGovernanceMode: GovernanceMode;
 }
 
 export interface HoopMcpDeps {
@@ -107,6 +109,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     pendingUpdatesWriter: null,
     outboundUpdatesReader: null,
     lockStatusWriter: null,
+    observedGovernanceMode: "host-only",
   };
 
   const server = new McpServer({ name: "hoop", version: "0.1.0" });
@@ -142,6 +145,9 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
   function mirrorObservedUpdate(update: StateUpdate, selfPeerId: string): void {
     if (update.peerId !== selfPeerId && shouldQueuePendingUpdate(update)) {
       state.pendingUpdates.push(update);
+    }
+    if (update.type === "metadata-update" && update.key === GOVERNANCE_MODE_KEY) {
+      state.observedGovernanceMode = update.value as GovernanceMode;
     }
     state.activeEditsTracker?.handleUpdate(update);
     state.pendingUpdatesWriter?.handleUpdate(update);
@@ -669,6 +675,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           hostId: s.hostId,
           peerId: s.peerId,
           executionTarget: s.executionTarget,
+          governanceMode: state.observedGovernanceMode,
           autoExecutePrompts: s.autoExecutePrompts,
           passwordProtected: s.passwordProtected,
           connectedPeers: s.broadcastHub.getSubscribers(),
@@ -694,6 +701,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           admitted: s.admitted,
           branchName: s.branchName,
           executionTarget: s.executionTarget,
+          governanceMode: state.observedGovernanceMode,
           lastSeqNo: s.getLastSeqNo(),
           pendingUpdates: state.pendingUpdates.length,
           lock: s.getLockStatus(),
@@ -919,6 +927,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.hostSession = null;
     state.peerSession = null;
     state.pendingUpdates.length = 0;
+    state.observedGovernanceMode = "host-only";
   }
 
   async function gracefulShutdown(): Promise<{ left: boolean; previousRole: string | null; sessionCode: string | undefined }> {
@@ -950,6 +959,42 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
     return { left: true, previousRole, sessionCode };
   }
+
+  // ── 21. hoop_set_mode ─────────────────────────────────────────────
+
+  server.registerTool(
+    "hoop_set_mode",
+    {
+      description:
+        "Set the session governance mode. Host only. Broadcasts the change to all peers instantly.",
+      inputSchema: z.object({
+        mode: z.enum(["host-only", "zero-trust", "yolo"]),
+      }),
+    },
+    async ({ mode }) => {
+      if (state.role !== "host") {
+        return errorResult("Only the host can set the governance mode.");
+      }
+      if (!state.hostSession) {
+        return errorResult("No active host session.");
+      }
+
+      const update: MetadataUpdate = {
+        type: "metadata-update",
+        peerId: state.hostSession.peerId,
+        key: GOVERNANCE_MODE_KEY,
+        value: mode,
+        timestamp: Date.now(),
+      };
+
+      const seqNo = state.hostSession.publishUpdate(update);
+      state.observedGovernanceMode = mode;
+
+      return jsonResult({ accepted: true, mode, seqNo });
+    },
+  );
+
+  // ── 22. hoop_leave_session ──────────────────────────────────────
 
   server.registerTool(
     "hoop_leave_session",

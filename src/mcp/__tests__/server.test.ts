@@ -70,7 +70,7 @@ describe("hoop MCP server", () => {
     try { unlinkSync(SESSION_STATUS_FILE); } catch { /* ignore */ }
   });
 
-  it("registers all 20 tools", async () => {
+  it("registers all 21 tools", async () => {
     ({ server, state, client } = await setup());
 
     const { tools } = await client!.listTools();
@@ -97,6 +97,7 @@ describe("hoop MCP server", () => {
       "hoop_release_lock",
       "hoop_request_host_execution",
       "hoop_send_update",
+      "hoop_set_mode",
     ]);
   });
 
@@ -1266,5 +1267,116 @@ describe("hoop MCP server", () => {
       await client!.callTool({ name: "hoop_get_status", arguments: {} }),
     ) as { activePromptRequests: number };
     expect(status2.activePromptRequests).toBe(1);
+  }, 30_000);
+
+  // ── hoop_set_mode ──────────────────────────────────────────────
+
+  it("hoop_set_mode rejects when no session is active", async () => {
+    ({ server, state, client } = await setup());
+
+    const result = await client!.callTool({
+      name: "hoop_set_mode",
+      arguments: { mode: "yolo" },
+    });
+
+    expect(result.isError).toBe(true);
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+    expect(text).toContain("Only the host");
+  });
+
+  it("hoop_set_mode sets mode and returns accepted with seqNo", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_set_mode",
+      arguments: { mode: "yolo" },
+    });
+
+    const data = parseJson(result) as { accepted: boolean; mode: string; seqNo: number };
+    expect(data.accepted).toBe(true);
+    expect(data.mode).toBe("yolo");
+    expect(typeof data.seqNo).toBe("number");
+  }, 30_000);
+
+  it("hoop_get_status defaults to host-only governance mode", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const status = parseJson(
+      await client!.callTool({ name: "hoop_get_status", arguments: {} }),
+    ) as { governanceMode: string };
+    expect(status.governanceMode).toBe("host-only");
+  }, 30_000);
+
+  it("hoop_get_status reflects governance mode after hoop_set_mode", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    await client!.callTool({
+      name: "hoop_set_mode",
+      arguments: { mode: "zero-trust" },
+    });
+
+    const status = parseJson(
+      await client!.callTool({ name: "hoop_get_status", arguments: {} }),
+    ) as { governanceMode: string };
+    expect(status.governanceMode).toBe("zero-trust");
+  }, 30_000);
+
+  it("hoop_set_mode publishes metadata update to accumulator", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    await client!.callTool({
+      name: "hoop_set_mode",
+      arguments: { mode: "yolo" },
+    });
+
+    const metadata = state!.hostSession!.accumulator.getMetadata("governance-mode");
+    expect(metadata).toBeDefined();
+    expect(metadata!.value).toBe("yolo");
+  }, 30_000);
+
+  it("governance mode resets to host-only after leaving and creating a new session", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    await client!.callTool({
+      name: "hoop_set_mode",
+      arguments: { mode: "yolo" },
+    });
+
+    await client!.callTool({ name: "hoop_leave_session", arguments: {} });
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const status = parseJson(
+      await client!.callTool({ name: "hoop_get_status", arguments: {} }),
+    ) as { governanceMode: string };
+    expect(status.governanceMode).toBe("host-only");
   }, 30_000);
 });
