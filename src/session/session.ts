@@ -1,5 +1,9 @@
 export type ExecutionTarget = "host-only" | "proponent-side";
 
+export type GovernanceMode = "host-only" | "zero-trust" | "yolo";
+
+export const GOVERNANCE_MODE_KEY = "governance-mode";
+
 export interface Session {
   sessionCode: string;
   passwordHash?: string;
