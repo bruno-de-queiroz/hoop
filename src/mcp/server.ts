@@ -64,6 +64,7 @@ interface ServerState {
   outboundUpdatesReader: OutboundUpdatesReader | null;
   lockStatusWriter: LockStatusWriter | null;
   observedGovernanceConfig: GovernanceConfig;
+  governanceAlert: string | null;
 }
 
 export interface HoopMcpDeps {
@@ -117,6 +118,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     outboundUpdatesReader: null,
     lockStatusWriter: null,
     observedGovernanceConfig: DEFAULT_GOVERNANCE_CONFIG,
+    governanceAlert: null,
   };
 
   const server = new McpServer({ name: "hoop", version: "0.1.0" });
@@ -147,6 +149,30 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
   function flushLockStatus(): void {
     state.lockStatusWriter?.update(getCurrentLockStatus());
+  }
+
+  function revalidateGovernanceThreshold(): void {
+    if (!state.hostSession) return;
+    const config = state.observedGovernanceConfig;
+    if (config.mode !== "zero-trust" || typeof config.threshold !== "number") return;
+
+    const partySize = 1 + state.hostSession.broadcastHub.getSubscriberCount();
+    if (config.threshold <= partySize) return;
+
+    const newConfig: GovernanceConfig = { mode: "zero-trust", threshold: "consensus" };
+    state.governanceAlert = partySize === 2
+      ? `Peer disconnected. Threshold ${config.threshold} exceeds party size ${partySize}. Falling back to consensus.`
+      : `Peer disconnected. Threshold ${config.threshold} exceeds party size ${partySize}. Falling back to consensus. You may set a new threshold up to ${partySize}.`;
+
+    const configUpdate: MetadataUpdate = {
+      type: "metadata-update",
+      peerId: state.hostSession.peerId,
+      key: GOVERNANCE_CONFIG_KEY,
+      value: newConfig,
+      timestamp: Date.now(),
+    };
+    state.hostSession.publishUpdate(configUpdate);
+    state.observedGovernanceConfig = newConfig;
   }
 
   function mirrorObservedUpdate(update: StateUpdate, selfPeerId: string): void {
@@ -222,6 +248,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           onLockChange: () => flushLockStatus(),
           onPeerDisconnect: (peerId) => {
             state.activeEditsTracker?.removePeer(peerId);
+            revalidateGovernanceThreshold();
           },
         });
 
@@ -700,6 +727,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           activePromptRequests: s.promptRequestQueue.listActive().length,
           pendingUpdates: state.pendingUpdates.length,
           lock: s.getLockStatus(),
+          ...(state.governanceAlert ? { governanceAlert: state.governanceAlert } : {}),
         });
       }
 
@@ -1013,7 +1041,29 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           : "majority";
         const effectiveThreshold = threshold ?? currentThreshold;
 
-        // TODO: validate integer threshold against peer count at enforcement time
+        // Fallback: if integer threshold exceeds current party size, default to consensus
+        if (typeof effectiveThreshold === "number") {
+          const partySize = 1 + state.hostSession.broadcastHub.getSubscriberCount();
+          if (effectiveThreshold > partySize) {
+            newConfig = { mode: "zero-trust", threshold: "consensus" };
+            const warning = partySize === 2
+              ? `Threshold ${effectiveThreshold} exceeds party size ${partySize}. Falling back to consensus.`
+              : `Threshold ${effectiveThreshold} exceeds party size ${partySize}. Falling back to consensus. You may set a new threshold up to ${partySize}.`;
+            state.governanceAlert = warning;
+
+            const configUpdate: MetadataUpdate = {
+              type: "metadata-update",
+              peerId: state.hostSession.peerId,
+              key: GOVERNANCE_CONFIG_KEY,
+              value: newConfig,
+              timestamp: Date.now(),
+            };
+            const seqNo = state.hostSession.publishUpdate(configUpdate);
+            state.observedGovernanceConfig = newConfig;
+
+            return jsonResult({ accepted: true, governance: newConfig, seqNo, warning });
+          }
+        }
 
         newConfig = { mode: "zero-trust", threshold: effectiveThreshold };
       } else {
@@ -1040,6 +1090,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       };
       const seqNo = state.hostSession.publishUpdate(configUpdate);
       state.observedGovernanceConfig = newConfig;
+      state.governanceAlert = null;
 
       return jsonResult({ accepted: true, governance: newConfig, seqNo });
     },
