@@ -163,7 +163,7 @@ sudo rm -rf "$REPO" "$HOOPTMP"   # sudo because root-owned files from the contai
 
 Swap-outs:
 - **Run against a real Anthropic endpoint** — drop `ANTHROPIC_BASE_URL` and provide a real `ANTHROPIC_API_KEY`. Skill flow then depends on the LLM's actual decisions.
-- **Use the peer scenario** — change `ANTHROPIC_BASE_URL` to `http://localhost:4000/peer`, prompt `/hoop-join <code>`, and preload the real session code + host multiaddr first via `POST /scenario/peer/set-vars` (the peer scenario's `tool_use` input takes those as `{SESSION_CODE}` / `{HOST_ADDRESS}` placeholders).
+- **Use the peer scenario** — change `ANTHROPIC_BASE_URL` to `http://localhost:4000/peer` and run `/hoop-join <code> <multiaddr>`. Mock-llm parses the slash-command args from `<command-args>` in the user message: first token → `SESSION_CODE`, any token starting with `/ip` or `/dns` → `HOST_ADDRESS`. If anything's missing it returns an explicit `[mock-llm] missing var(s): …` error before forwarding to the MCP tool, so unsubstituted placeholders never reach the validator. Presets via `POST /scenario/peer/set-vars` still work and are used as fallback if the prompt doesn't carry them.
 - **Try a different skill** — replace `/hoop-new` with any of the other skill commands (`/hoop-join`, `/hoop-mode`, `/hoop-unlock`, `/hoop-agent`).
 - **Drop into a shell instead** — replace the trailing `claude …` with `sh` to inspect `/root/.claude/plugins/hoop/`, run `claude plugin list`, etc.
 

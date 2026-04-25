@@ -75,11 +75,25 @@ function nextResponse(scenario, messages, tools) {
     }
   }
 
-  // No tool_result yet — serve the scripted tool_use step (with input
-  // substitution from preset vars).
+  // No tool_result yet — serve the scripted tool_use step.
+  // Vars priority: user-prompt args > set-vars presets.  This makes
+  // `/hoop-join NAQ-BN5` use NAQ-BN5 even without a prior set-vars,
+  // closer to how a real LLM would parse the user's request.
   if (!toolUseStep) return endTurn("[mock-llm] scenario has no tool_use step");
+  const vars = { ...s.vars, ...extractVarsFromUserPrompt(messages) };
   const tmpl = JSON.parse(JSON.stringify(toolUseStep));
-  deepSub(tmpl, s.vars);
+  deepSub(tmpl, vars);
+
+  // Defensive: refuse to serve if any {PLACEHOLDER} is still in the
+  // tool_use input.  The MCP tool would otherwise receive a literal
+  // "{SESSION_CODE}" string and reject it, which is harder to debug.
+  const missing = findUnsubstitutedPlaceholders(tmpl);
+  if (missing.length) {
+    return endTurn(
+      `[mock-llm] missing var(s): ${missing.join(", ")} — pass them in the slash command (e.g. /hoop-join <code>) or POST /scenario/${scenario}/set-vars first`
+    );
+  }
+
   return {
     id: `msg_${Date.now()}`,
     type: "message",
@@ -88,6 +102,48 @@ function nextResponse(scenario, messages, tools) {
     usage: { input_tokens: 100, output_tokens: 50 },
     ...tmpl,
   };
+}
+
+// Pull vars out of the user's most recent slash-command invocation.
+// Claude Code expands `/hoop-join NAQ-BN5` into a user message containing:
+//   <command-name>/hoop:hoop-join</command-name>
+//   <command-args>NAQ-BN5</command-args>
+// We parse that tag rather than the raw prompt because the prompt also
+// includes the SKILL.md body and system reminders.
+function extractVarsFromUserPrompt(messages) {
+  for (let i = (messages?.length ?? 0) - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m?.role !== "user") continue;
+    const text = typeof m.content === "string"
+      ? m.content
+      : Array.isArray(m.content)
+        ? m.content.filter(c => c?.type === "text" && typeof c.text === "string").map(c => c.text).join("\n")
+        : "";
+    const argsMatch = text.match(/<command-args>([^<]*)<\/command-args>/);
+    if (!argsMatch) continue;
+    const args = argsMatch[1].trim().split(/\s+/).filter(Boolean);
+    if (args.length === 0) continue;
+    const out = {};
+    if (args[0]) out.SESSION_CODE = args[0];
+    for (const a of args.slice(1)) {
+      if (a.startsWith("/ip") || a.startsWith("/dns")) out.HOST_ADDRESS = a;
+    }
+    return out;
+  }
+  return {};
+}
+
+function findUnsubstitutedPlaceholders(obj, found = new Set()) {
+  if (!obj || typeof obj !== "object") return [...found];
+  for (const v of Object.values(obj)) {
+    if (typeof v === "string") {
+      const matches = v.match(/\{([A-Z_]+)\}/g);
+      if (matches) for (const m of matches) found.add(m.slice(1, -1));
+    } else if (typeof v === "object") {
+      findUnsubstitutedPlaceholders(v, found);
+    }
+  }
+  return [...found];
 }
 
 function endTurn(text) {
