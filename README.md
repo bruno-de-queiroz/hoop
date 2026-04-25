@@ -4,7 +4,7 @@ P2P collaborative coding harness for agent-augmented development.
 
 ## Install
 
-Install hoop as a Claude Code plugin at `~/.claude/plugins/hoop/`:
+Install hoop as a Claude Code plugin:
 
 ```bash
 npm ci
@@ -12,13 +12,19 @@ npm run build
 bash scripts/install-hoop.sh
 ```
 
-`scripts/install-hoop.sh` is env-driven:
+The script:
+1. Copies `.claude-plugin/`, `skills/`, `hooks/`, `dist/`, and `node_modules/` into `~/.claude/plugins/hoop/` (or `$HOOP_DEST`).
+2. Registers a local marketplace via `claude plugin marketplace add`.
+3. Installs and enables the plugin via `claude plugin install hoop@hoop`.
 
+After install, `claude plugin list` should show `hoop@hoop` as `enabled`. Skills (`/hoop-new`, `/hoop-join`, …), hooks, and the MCP server are all wired automatically.
+
+Env vars:
 - `HOOP_SRC` — source checkout (default: `$PWD`)
 - `HOOP_DEST` — install dir (default: `$HOME/.claude/plugins/hoop`)
-- `HOOP_INSTALL_MODE` — `copy` (default) or `symlink`. Symlink mode is useful for
-  dev (edit source → live reload) and for containers where the source tree is
-  bind-mounted.
+- `HOOP_INSTALL_MODE` — `copy` (default) or `symlink`. Symlink mode is useful when the source tree is bind-mounted (you can edit source and reload without re-running the installer).
+
+Prerequisites: `node`, `git`, `jq`, `bash`, and the `claude` CLI on `$PATH`.
 
 ## Testing
 
@@ -48,10 +54,11 @@ The `docker` test project covers:
 **1. Build the claude-runner image**
 
 ```bash
+npm run build  # produces dist/mcp/main.js — required by the image build
 docker build -t hoop-claude-runner -f test-infra/claude-runner/Dockerfile .
 ```
 
-Builds the isolated container used to run each `claude` CLI instance during skill-flow tests. The build context is the repo root so the Dockerfile can `COPY scripts/install-hoop.sh`. The installer runs at image-build time in symlink mode and wires `/root/.claude/plugins/hoop/` to the `/build` mount (the repo is bind-mounted at `/build` at runtime). Do this once (or after changes to `test-infra/claude-runner/` or `scripts/install-hoop.sh`).
+Builds the isolated container used to run each `claude` CLI instance during skill-flow tests. The build context is the repo root because the Dockerfile copies `.claude-plugin/`, `skills/`, `hooks/`, `dist/`, and `node_modules/` into `/build` and runs `install-hoop` at image-build time. The result: every container starts with `claude plugin list` already showing `hoop@hoop` as enabled — skills, hooks, and the MCP server are pre-wired. Rebuild whenever you change anything under those copied paths or the Dockerfile/installer.
 
 **2. Start the services**
 
@@ -108,6 +115,14 @@ docker compose -f docker-compose.test.yml down -v
 ```
 
 The `-v` flag removes the Gitea data volume so the next run starts clean.
+
+#### How registry files reach the host in docker tests
+
+Hooks read JSON registry files (`hoop-session-status.json`, `hoop-lock-status.json`, …) that the MCP server writes. By default both ends derive their paths from `tmpdir()` / `$TMPDIR`. Inside the claude-runner container, however, Claude Code spawns the MCP server in a sandboxed mount namespace and strips `TMPDIR` — so the MCP server's writes to `/tmp` or `/hoop-tmp` never reach the host.
+
+The fix is a single env var, `HOOP_REGISTRY_DIR`, which both ends honour ahead of `tmpdir()`. The docker test sets `-e HOOP_REGISTRY_DIR=/repo/.hoop`. The workspace cwd (`/repo`) is the only mount Claude Code's sandbox shares with the host, so registry files written by the MCP server appear at `${repoDir}/.hoop/*.json` and the hook scripts (running outside the sandbox) read them from the same place.
+
+For local dev installs, `HOOP_REGISTRY_DIR` is unset and everything keeps using `tmpdir()` — same behaviour as before.
 
 #### Debugging
 
