@@ -1,5 +1,5 @@
-import { writeFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { writeFileSync, unlinkSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { ExecutionTarget } from "../session/session.js";
 
 export interface SessionStatusData {
@@ -20,7 +20,7 @@ export function getSessionStatusPath(customPath?: string): string {
   return (
     customPath ??
     process.env.HOOP_SESSION_STATUS_PATH ??
-    join(process.env.TMPDIR || "/tmp", "hoop-session-status.json")
+    join(process.env.HOOP_REGISTRY_DIR || process.env.TMPDIR || "/tmp", "hoop-session-status.json")
   );
 }
 
@@ -34,7 +34,9 @@ export function writeSessionStatus(
     pid: process.pid,
     startedAt: Date.now(),
   };
-  writeFileSync(getSessionStatusPath(customPath), JSON.stringify(status));
+  const path = getSessionStatusPath(customPath);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(status));
 }
 
 export function clearSessionStatus(customPath?: string): void {

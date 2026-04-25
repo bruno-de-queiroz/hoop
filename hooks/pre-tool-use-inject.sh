@@ -10,7 +10,7 @@ set -euo pipefail
 
 source "$(dirname "$0")/_format-peer-changes.sh"
 
-REGISTRY_FILE="${TMPDIR:-/tmp}/hoop-pending-updates.json"
+REGISTRY_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-updates.json"
 
 # No registry file means no active session or no peer changes
 if [ ! -f "$REGISTRY_FILE" ]; then

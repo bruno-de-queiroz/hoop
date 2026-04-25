@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-LOCK_FILE="${TMPDIR:-/tmp}/hoop-lock-status.json"
+LOCK_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-lock-status.json"
 LOCK_TTL_SEC=300  # 5 minutes, matches HOOP_LOCK_TTL_MS in hoopLock.ts
 
 # ── Helper: deny with reason ──────────────────────────────────────

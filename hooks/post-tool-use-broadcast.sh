@@ -11,8 +11,8 @@
 
 set -euo pipefail
 
-SESSION_FILE="${TMPDIR:-/tmp}/hoop-session-status.json"
-OUTBOUND_FILE="${TMPDIR:-/tmp}/hoop-outbound-updates.json"
+SESSION_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-session-status.json"
+OUTBOUND_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-outbound-updates.json"
 
 # Read hook input from stdin
 INPUT=$(cat)
@@ -89,7 +89,7 @@ LOCK_FILE="${OUTBOUND_FILE}.lock"
 ) 200>"$LOCK_FILE"
 
 # Output additionalContext for the first broadcast in this session
-FIRST_FLAG="${TMPDIR:-/tmp}/hoop-first-broadcast.flag"
+FIRST_FLAG="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-first-broadcast.flag"
 if [ ! -f "$FIRST_FLAG" ]; then
   touch "$FIRST_FLAG"
   jq -n --arg file "$REL_PATH" '{

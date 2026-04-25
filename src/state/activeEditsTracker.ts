@@ -27,7 +27,7 @@ export interface ConflictRegistry {
 const REGISTRY_FILENAME = "hoop-active-edits.json";
 
 export function defaultRegistryPath(): string {
-  return join(tmpdir(), REGISTRY_FILENAME);
+  return join(process.env.HOOP_REGISTRY_DIR || tmpdir(), REGISTRY_FILENAME);
 }
 
 // ── Tracker ─────────────────────────────────────────────────────────

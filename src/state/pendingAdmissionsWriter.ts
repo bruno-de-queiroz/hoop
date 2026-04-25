@@ -16,7 +16,7 @@ export interface PendingAdmissionsRegistry {
 const REGISTRY_FILENAME = "hoop-pending-admissions.json";
 
 export function defaultPendingAdmissionsPath(): string {
-  return join(tmpdir(), REGISTRY_FILENAME);
+  return join(process.env.HOOP_REGISTRY_DIR || tmpdir(), REGISTRY_FILENAME);
 }
 
 export class PendingAdmissionsWriter {

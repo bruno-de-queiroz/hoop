@@ -22,7 +22,7 @@ export interface PendingUpdatesRegistry {
 const REGISTRY_FILENAME = "hoop-pending-updates.json";
 
 export function defaultPendingUpdatesPath(): string {
-  return join(tmpdir(), REGISTRY_FILENAME);
+  return join(process.env.HOOP_REGISTRY_DIR || tmpdir(), REGISTRY_FILENAME);
 }
 
 // ── Writer ──────────────────────────────────────────────────────────

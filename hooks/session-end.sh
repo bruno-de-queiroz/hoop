@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-STATUS_FILE="${TMPDIR:-/tmp}/hoop-session-status.json"
+STATUS_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-session-status.json"
 
 # No status file means no active session — nothing to clean up
 if [ ! -f "$STATUS_FILE" ]; then
@@ -33,15 +33,21 @@ if kill -0 "$PID" 2>/dev/null; then
   done
 fi
 
-# Belt-and-suspenders: clean up temp files
-rm -f "$STATUS_FILE"
-rm -f "${TMPDIR:-/tmp}/hoop-active-edits.json"
-rm -f "${TMPDIR:-/tmp}/hoop-pending-admissions.json"
-rm -f "${TMPDIR:-/tmp}/hoop-pending-updates.json"
-rm -f "${TMPDIR:-/tmp}/hoop-outbound-updates.json"
-rm -f "${TMPDIR:-/tmp}/hoop-outbound-updates.json.lock"
-rm -f "${TMPDIR:-/tmp}/hoop-lock-status.json"
-rm -f "${TMPDIR:-/tmp}/hoop-lock-status.json.tmp"
-rm -f "${TMPDIR:-/tmp}/hoop-first-broadcast.flag"
+# Belt-and-suspenders: clean up volatile registry files.  We intentionally
+# do NOT remove $STATUS_FILE here — leaving it lets the next claude session
+# detect a zombie and offer to recover.  hoop_leave_session is the only
+# code path that clears the status file.
+rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-active-edits.json"
+rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-admissions.json"
+rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-updates.json"
+rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-outbound-updates.json"
+rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-outbound-updates.json.lock"
+rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-lock-status.json"
+rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-lock-status.json.tmp"
+rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-first-broadcast.flag"
+
+# Residual proof that this hook executed — readable by tests and by a
+# follow-up SessionStart that wants to confirm clean teardown.
+touch "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/.hoop-session-end.marker" 2>/dev/null || true
 
 exit 0

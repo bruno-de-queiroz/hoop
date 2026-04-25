@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-STATUS_FILE="${TMPDIR:-/tmp}/hoop-session-status.json"
+STATUS_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-session-status.json"
 
 # No status file means no active session
 if [ ! -f "$STATUS_FILE" ]; then

@@ -20,7 +20,7 @@ export interface PendingPromptRequestsRegistry {
 const REGISTRY_FILENAME = "hoop-pending-prompt-requests.json";
 
 export function defaultPendingPromptRequestsPath(): string {
-  return join(tmpdir(), REGISTRY_FILENAME);
+  return join(process.env.HOOP_REGISTRY_DIR || tmpdir(), REGISTRY_FILENAME);
 }
 
 export class PendingPromptRequestsWriter {

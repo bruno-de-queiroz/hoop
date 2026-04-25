@@ -69,7 +69,7 @@ function runClaude(
     "-v", `${opts.cwd}:/repo`,
     "-v", `${opts.hoopTmpDir}:/hoop-tmp`,
     "-w", "/repo",
-    "-e", `HOOP_SESSION_STATUS_PATH=/repo/.hoop-session-status.json`,
+    "-e", `HOOP_REGISTRY_DIR=/repo/.hoop`,
     "-e", `ANTHROPIC_BASE_URL=${MOCK_LLM_URL}/${opts.scenarioPrefix}`,
     "-e", "ANTHROPIC_API_KEY=test-key-not-real",
     "-e", "GIT_AUTHOR_NAME=hoop-test",
@@ -166,11 +166,16 @@ describe.skipIf(skip)("Claude Code skill flow — hoop session via mock LLM", ()
     // MCP tool_result, mirroring what a real LLM would summarize.
     expect(result).toMatch(/[A-Z0-9]{3}-[A-Z0-9]{3}/);
 
+    // Residual proof: session-end.sh touches this marker on every run.
+    // Its presence proves the plugin's SessionEnd hook actually fired
+    // (i.e. plugin install + hook wiring round-tripped end-to-end).
+    await access(join(repoDir, ".hoop", ".hoop-session-end.marker"));
+
     // The MCP server writes this file on successful session creation.
-    // Claude Code sandboxes MCP servers with a mount namespace, so writes to
-    // /tmp or /hoop-tmp do not reach the host — only the workspace cwd (/repo)
-    // does.  We point HOOP_SESSION_STATUS_PATH at /repo/.hoop-session-status.json.
-    const statusPath = join(repoDir, ".hoop-session-status.json");
+    // HOOP_REGISTRY_DIR=/repo/.hoop routes all registry files into the
+    // workspace cwd (the only bind mount Claude Code's MCP-server sandbox
+    // shares with the host).  Hooks read from the same dir.
+    const statusPath = join(repoDir, ".hoop", "hoop-session-status.json");
     const status = JSON.parse(await readFile(statusPath, "utf-8"));
     expect(status.role).toBe("host");
     expect(typeof status.sessionCode).toBe("string");
@@ -198,7 +203,7 @@ describe.skipIf(skip)("Claude Code skill flow — hoop session via mock LLM", ()
     });
 
     const status = JSON.parse(
-      await readFile(join(repoDir, ".hoop-session-status.json"), "utf-8"),
+      await readFile(join(repoDir, ".hoop", "hoop-session-status.json"), "utf-8"),
     );
     const sessionCode: string = status.sessionCode;
     const hostAddress: string = status.listenAddresses?.[0] ?? "";

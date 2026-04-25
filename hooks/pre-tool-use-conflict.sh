@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-REGISTRY_FILE="${TMPDIR:-/tmp}/hoop-active-edits.json"
+REGISTRY_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-active-edits.json"
 
 # Read hook input from stdin
 INPUT=$(cat)

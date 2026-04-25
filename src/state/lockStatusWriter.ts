@@ -19,7 +19,7 @@ export interface LockStatusRegistry {
 const REGISTRY_FILENAME = "hoop-lock-status.json";
 
 export function defaultLockStatusPath(): string {
-  return join(tmpdir(), REGISTRY_FILENAME);
+  return join(process.env.HOOP_REGISTRY_DIR || tmpdir(), REGISTRY_FILENAME);
 }
 
 // ── Writer ──────────────────────────────────────────────────────────

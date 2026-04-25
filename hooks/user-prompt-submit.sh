@@ -9,10 +9,10 @@ set -euo pipefail
 
 source "$(dirname "$0")/_format-peer-changes.sh"
 
-STATUS_FILE="${TMPDIR:-/tmp}/hoop-session-status.json"
-ADMISSIONS_FILE="${TMPDIR:-/tmp}/hoop-pending-admissions.json"
-UPDATES_FILE="${TMPDIR:-/tmp}/hoop-pending-updates.json"
-PROMPT_REQUESTS_FILE="${TMPDIR:-/tmp}/hoop-pending-prompt-requests.json"
+STATUS_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-session-status.json"
+ADMISSIONS_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-admissions.json"
+UPDATES_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-updates.json"
+PROMPT_REQUESTS_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-prompt-requests.json"
 MAX_PATCH_LINES=20
 MAX_FILES=5
 
