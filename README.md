@@ -116,6 +116,55 @@ docker compose -f docker-compose.test.yml down -v
 
 The `-v` flag removes the Gitea data volume so the next run starts clean.
 
+#### Run claude in the runner image manually
+
+Useful when you want to poke at the same container the test uses — e.g. to debug a hook, try a different prompt, or watch the plugin's MCP server in real time. Prereqs: claude-runner image built, services up, Gitea initialised (steps 1–3 above).
+
+```bash
+# Throw-away workspace + tmp dir so each manual run is isolated
+REPO=$(mktemp -d /tmp/hoop-manual-repo-XXXXXX)
+HOOPTMP=$(mktemp -d /tmp/hoop-manual-tmp-XXXXXX)
+git -C "$REPO" init -q
+git -C "$REPO" -c user.name=t -c user.email=t@t.com commit --allow-empty -m init -q
+git -C "$REPO" remote add origin "$GITEA_CLONE_URL"
+
+# Reset the mock-llm scenario you're about to use (via the running container)
+docker exec hoop-mock-llm-1 wget -qO- --post-data='' \
+  http://localhost:4000/scenario/host/reset
+
+# Drive claude through the host scenario
+docker run --rm --network host \
+  -v "$REPO":/repo \
+  -v "$HOOPTMP":/hoop-tmp \
+  -w /repo \
+  -e HOOP_REGISTRY_DIR=/repo/.hoop \
+  -e ANTHROPIC_BASE_URL=http://localhost:4000/host \
+  -e ANTHROPIC_API_KEY=test-key-not-real \
+  -e GIT_AUTHOR_NAME=hoop-test -e GIT_AUTHOR_EMAIL=test@hoop.test \
+  -e GIT_COMMITTER_NAME=hoop-test -e GIT_COMMITTER_EMAIL=test@hoop.test \
+  -e GIT_CONFIG_COUNT=1 \
+  -e GIT_CONFIG_KEY_0=safe.directory \
+  -e GIT_CONFIG_VALUE_0='*' \
+  hoop-claude-runner \
+  claude "/hoop-new" \
+    --print --output-format json \
+    --allowedTools 'mcp__plugin_hoop_hoop__*'
+
+# Inspect what the run produced
+ls -la "$REPO/.hoop"
+cat "$REPO/.hoop/hoop-session-status.json" | jq
+[ -f "$REPO/.hoop/.hoop-session-end.marker" ] && echo "✔ SessionEnd hook fired"
+
+# Cleanup
+sudo rm -rf "$REPO" "$HOOPTMP"   # sudo because root-owned files from the container
+```
+
+Swap-outs:
+- **Run against a real Anthropic endpoint** — drop `ANTHROPIC_BASE_URL` and provide a real `ANTHROPIC_API_KEY`. Skill flow then depends on the LLM's actual decisions.
+- **Use the peer scenario** — change `host` → `peer` in the reset URL and the `ANTHROPIC_BASE_URL`, then prompt `/hoop-join <code>` (set `SESSION_CODE` and `HOST_ADDRESS` first via `POST /scenario/peer/set-vars`).
+- **Try a different skill** — replace `/hoop-new` with any of the other skill commands (`/hoop-join`, `/hoop-mode`, `/hoop-unlock`, `/hoop-agent`).
+- **Drop into a shell instead** — replace the trailing `claude …` with `sh` to inspect `/root/.claude/plugins/hoop/`, run `claude plugin list`, etc.
+
 #### How registry files reach the host in docker tests
 
 Hooks read JSON registry files (`hoop-session-status.json`, `hoop-lock-status.json`, …) that the MCP server writes. By default both ends derive their paths from `tmpdir()` / `$TMPDIR`. Inside the claude-runner container, however, Claude Code spawns the MCP server in a sandboxed mount namespace and strips `TMPDIR` — so the MCP server's writes to `/tmp` or `/hoop-tmp` never reach the host.
