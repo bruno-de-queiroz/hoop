@@ -299,4 +299,51 @@ describe.skipIf(skip)("Claude Code skill flow — hoop session via mock LLM", ()
       }).catch(() => {});
     }
   });
+
+  it("peer claude fails honestly when the host isn't reachable", async () => {
+    if (!canRun) {
+      console.warn("skipping: hoop-claude-runner image not built or dist/ not built");
+      return;
+    }
+
+    // Point the peer at an address where nothing listens.  Port 1 is reserved
+    // and never bound, so the libp2p TCP dial will fail.  The peer ID is
+    // syntactically valid but corresponds to no running node.
+    const badAddress = "/ip4/127.0.0.1/tcp/1/p2p/12D3KooWAbsent11111111111111111111111111111111111111";
+    const badSessionCode = "ZZZ-ZZZ";
+
+    const peerTmpDir = await mkdtemp(join(tmpdir(), "hoop-peer-tmp-"));
+    const peerRepoDir = await createTempRepo("hoop-peer-");
+    try {
+      await writeFile(join(peerRepoDir, "README.md"), "# Peer\n");
+      gitSync(["add", "."], peerRepoDir);
+      gitSync(["commit", "-m", "initial"], peerRepoDir);
+      gitSync(["remote", "add", "origin", GITEA_CLONE_URL!], peerRepoDir);
+
+      await resetScenario("peer");
+      await setScenarioVars("peer", {
+        SESSION_CODE: badSessionCode,
+        HOST_ADDRESS: badAddress,
+      });
+
+      // The mock-llm scripts a "Successfully joined" end_turn, but the actual
+      // hoop_join_session tool will return an error tool_result first because
+      // the libp2p dial fails.  Claude only writes role:"peer" status on
+      // success — so the absence of that file is the honest signal.
+      await runClaude(`/hoop-join ${badSessionCode}`, {
+        cwd: peerRepoDir,
+        hoopTmpDir: peerTmpDir,
+        scenarioPrefix: "peer",
+      });
+
+      await expect(
+        readFile(join(peerRepoDir, ".hoop", "hoop-session-status.json"), "utf-8"),
+      ).rejects.toThrow(/ENOENT/);
+    } finally {
+      await Promise.all([
+        removeTempRepo(peerRepoDir).catch(() => {}),
+        rm(peerTmpDir, { recursive: true, force: true }).catch(() => {}),
+      ]);
+    }
+  });
 });
