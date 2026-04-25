@@ -38,14 +38,17 @@ function ensure(name) {
 // plugin-discovery prefix "mcp__plugin_hoop_hoop__*" (claude plugin install).
 const isHoopTool = (name) => name?.startsWith("mcp__hoop__") || name?.startsWith("mcp__plugin_hoop_hoop__");
 
-// Conversation-state-driven scenario serving.  Instead of an internal index,
-// we look at what's already in the incoming `messages` and pick the response
-// that matches the conversation state.  This makes manual interactive runs
-// (which start fresh conversations) work without a `reset` first, and stays
-// correct under Claude Code's parallel API requests.
+// Conversation-state-driven scenario serving.
 //
-// A scenario is an array of responses.  We expect exactly one to be a
-// `tool_use` (the "trigger") and the rest to be `end_turn` continuations.
+// A scenario file declares a single tool_use response.  When the incoming
+// conversation already has a matching tool_result, we ECHO that tool_result's
+// text (success or error) back as the assistant's end_turn — no scripted
+// "Successfully X" template, so the mock can't lie.  Tests that grep the
+// result string see what the real MCP tool actually returned.
+//
+// {SESSION_CODE} / {HOST_ADDRESS} substitution is still honoured for the
+// tool_use input (driven by setScenarioVars from the test side), so the
+// peer scenario can be aimed at a specific live host.
 function nextResponse(scenario, messages, tools) {
   if (!ensure(scenario)) return endTurn(`[mock-llm] unknown scenario: ${scenario}`);
   const s = registry.get(scenario);
@@ -59,25 +62,24 @@ function nextResponse(scenario, messages, tools) {
     return endTurn("[mock-llm] waiting for MCP tools to initialize");
   }
 
-  // Find the scenario's tool_use step and the matching post-tool-result step.
-  const toolUseIdx = s.responses.findIndex(r =>
+  const toolUseStep = s.responses.find(r =>
     r.content?.some(c => c.type === "tool_use"));
-  const toolUseStep = toolUseIdx >= 0 ? s.responses[toolUseIdx] : null;
   const toolUseId = toolUseStep?.content?.find(c => c.type === "tool_use")?.id;
-  const postStep = toolUseIdx >= 0 ? s.responses[toolUseIdx + 1] : s.responses[0];
 
-  // Has the tool already been executed in this conversation?
-  const hasToolResult = toolUseId
-    ? (messages ?? []).some(m =>
-        Array.isArray(m.content) && m.content.some(c =>
-          c.type === "tool_result" && c.tool_use_id === toolUseId))
-    : false;
+  // If a tool_result for our tool_use is in the conversation, echo it.
+  if (toolUseId) {
+    const result = extractToolResult(messages, toolUseId);
+    if (result) {
+      const prefix = result.isError ? "Tool error: " : "";
+      return endTurn(prefix + result.text);
+    }
+  }
 
-  const stepToServe = toolUseStep && !hasToolResult ? toolUseStep : postStep;
-  if (!stepToServe) return endTurn("[mock-llm] scenario has no responses");
-
-  const tmpl = JSON.parse(JSON.stringify(stepToServe));
-  deepSub(tmpl, buildVars(messages, s.vars));
+  // No tool_result yet — serve the scripted tool_use step (with input
+  // substitution from preset vars).
+  if (!toolUseStep) return endTurn("[mock-llm] scenario has no tool_use step");
+  const tmpl = JSON.parse(JSON.stringify(toolUseStep));
+  deepSub(tmpl, s.vars);
   return {
     id: `msg_${Date.now()}`,
     type: "message",
@@ -100,34 +102,30 @@ function endTurn(text) {
   };
 }
 
-// Walk messages in reverse looking for a tool_result whose text is JSON.
-// Returns the parsed object, or null if none found.  Regex over the
-// JSON.stringify'd form doesn't work because nested JSON gets double-escaped.
-function extractLastToolResultJson(messages) {
+// Walk messages in reverse looking for the tool_result that matches
+// `toolUseId`.  Returns { text, isError } or null.  The MCP server emits
+// success results as content:[{type:"text",text:"..."}] and errors as a
+// plain string content with is_error:true — handle both shapes.
+function extractToolResult(messages, toolUseId) {
   for (let i = (messages?.length ?? 0) - 1; i >= 0; i--) {
     const m = messages[i];
     if (!Array.isArray(m?.content)) continue;
     for (const block of m.content) {
-      if (block?.type !== "tool_result" || !Array.isArray(block.content)) continue;
-      for (const tc of block.content) {
-        if (tc?.type !== "text" || typeof tc.text !== "string") continue;
-        try {
-          const obj = JSON.parse(tc.text);
-          if (obj && typeof obj === "object") return obj;
-        } catch { /* not JSON — skip */ }
+      if (block?.type !== "tool_result" || block.tool_use_id !== toolUseId) continue;
+      const isError = block.is_error === true;
+      let text = "";
+      if (typeof block.content === "string") {
+        text = block.content;
+      } else if (Array.isArray(block.content)) {
+        text = block.content
+          .filter(c => c?.type === "text" && typeof c.text === "string")
+          .map(c => c.text)
+          .join("\n");
       }
+      return { text, isError };
     }
   }
   return null;
-}
-
-function buildVars(messages, preset) {
-  const parsed = extractLastToolResultJson(messages);
-  return {
-    SESSION_CODE: parsed?.sessionCode ?? preset.SESSION_CODE,
-    HOST_ADDRESS: parsed?.listenAddresses?.[0] ?? preset.HOST_ADDRESS,
-    ...preset,
-  };
 }
 
 function deepSub(obj, vars) {

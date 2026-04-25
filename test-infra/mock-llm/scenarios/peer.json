@@ -14,11 +14,5 @@
         }
       }
     ]
-  },
-  {
-    "stop_reason": "end_turn",
-    "content": [
-      { "type": "text", "text": "Successfully joined the hoop session {SESSION_CODE}." }
-    ]
   }
 ]

@@ -189,9 +189,11 @@ describe.skipIf(skip)("Claude Code skill flow — hoop session via mock LLM", ()
     }
 
     expect(result).toMatch(/session/i);
-    // Mock-llm now substitutes {SESSION_CODE} with the real code from the
-    // MCP tool_result, mirroring what a real LLM would summarize.
-    expect(result).toMatch(/[A-Z0-9]{3}-[A-Z0-9]{3}/);
+    // Mock-llm echoes the real tool_result text back as the assistant's
+    // end_turn — no scripted template, no possibility of lying.  The host
+    // tool result is JSON containing sessionCode + listenAddresses.
+    expect(result).toMatch(/"sessionCode":"[A-Z0-9]{3}-[A-Z0-9]{3}/);
+    expect(result).toMatch(/"role":"host"|"executionTarget"/);
 
     // Residual proof: session-end.sh touches this marker on every run.
     // Its presence proves the plugin's SessionEnd hook actually fired
@@ -261,11 +263,20 @@ describe.skipIf(skip)("Claude Code skill flow — hoop session via mock LLM", ()
           HOST_ADDRESS: hostAddress!,
         });
 
-        await runClaude(`/hoop-join ${sessionCode}`, {
+        const peerOutput = await runClaude(`/hoop-join ${sessionCode}`, {
           cwd: peerRepoDir,
           hoopTmpDir: peerTmpDir,
           scenarioPrefix: "peer",
         });
+        const peerResult = (() => {
+          try { return JSON.parse(peerOutput).result ?? peerOutput; } catch { return peerOutput; }
+        })();
+
+        // Mock-llm echoes the tool_result.  joinSession returns JSON with
+        // admitted:true on success — fields any mock would have to fabricate
+        // can't appear here unless the real MCP join went through.
+        expect(peerResult).toMatch(/"admitted":true/);
+        expect(peerResult).toContain(sessionCode);
 
         // The MCP server only writes hoop-session-status.json with role:"peer"
         // when joinSession returns successfully — i.e. the libp2p TCP handshake
@@ -326,16 +337,19 @@ describe.skipIf(skip)("Claude Code skill flow — hoop session via mock LLM", ()
         HOST_ADDRESS: badAddress,
       });
 
-      // The mock-llm scripts a "Successfully joined" end_turn, but the actual
-      // hoop_join_session tool will return an error tool_result first because
-      // the libp2p dial fails.  Claude only writes role:"peer" status on
-      // success — so the absence of that file is the honest signal.
-      await runClaude(`/hoop-join ${badSessionCode}`, {
+      // hoop_join_session will fail because the libp2p dial can't connect.
+      // Mock-llm echoes the real error tool_result back, and the MCP server
+      // never writes a role:"peer" status file.  Both signals must agree.
+      const out = await runClaude(`/hoop-join ${badSessionCode}`, {
         cwd: peerRepoDir,
         hoopTmpDir: peerTmpDir,
         scenarioPrefix: "peer",
       });
+      const result = (() => {
+        try { return JSON.parse(out).result ?? out; } catch { return out; }
+      })();
 
+      expect(result).toMatch(/Tool error|Failed to join/i);
       await expect(
         readFile(join(peerRepoDir, ".hoop", "hoop-session-status.json"), "utf-8"),
       ).rejects.toThrow(/ENOENT/);
