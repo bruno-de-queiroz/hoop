@@ -163,9 +163,11 @@ sudo rm -rf "$REPO" "$HOOPTMP"   # sudo because root-owned files from the contai
 
 Swap-outs:
 - **Run against a real Anthropic endpoint** — drop `ANTHROPIC_BASE_URL` and provide a real `ANTHROPIC_API_KEY`. Skill flow then depends on the LLM's actual decisions.
-- **Use the peer scenario** — change `host` → `peer` in the reset URL and the `ANTHROPIC_BASE_URL`, then prompt `/hoop-join <code>` (set `SESSION_CODE` and `HOST_ADDRESS` first via `POST /scenario/peer/set-vars`).
+- **Use the peer scenario** — change `ANTHROPIC_BASE_URL` to `http://localhost:4000/peer`, prompt `/hoop-join <code>`, and preload the real session code + host multiaddr first via `POST /scenario/peer/set-vars` (the peer scenario's `tool_use` input takes those as `{SESSION_CODE}` / `{HOST_ADDRESS}` placeholders).
 - **Try a different skill** — replace `/hoop-new` with any of the other skill commands (`/hoop-join`, `/hoop-mode`, `/hoop-unlock`, `/hoop-agent`).
 - **Drop into a shell instead** — replace the trailing `claude …` with `sh` to inspect `/root/.claude/plugins/hoop/`, run `claude plugin list`, etc.
+
+> **What the result string contains.** Mock-llm echoes the real tool_result back as the assistant's `end_turn`, so `result` in the JSON output is the literal output of the MCP tool — successful runs surface the `sessionCode`, `peerId`, listen addresses, etc.; failures surface the actual error message prefixed with `Tool error: `. There is no scripted "Successfully X" template that could mislead you.
 
 #### How registry files reach the host in docker tests
 
@@ -177,10 +179,10 @@ For local dev installs, `HOOP_REGISTRY_DIR` is unset and everything keeps using 
 
 #### Debug a manual run
 
-The scripted nature of the mock makes `claude` output misleading — the wrap-up text is canned. To see what *actually* happened inside the container, look at the side channels.
+`claude --print --output-format json`'s `result` field already shows the real tool_result text (mock-llm echoes it). For everything else — turn-by-turn message structure, hook execution, registry side effects — use the channels below.
 
 ```bash
-# Real tool_result the MCP server returned (vs. the scripted end_turn)
+# Mock-llm-side view of every tool_result that came back through the API
 docker logs hoop-mock-llm-1 2>&1 | grep tool_results | tail -3
 
 # The peer/host's recorded session role + sessionCode
@@ -205,7 +207,9 @@ docker compose -f docker-compose.test.yml restart mock-llm
 
 For the deepest view, add `--debug` to the `claude …` invocation. It dumps every MCP request/response, every hook execution with stdout/stderr, and the full Anthropic API payloads. Verbose, but it's the ground truth.
 
-For two-peer flows specifically (host running, peer joining), the host's libp2p node only stays up while the host's `claude` process is alive. Since `docker run --rm` exits as soon as the prompt is answered, you can't run the host non-interactively and then join from a separate peer container — the host is already gone. To exercise an actual P2P handshake manually you need the **host container running interactively** (the `-it` you used keeps `claude` open) while you fire the peer in a second terminal. After the peer's `hoop_join_session` call, check `hoop-session-status.json` on the peer side: `role: "peer"` confirms the libp2p layer succeeded.
+For two-peer flows specifically (host running, peer joining), the host's libp2p node only stays up while the host's `claude` process is alive. Since `docker run --rm` exits as soon as the prompt is answered, you can't run the host non-interactively and then join from a separate peer container — the host is already gone. To exercise an actual P2P handshake manually you need the **host container running interactively** (`-it` keeps `claude` open) while you fire the peer in a second terminal. After the peer's `hoop_join_session` call, check `hoop-session-status.json` on the peer side: `role: "peer"` confirms the libp2p layer succeeded.
+
+The automated peer test takes a different shortcut: it stands up a real libp2p host *in the vitest process* (via `createSession({ executionTarget: "host-only", … })` with the default `transportMode: "local"`) and only containerises the peer. The peer container's MCP server dials `127.0.0.1:<port>` over real TCP, so `--network host` is required.
 
 #### Debugging
 
