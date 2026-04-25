@@ -15,6 +15,33 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { gitSync, createTempRepo, removeTempRepo } from "./helpers/gitTestRepo.js";
+import {
+  createSession,
+  defaultAdmissionHandler,
+  type CreateSessionResult,
+  type GitOps,
+} from "../session/createSession.js";
+import { destroySession } from "../session/destroySession.js";
+import { SessionStore } from "../session/session.js";
+import {
+  getGitRoot,
+  createSessionWorktree,
+  removeSessionWorktree,
+  pushBranch,
+  deleteRemoteBranch,
+  addAndCommit,
+} from "../git/gitBranch.js";
+
+function makeGitOps(cwd: string): GitOps {
+  return {
+    getGitRoot: () => getGitRoot(cwd),
+    createSessionWorktree: (branch, path) => createSessionWorktree(branch, path, cwd),
+    removeSessionWorktree: (path, branch) => removeSessionWorktree(path, branch, cwd),
+    pushBranch: (branch) => pushBranch(branch, "origin", cwd),
+    deleteRemoteBranch: (branch) => deleteRemoteBranch(branch, "origin", cwd),
+    addAndCommit: (msg, worktreeCwd) => addAndCommit(msg, worktreeCwd ?? cwd),
+  };
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOOP_ROOT = resolve(__dirname, "../..");
@@ -188,57 +215,88 @@ describe.skipIf(skip)("Claude Code skill flow — hoop session via mock LLM", ()
     expect(lsRemote).toContain(branchPattern);
   });
 
-  it("peer scenario receives session code via set-vars and calls hoop_join_session", async () => {
+  it("peer claude really connects to a live host over TCP libp2p", async () => {
     if (!canRun) {
       console.warn("skipping: hoop-claude-runner image not built or dist/ not built");
       return;
     }
 
-    // --- Host creates session ---
-    await resetScenario("host");
-    await runClaude("Create a new hoop session", {
-      cwd: repoDir,
-      hoopTmpDir,
-      scenarioPrefix: "host",
-    });
-
-    const status = JSON.parse(
-      await readFile(join(repoDir, ".hoop", "hoop-session-status.json"), "utf-8"),
+    // --- Real host: in-process libp2p node listening on TCP loopback ---------
+    // Default transportMode "local" uses real TCP — addresses like
+    // /ip4/127.0.0.1/tcp/<port> are reachable from the peer container which
+    // runs with --network host.  No claude/mock-llm involved on the host side;
+    // the host's role here is just to be a real, dial-able libp2p node.
+    const store = new SessionStore();
+    const host: CreateSessionResult = await createSession(
+      {
+        executionTarget: "host-only",
+        gitOps: makeGitOps(repoDir),
+        // Auto-admit any peer that asks: this test verifies the network
+        // handshake, not the admission UX.
+        onAdmissionRequest: defaultAdmissionHandler,
+      },
+      store,
     );
-    const sessionCode: string = status.sessionCode;
-    const hostAddress: string = status.listenAddresses?.[0] ?? "";
-    expect(sessionCode).toBeTruthy();
-    expect(hostAddress).toBeTruthy();
 
-    // --- Peer joins ---
-    const peerTmpDir = await mkdtemp(join(tmpdir(), "hoop-peer-tmp-"));
-    const peerRepoDir = await createTempRepo("hoop-peer-");
     try {
-      await writeFile(join(peerRepoDir, "README.md"), "# Peer\n");
-      gitSync(["add", "."], peerRepoDir);
-      gitSync(["commit", "-m", "initial"], peerRepoDir);
-      gitSync(["remote", "add", "origin", GITEA_CLONE_URL!], peerRepoDir);
+      const sessionCode = host.sessionCode;
+      // Pick a loopback address — the peer container shares the host network
+      // namespace so 127.0.0.1 means the same physical interface.
+      const hostAddress = host.listenAddresses.find(a => a.startsWith("/ip4/127.0.0.1/"));
+      expect(sessionCode).toMatch(/^[A-Z0-9]{3}-[A-Z0-9]{3}/);
+      expect(hostAddress, `expected loopback listen addr; got ${host.listenAddresses}`).toBeTruthy();
 
-      await resetScenario("peer");
-      await setScenarioVars("peer", { SESSION_CODE: sessionCode, HOST_ADDRESS: hostAddress });
-
-      const peerOutput = await runClaude(
-        `/hoop-join ${sessionCode}`,
-        { cwd: peerRepoDir, hoopTmpDir: peerTmpDir, scenarioPrefix: "peer" },
-      );
-
-      let peerResult: string;
+      // --- Peer container: real claude → /hoop-join → real libp2p dial ------
+      const peerTmpDir = await mkdtemp(join(tmpdir(), "hoop-peer-tmp-"));
+      const peerRepoDir = await createTempRepo("hoop-peer-");
       try {
-        peerResult = JSON.parse(peerOutput).result ?? peerOutput;
-      } catch {
-        peerResult = peerOutput;
+        await writeFile(join(peerRepoDir, "README.md"), "# Peer\n");
+        gitSync(["add", "."], peerRepoDir);
+        gitSync(["commit", "-m", "initial"], peerRepoDir);
+        gitSync(["remote", "add", "origin", GITEA_CLONE_URL!], peerRepoDir);
+
+        await resetScenario("peer");
+        await setScenarioVars("peer", {
+          SESSION_CODE: sessionCode,
+          HOST_ADDRESS: hostAddress!,
+        });
+
+        await runClaude(`/hoop-join ${sessionCode}`, {
+          cwd: peerRepoDir,
+          hoopTmpDir: peerTmpDir,
+          scenarioPrefix: "peer",
+        });
+
+        // The MCP server only writes hoop-session-status.json with role:"peer"
+        // when joinSession returns successfully — i.e. the libp2p TCP handshake
+        // completed and the host accepted the admission.  No mock can fake
+        // this; if the connection failed, the file is missing.
+        const peerStatus = JSON.parse(
+          await readFile(
+            join(peerRepoDir, ".hoop", "hoop-session-status.json"),
+            "utf-8",
+          ),
+        );
+        expect(peerStatus.role).toBe("peer");
+        expect(peerStatus.sessionCode).toBe(sessionCode);
+        expect(peerStatus.pid).toBeGreaterThan(0);
+      } finally {
+        await Promise.all([
+          removeTempRepo(peerRepoDir).catch(() => {}),
+          rm(peerTmpDir, { recursive: true, force: true }).catch(() => {}),
+        ]);
       }
-      expect(peerResult).toMatch(/session|joined/i);
     } finally {
-      await Promise.all([
-        removeTempRepo(peerRepoDir).catch(() => {}),
-        rm(peerTmpDir, { recursive: true, force: true }).catch(() => {}),
-      ]);
+      // Tear down the real host: stop libp2p, clean worktree, drain pushes.
+      await destroySession({
+        sessionCode: host.sessionCode,
+        branchName: host.branchName,
+        worktreePath: host.worktreePath,
+        node: host.node,
+        store,
+        gitOps: makeGitOps(repoDir),
+        drainPendingPush: host.drainPendingPush,
+      }).catch(() => {});
     }
   });
 });
