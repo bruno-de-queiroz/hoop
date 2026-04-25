@@ -26,7 +26,7 @@ const registry = new Map();
 function load(name) {
   const path = join(__dirname, "scenarios", `${name}.json`);
   if (!existsSync(path)) return false;
-  registry.set(name, { responses: JSON.parse(readFileSync(path, "utf-8")), index: 0, vars: {} });
+  registry.set(name, { responses: JSON.parse(readFileSync(path, "utf-8")), vars: {} });
   return true;
 }
 
@@ -34,17 +34,24 @@ function ensure(name) {
   return registry.has(name) || load(name);
 }
 
+// Match both the legacy "mcp__hoop__*" prefix (--mcp-config style) and the
+// plugin-discovery prefix "mcp__plugin_hoop_hoop__*" (claude plugin install).
+const isHoopTool = (name) => name?.startsWith("mcp__hoop__") || name?.startsWith("mcp__plugin_hoop_hoop__");
+
+// Conversation-state-driven scenario serving.  Instead of an internal index,
+// we look at what's already in the incoming `messages` and pick the response
+// that matches the conversation state.  This makes manual interactive runs
+// (which start fresh conversations) work without a `reset` first, and stays
+// correct under Claude Code's parallel API requests.
+//
+// A scenario is an array of responses.  We expect exactly one to be a
+// `tool_use` (the "trigger") and the rest to be `end_turn` continuations.
 function nextResponse(scenario, messages, tools) {
   if (!ensure(scenario)) return endTurn(`[mock-llm] unknown scenario: ${scenario}`);
   const s = registry.get(scenario);
-  if (s.index >= s.responses.length) return endTurn("[mock-llm] scenario exhausted");
 
-  // If the scenario uses hoop MCP tools but they haven't been registered in this
-  // request yet (parallel no-tools requests from Claude Code's init phase),
-  // return a placeholder and do NOT advance the index.
-  // Match both the legacy "mcp__hoop__*" prefix (--mcp-config style) and the
-  // plugin-discovery prefix "mcp__plugin_hoop_hoop__*" (claude plugin install).
-  const isHoopTool = (name) => name?.startsWith("mcp__hoop__") || name?.startsWith("mcp__plugin_hoop_hoop__");
+  // Hoop-tools-ready gate (Claude Code's init phase makes hoop-less requests
+  // first; serving the tool_use to those would be wrong).
   const scenarioUsesMcp = s.responses.some(r =>
     r.content?.some(c => c.type === "tool_use" && isHoopTool(c.name)));
   const hoopToolsReady = (tools ?? []).some(t => isHoopTool(t.name));
@@ -52,34 +59,24 @@ function nextResponse(scenario, messages, tools) {
     return endTurn("[mock-llm] waiting for MCP tools to initialize");
   }
 
-  // For tool_use steps: serve the same response to ALL parallel requests without
-  // advancing the index — Claude Code fires multiple concurrent API calls and one
-  // of them may be discarded.  Only advance past the tool_use once an incoming
-  // request actually carries the matching tool_result (meaning Claude executed it).
-  const currentStep = s.responses[s.index];
-  const currentToolUseId = currentStep?.content?.find(c => c.type === "tool_use")?.id;
+  // Find the scenario's tool_use step and the matching post-tool-result step.
+  const toolUseIdx = s.responses.findIndex(r =>
+    r.content?.some(c => c.type === "tool_use"));
+  const toolUseStep = toolUseIdx >= 0 ? s.responses[toolUseIdx] : null;
+  const toolUseId = toolUseStep?.content?.find(c => c.type === "tool_use")?.id;
+  const postStep = toolUseIdx >= 0 ? s.responses[toolUseIdx + 1] : s.responses[0];
 
-  if (currentToolUseId) {
-    const hasToolResult = (messages ?? []).some(m =>
-      Array.isArray(m.content) && m.content.some(c =>
-        c.type === "tool_result" && c.tool_use_id === currentToolUseId));
+  // Has the tool already been executed in this conversation?
+  const hasToolResult = toolUseId
+    ? (messages ?? []).some(m =>
+        Array.isArray(m.content) && m.content.some(c =>
+          c.type === "tool_result" && c.tool_use_id === toolUseId))
+    : false;
 
-    if (!hasToolResult) {
-      // Tool not yet executed — re-serve the tool_use without advancing.
-      const tmpl = JSON.parse(JSON.stringify(currentStep));
-      deepSub(tmpl, buildVars(messages, s.vars));
-      return { id: `msg_${Date.now()}`, type: "message", role: "assistant",
-        model: "claude-sonnet-4-6", usage: { input_tokens: 100, output_tokens: 50 }, ...tmpl };
-    }
+  const stepToServe = toolUseStep && !hasToolResult ? toolUseStep : postStep;
+  if (!stepToServe) return endTurn("[mock-llm] scenario has no responses");
 
-    // Tool was executed — advance past the tool_use step.
-    s.index++;
-    if (s.index >= s.responses.length) return endTurn("[mock-llm] scenario exhausted");
-  }
-
-  // Non-tool-use step (or post-tool-result continuation): serve WITHOUT advancing
-  // so all parallel requests in this phase get the same response.
-  const tmpl = JSON.parse(JSON.stringify(s.responses[s.index]));
+  const tmpl = JSON.parse(JSON.stringify(stepToServe));
   deepSub(tmpl, buildVars(messages, s.vars));
   return {
     id: `msg_${Date.now()}`,
@@ -226,7 +223,7 @@ createServer(async (req, res) => {
           : (typeof m.content === "string" ? m.content.slice(0, 40).replace(/\n/g, " ") : "?");
         return `${m.role}[${ct}]`;
       }).join(" → ");
-      console.log(`[mock-llm] ${scenario} turn ${s?.index ?? 0} hoop=${hoopReady} msgs: ${msgSummary}`);
+      console.log(`[mock-llm] ${scenario} hoop=${hoopReady} msgs: ${msgSummary}`);
       const resp = nextResponse(scenario, payload.messages, payload.tools);
       console.log(`[mock-llm] → stop_reason=${resp.stop_reason} content_types=${resp.content?.map(c => c.type).join(",")}`);
       return send(res, 200, resp);

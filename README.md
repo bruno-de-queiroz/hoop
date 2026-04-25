@@ -120,6 +120,11 @@ The `-v` flag removes the Gitea data volume so the next run starts clean.
 
 Useful when you want to poke at the same container the test uses — e.g. to debug a hook, try a different prompt, or watch the plugin's MCP server in real time. Prereqs: claude-runner image built, services up, Gitea initialised (steps 1–3 above).
 
+> **Mock-llm picks scenarios by URL path, not by user prompt.**
+> `ANTHROPIC_BASE_URL=http://localhost:4000/host` always serves the `host.json` script (which calls `hoop_create_session`), regardless of whether you typed `/hoop-new`, `/hoop-join`, or anything else. To exercise the join flow you must point at `/peer` *and* preload `SESSION_CODE` / `HOST_ADDRESS` (see the `/hoop-join` recipe below).
+>
+> Scenarios are conversation-state-driven (each fresh conversation re-serves the tool_use step until a `tool_result` comes back), so you don't need to reset between manual runs.
+
 ```bash
 # Throw-away workspace + tmp dir so each manual run is isolated
 REPO=$(mktemp -d /tmp/hoop-manual-repo-XXXXXX)
@@ -128,11 +133,8 @@ git -C "$REPO" init -q
 git -C "$REPO" -c user.name=t -c user.email=t@t.com commit --allow-empty -m init -q
 git -C "$REPO" remote add origin "$GITEA_CLONE_URL"
 
-# Reset the mock-llm scenario you're about to use (via the running container)
-docker exec hoop-mock-llm-1 wget -qO- --post-data='' \
-  http://localhost:4000/scenario/host/reset
-
-# Drive claude through the host scenario
+# Drive claude through the host scenario.  No reset needed — mock-llm
+# picks the right step based on the conversation, not an internal counter.
 docker run --rm --network host \
   -v "$REPO":/repo \
   -v "$HOOPTMP":/hoop-tmp \
