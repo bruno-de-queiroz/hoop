@@ -175,6 +175,38 @@ The fix is a single env var, `HOOP_REGISTRY_DIR`, which both ends honour ahead o
 
 For local dev installs, `HOOP_REGISTRY_DIR` is unset and everything keeps using `tmpdir()` — same behaviour as before.
 
+#### Debug a manual run
+
+The scripted nature of the mock makes `claude` output misleading — the wrap-up text is canned. To see what *actually* happened inside the container, look at the side channels.
+
+```bash
+# Real tool_result the MCP server returned (vs. the scripted end_turn)
+docker logs hoop-mock-llm-1 2>&1 | grep tool_results | tail -3
+
+# The peer/host's recorded session role + sessionCode
+cat "$REPO/.hoop/hoop-session-status.json" | jq
+#   role: "host"  → host scenario created the session
+#   role: "peer"  → peer scenario joined an existing session
+#   file missing  → tool errored or session never started
+
+# All registry files written during the run
+ls -la "$REPO/.hoop"
+#   .hoop-session-end.marker  → SessionEnd hook fired
+#   hoop-pending-prompt-requests.json  → MCP server's PendingPromptRequestsWriter ran
+
+# Mock-llm's full request log (turn-by-turn message structure)
+docker logs hoop-mock-llm-1 2>&1 | tail -40
+
+# What scenario vars are currently preset on the mock (gotcha source)
+docker exec hoop-mock-llm-1 wget -qO- http://localhost:4000/health  # confirms it's up
+# (set-vars are write-only via API; if you suspect stale presets, restart mock-llm)
+docker compose -f docker-compose.test.yml restart mock-llm
+```
+
+For the deepest view, add `--debug` to the `claude …` invocation. It dumps every MCP request/response, every hook execution with stdout/stderr, and the full Anthropic API payloads. Verbose, but it's the ground truth.
+
+For two-peer flows specifically (host running, peer joining), the host's libp2p node only stays up while the host's `claude` process is alive. Since `docker run --rm` exits as soon as the prompt is answered, you can't run the host non-interactively and then join from a separate peer container — the host is already gone. To exercise an actual P2P handshake manually you need the **host container running interactively** (the `-it` you used keeps `claude` open) while you fire the peer in a second terminal. After the peer's `hoop_join_session` call, check `hoop-session-status.json` on the peer side: `role: "peer"` confirms the libp2p layer succeeded.
+
 #### Debugging
 
 ```bash
