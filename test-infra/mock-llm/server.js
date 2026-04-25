@@ -42,9 +42,12 @@ function nextResponse(scenario, messages, tools) {
   // If the scenario uses hoop MCP tools but they haven't been registered in this
   // request yet (parallel no-tools requests from Claude Code's init phase),
   // return a placeholder and do NOT advance the index.
+  // Match both the legacy "mcp__hoop__*" prefix (--mcp-config style) and the
+  // plugin-discovery prefix "mcp__plugin_hoop_hoop__*" (claude plugin install).
+  const isHoopTool = (name) => name?.startsWith("mcp__hoop__") || name?.startsWith("mcp__plugin_hoop_hoop__");
   const scenarioUsesMcp = s.responses.some(r =>
-    r.content?.some(c => c.type === "tool_use" && c.name?.startsWith("mcp__hoop__")));
-  const hoopToolsReady = (tools ?? []).some(t => t.name?.startsWith("mcp__hoop__"));
+    r.content?.some(c => c.type === "tool_use" && isHoopTool(c.name)));
+  const hoopToolsReady = (tools ?? []).some(t => isHoopTool(t.name));
   if (scenarioUsesMcp && !hoopToolsReady) {
     return endTurn("[mock-llm] waiting for MCP tools to initialize");
   }

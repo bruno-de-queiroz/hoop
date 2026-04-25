@@ -6,7 +6,7 @@
       {
         "type": "tool_use",
         "id": "toolu_peer_join_01",
-        "name": "mcp__hoop__hoop_join_session",
+        "name": "mcp__plugin_hoop_hoop__hoop_join_session",
         "input": {
           "sessionCode": "{SESSION_CODE}",
           "hostAddress": "{HOST_ADDRESS}",

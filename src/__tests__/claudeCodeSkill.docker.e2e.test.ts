@@ -47,25 +47,19 @@ function runClaude(
     extraArgs?: string[];
   },
 ): Promise<string> {
-  // The claude-runner image has /root/.claude/plugins/hoop/ symlinked to /build.
-  // Mount the repo at /build so those symlinks resolve into skills, hooks, and
-  // dist/ — Claude Code discovers them via the plugin manifest.
-  const mcpConfig = JSON.stringify({
-    mcpServers: {
-      hoop: { command: "node", args: ["/root/.claude/plugins/hoop/dist/mcp/main.js"] },
-    },
-  });
-
+  // The claude-runner image installs hoop as a Claude Code plugin (symlinks
+  // /root/.claude/plugins/hoop/ → /build/...) and registers it via
+  // `claude plugin install hoop@hoop`.  At runtime we bind-mount /build so
+  // those symlinks resolve, and Claude Code auto-discovers the skills, hooks,
+  // and MCP server from the plugin manifest — no --mcp-config or settings
+  // overrides needed.
   const claudeArgs = [
     prompt,
     "--print",
     "--output-format",
     "json",
     "--allowedTools",
-    "mcp__hoop__*",
-    "--strict-mcp-config",
-    "--mcp-config",
-    mcpConfig,
+    "mcp__plugin_hoop_hoop__*",
     ...(opts.extraArgs ?? []),
   ];
 
@@ -74,7 +68,6 @@ function runClaude(
     "--network", "host",
     "-v", `${opts.cwd}:/repo`,
     "-v", `${opts.hoopTmpDir}:/hoop-tmp`,
-    "-v", `${HOOP_ROOT}:/build:ro`,
     "-w", "/repo",
     "-e", `HOOP_SESSION_STATUS_PATH=/repo/.hoop-session-status.json`,
     "-e", `ANTHROPIC_BASE_URL=${MOCK_LLM_URL}/${opts.scenarioPrefix}`,
@@ -152,7 +145,9 @@ describe.skipIf(skip)("Claude Code skill flow — hoop session via mock LLM", ()
 
     await resetScenario("host");
 
-    const rawOutput = await runClaude("Create a new hoop session", {
+    // Invoke the /hoop-new skill — proves the plugin is loaded (skills,
+    // hooks, and MCP server all auto-wired through `claude plugin install`).
+    const rawOutput = await runClaude("/hoop-new", {
       cwd: repoDir,
       hoopTmpDir,
       scenarioPrefix: "host",
@@ -223,7 +218,7 @@ describe.skipIf(skip)("Claude Code skill flow — hoop session via mock LLM", ()
       await setScenarioVars("peer", { SESSION_CODE: sessionCode, HOST_ADDRESS: hostAddress });
 
       const peerOutput = await runClaude(
-        `Join hoop session ${sessionCode} at ${hostAddress}`,
+        `/hoop-join ${sessionCode}`,
         { cwd: peerRepoDir, hoopTmpDir: peerTmpDir, scenarioPrefix: "peer" },
       );
 
