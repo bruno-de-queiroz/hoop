@@ -12,6 +12,13 @@ import { dirname } from "node:path";
 import type { OutboundUpdatesRegistry } from "../../state/outboundUpdatesReader.js";
 import { LockStatusWriter } from "../../state/lockStatusWriter.js";
 
+// Force tool mode so the create-session and set-settings tools honor the
+// arguments passed by the test client. In elicit mode (the default for
+// interactive REPL use) the server ignores caller args and elicits the
+// values from the user via a form — that would hang these tests since
+// there's no UI to answer the form.
+process.env.HOOP_ADMISSION_MODE = "tool";
+
 // ── Helpers ────────────────────────────────────────────────────────
 
 function makeDeps(label: string): HoopMcpDeps {

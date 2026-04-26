@@ -205,7 +205,7 @@ describe("isZeroTrustThreshold", () => {
 
 describe("isGovernanceConfig", () => {
   it("accepts valid configs", () => {
-    expect(isGovernanceConfig({ mode: "host-only" })).toBe(true);
+    expect(isGovernanceConfig({ mode: "captain" })).toBe(true);
     expect(isGovernanceConfig({ mode: "yolo" })).toBe(true);
     expect(isGovernanceConfig({ mode: "zero-trust", threshold: "majority" })).toBe(true);
     expect(isGovernanceConfig({ mode: "zero-trust", threshold: "consensus" })).toBe(true);
@@ -217,7 +217,7 @@ describe("isGovernanceConfig", () => {
   });
 
   it("rejects non-zero-trust with threshold", () => {
-    expect(isGovernanceConfig({ mode: "host-only", threshold: "majority" })).toBe(false);
+    expect(isGovernanceConfig({ mode: "captain", threshold: "majority" })).toBe(false);
     expect(isGovernanceConfig({ mode: "yolo", threshold: 5 })).toBe(false);
   });
 
@@ -230,7 +230,7 @@ describe("isGovernanceConfig", () => {
   it("rejects non-objects", () => {
     expect(isGovernanceConfig(null)).toBe(false);
     expect(isGovernanceConfig(undefined)).toBe(false);
-    expect(isGovernanceConfig("host-only")).toBe(false);
+    expect(isGovernanceConfig("captain")).toBe(false);
     expect(isGovernanceConfig(42)).toBe(false);
   });
 

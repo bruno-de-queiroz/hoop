@@ -7,17 +7,35 @@ function readSkill(...parts: string[]) {
 }
 
 describe("skill definitions", () => {
-  it("/hoop:new uses the MCP create-session tool and preserves the prompt/output UX", () => {
+  it("/hoop:new defers settings to the MCP server's elicit form and preserves the output UX", () => {
     const content = readSkill("skills", "new", "SKILL.md");
 
     expect(content).toContain("hoop_create_session");
     expect(content).not.toContain("import { createSession }");
     expect(content).not.toContain("src/session/createSession");
-    expect(content).toContain("Select execution target:");
+    // The server drives the form — the skill must NOT prompt the user
+    // with a numbered menu for execution target / governance mode.
+    expect(content).not.toMatch(/Select execution target:/);
+    expect(content).not.toMatch(/Host-Only.*Proponent-Side/);
+    expect(content).toMatch(/elicit/i);
     expect(content).toContain("UserPromptSubmit");
     expect(content).toContain("admit or deny");
     expect(content).toContain("Session created!");
     expect(content).toContain("Share this code with peers");
+  });
+
+  it("/hoop:settings defers to the MCP server's elicit form and preserves the output UX", () => {
+    const content = readSkill("skills", "settings", "SKILL.md");
+
+    expect(content).toContain("hoop_set_settings");
+    expect(content).not.toContain("hoop_set_mode");
+    // The server drives the form — the skill must NOT parse a mode/threshold
+    // arg or print a usage menu.
+    expect(content).not.toMatch(/Usage: \/hoop:settings <mode>/);
+    expect(content).not.toMatch(/Must be one of: host-only/);
+    expect(content).toMatch(/elicit/i);
+    expect(content).toContain("Governance mode set to:");
+    expect(content).toContain("Approval threshold:");
   });
 
   it("/hoop:join uses the MCP join-session tool and preserves the prompt/output UX", () => {

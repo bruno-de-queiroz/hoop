@@ -1,91 +1,36 @@
 ---
 name: settings
-description: Configure the active Hoop session — currently sets the governance mode (host-only, zero-trust, yolo)
+description: Update settings on the active Hoop session (host-only) — currently the governance mode and zero-trust threshold
 ---
 
 # Hoop Settings
 
-## Arguments
-
-The user invokes this skill as `/hoop:settings <mode> [threshold]`. Parse the args string as follows:
-
-1. The first token is the **mode**. It must be one of: `host-only`, `zero-trust`, `yolo`. If the token is not recognized, display an error and stop:
-
-   ```
-   Unknown mode: <token>. Must be one of: host-only, zero-trust, yolo
-   ```
-
-2. If the mode is `zero-trust`, an optional second token is the **threshold**:
-   - `majority` — >50% of connected peers
-   - `consensus` — all connected peers (100%)
-   - A positive integer (e.g. `3`) — an exact peer count
-
-   If the second token is present but not recognized as `majority`, `consensus`, or a positive integer, display an error and stop:
-
-   ```
-   Invalid threshold: <token>. Must be one of: majority, consensus, or a positive integer
-   ```
-
-   If no threshold is provided for `zero-trust`, omit it from the tool call (the server will keep the current threshold).
-
-3. If the mode is NOT `zero-trust` and a second token is present, display an error and stop:
-
-   ```
-   Threshold is only valid for zero-trust mode.
-   ```
-
-If no mode is provided, display a usage error and stop:
-
-```
-Usage: /hoop:settings <mode> [threshold]
-
-  mode        Required. One of: host-only, zero-trust, yolo
-  threshold   Optional. Only for zero-trust mode.
-              One of: majority (>50%), consensus (100%), or a positive integer
-
-Examples:
-  /hoop:settings host-only
-  /hoop:settings zero-trust majority
-  /hoop:settings zero-trust consensus
-  /hoop:settings zero-trust 3
-  /hoop:settings yolo
-```
-
 ## Steps
 
-1. **Validate the session.** Call the `hoop_get_status` MCP tool. If the response shows `active: false`, display an error and stop:
+1. **Update settings.** Call the `hoop_set_settings` MCP tool with **no arguments**. The MCP server drives the form (governance mode + zero-trust threshold if applicable) via elicitation — do not parse a numbered menu yourself, do not prompt the user for these values.
 
-   ```
-   No active Hoop session. Start or join one first:
-     /hoop:new    — create a new session
-     /hoop:join   — join an existing session
-   ```
+   **Critical:** Pass exactly `{}`. DO NOT pass `mode` or `threshold` — the server will elicit those values interactively. Filling them yourself bypasses the form.
 
-   If the role is not `host`, display an error and stop:
-
-   ```
-   Only the host can change the governance mode.
+   ```json
+   {}
    ```
 
-2. **Set the mode.** Call the `hoop_set_mode` MCP tool with:
-   - `mode`: the parsed mode
-   - `threshold`: the parsed threshold (only include if mode is `zero-trust` and a threshold was provided)
+   If the tool returns an error (e.g. "Only the host can update session settings.", "No active host session.", or "Settings update cancelled"), display the error message and stop.
 
-   If the tool returns an error, display it and stop.
-
-3. **Display the result.** On success, display:
+2. **Display the result.** On success, the response includes `accepted: true`, a `governance` object describing the applied config, and `executionTarget` (read-only — set at session creation, immutable mid-session). Display:
 
    ```
-   Governance mode set to: <mode>
+   Execution target: <executionTarget> (immutable — set at session creation)
+   Governance mode set to: <governance.mode>
    ```
 
-   If the mode is `zero-trust`, also display:
+   When `governance.mode === "zero-trust"`, also display:
 
    ```
-   Approval threshold: <threshold>
+   Approval threshold: <governance.threshold>
    ```
 
-   Where `<threshold>` is one of:
+   Where `<governance.threshold>` is one of:
    - `majority (>50% of peers)`
    - `consensus (100% of peers)`
    - `<N> peer(s)` (for integer thresholds)
@@ -93,5 +38,11 @@ Examples:
    If the response includes `unchanged: true`, display instead:
 
    ```
-   Governance mode is already set to: <mode>
+   Governance settings already current: <governance.mode>
+   ```
+
+   If the response includes a `warning` field (party-size fallback), display it after the main result:
+
+   ```
+   Note: <warning>
    ```

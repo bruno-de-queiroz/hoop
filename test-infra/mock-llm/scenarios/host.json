@@ -7,7 +7,7 @@
         "type": "tool_use",
         "id": "toolu_host_create_01",
         "name": "mcp__plugin_hoop_hoop__hoop_create_session",
-        "input": { "executionTarget": "host-only" }
+        "input": {}
       }
     ]
   },

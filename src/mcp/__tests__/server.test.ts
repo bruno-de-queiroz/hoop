@@ -11,6 +11,13 @@ import { PendingUpdatesWriter } from "../../state/pendingUpdatesWriter.js";
 import { PendingPromptRequestsWriter } from "../../state/pendingPromptRequestsWriter.js";
 import { GOVERNANCE_CONFIG_KEY } from "../../session/session.js";
 
+// Force tool mode so the create-session and set-settings tools honor the
+// arguments passed by the test client. In elicit mode (the default for
+// interactive REPL use) the server ignores caller args and elicits the
+// values from the user via a form — that's the intended UX guarantee but
+// would hang these tests since there's no UI to answer the form.
+process.env.HOOP_ADMISSION_MODE = "tool";
+
 const CONFLICT_REGISTRY = join(tmpdir(), "hoop-conflict-test.json");
 const PENDING_UPDATES_REGISTRY = join(tmpdir(), "hoop-pending-updates-test.json");
 const PENDING_ADMISSIONS_REGISTRY = join(tmpdir(), "hoop-pending-admissions-test.json");
@@ -99,7 +106,7 @@ describe("hoop MCP server", () => {
       "hoop_release_lock",
       "hoop_request_host_execution",
       "hoop_send_update",
-      "hoop_set_mode",
+      "hoop_set_settings",
     ]);
   });
 
@@ -1271,13 +1278,13 @@ describe("hoop MCP server", () => {
     expect(status2.activePromptRequests).toBe(1);
   }, 30_000);
 
-  // ── hoop_set_mode ──────────────────────────────────────────────
+  // ── hoop_set_settings ──────────────────────────────────────────────
 
-  it("hoop_set_mode rejects when no session is active", async () => {
+  it("hoop_set_settings rejects when no session is active", async () => {
     ({ server, state, client } = await setup());
 
     const result = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "yolo" },
     });
 
@@ -1286,7 +1293,7 @@ describe("hoop MCP server", () => {
     expect(text).toContain("Only the host");
   });
 
-  it("hoop_set_mode sets mode and returns accepted with seqNo", async () => {
+  it("hoop_set_settings sets mode and returns accepted with seqNo", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1295,7 +1302,7 @@ describe("hoop MCP server", () => {
     });
 
     const result = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "yolo" },
     });
 
@@ -1316,10 +1323,10 @@ describe("hoop MCP server", () => {
     const status = parseJson(
       await client!.callTool({ name: "hoop_get_status", arguments: {} }),
     ) as { governance: { mode: string } };
-    expect(status.governance.mode).toBe("host-only");
+    expect(status.governance.mode).toBe("captain");
   }, 30_000);
 
-  it("hoop_get_status reflects governance mode after hoop_set_mode", async () => {
+  it("hoop_get_status reflects governance mode after hoop_set_settings", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1328,7 +1335,7 @@ describe("hoop MCP server", () => {
     });
 
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust" },
     });
 
@@ -1338,7 +1345,7 @@ describe("hoop MCP server", () => {
     expect(status.governance.mode).toBe("zero-trust");
   }, 30_000);
 
-  it("hoop_set_mode publishes metadata update to accumulator", async () => {
+  it("hoop_set_settings publishes metadata update to accumulator", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1347,7 +1354,7 @@ describe("hoop MCP server", () => {
     });
 
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "yolo" },
     });
 
@@ -1365,7 +1372,7 @@ describe("hoop MCP server", () => {
     });
 
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "yolo" },
     });
 
@@ -1379,17 +1386,17 @@ describe("hoop MCP server", () => {
     const status = parseJson(
       await client!.callTool({ name: "hoop_get_status", arguments: {} }),
     ) as { governance: { mode: string } };
-    expect(status.governance.mode).toBe("host-only");
+    expect(status.governance.mode).toBe("captain");
   }, 30_000);
 
-  it("hoop_set_mode rejects when called by a peer", async () => {
+  it("hoop_set_settings rejects when called by a peer", async () => {
     ({ server, state, client } = await setup());
 
     // Simulate a peer session by setting role directly
     state!.role = "peer";
 
     const result = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "yolo" },
     });
 
@@ -1401,7 +1408,7 @@ describe("hoop MCP server", () => {
     state!.role = null;
   });
 
-  it("hoop_set_mode returns unchanged when setting the same mode", async () => {
+  it("hoop_set_settings returns unchanged when setting the same mode", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1410,12 +1417,12 @@ describe("hoop MCP server", () => {
     });
 
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "yolo" },
     });
 
     const result = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "yolo" },
     });
 
@@ -1428,7 +1435,7 @@ describe("hoop MCP server", () => {
 
   // ── Zero-trust threshold ──────────────────────────────────────────
 
-  it("hoop_set_mode accepts majority threshold for zero-trust", async () => {
+  it("hoop_set_settings accepts majority threshold for zero-trust", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1437,7 +1444,7 @@ describe("hoop MCP server", () => {
     });
 
     const result = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: "majority" },
     });
 
@@ -1448,7 +1455,7 @@ describe("hoop MCP server", () => {
     expect(typeof data.seqNo).toBe("number");
   }, 30_000);
 
-  it("hoop_set_mode accepts consensus threshold for zero-trust", async () => {
+  it("hoop_set_settings accepts consensus threshold for zero-trust", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1457,7 +1464,7 @@ describe("hoop MCP server", () => {
     });
 
     const result = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: "consensus" },
     });
 
@@ -1467,7 +1474,7 @@ describe("hoop MCP server", () => {
     expect(data.governance.threshold).toBe("consensus");
   }, 30_000);
 
-  it("hoop_set_mode accepts integer threshold for zero-trust when within party size", async () => {
+  it("hoop_set_settings accepts integer threshold for zero-trust when within party size", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1477,7 +1484,7 @@ describe("hoop MCP server", () => {
 
     // threshold=1 with party size=1 (host only) should be accepted as-is
     const result = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: 1 },
     });
 
@@ -1487,7 +1494,7 @@ describe("hoop MCP server", () => {
     expect(data.governance.threshold).toBe(1);
   }, 30_000);
 
-  it("hoop_set_mode defaults threshold to majority when switching to zero-trust without threshold", async () => {
+  it("hoop_set_settings defaults threshold to majority when switching to zero-trust without threshold", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1496,7 +1503,7 @@ describe("hoop MCP server", () => {
     });
 
     const result = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust" },
     });
 
@@ -1505,7 +1512,7 @@ describe("hoop MCP server", () => {
     expect(data.governance.threshold).toBe("majority");
   }, 30_000);
 
-  it("hoop_set_mode rejects threshold for non-zero-trust modes", async () => {
+  it("hoop_set_settings rejects threshold for non-zero-trust modes", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1514,7 +1521,7 @@ describe("hoop MCP server", () => {
     });
 
     const result = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "yolo", threshold: "majority" },
     });
 
@@ -1532,7 +1539,7 @@ describe("hoop MCP server", () => {
     });
 
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: "consensus" },
     });
 
@@ -1554,11 +1561,11 @@ describe("hoop MCP server", () => {
     const status = parseJson(
       await client!.callTool({ name: "hoop_get_status", arguments: {} }),
     ) as { governance: { mode: string } };
-    expect(status.governance.mode).toBe("host-only");
+    expect(status.governance.mode).toBe("captain");
     expect(status.governance).not.toHaveProperty("threshold");
   }, 30_000);
 
-  it("hoop_set_mode publishes threshold as metadata update", async () => {
+  it("hoop_set_settings publishes threshold as metadata update", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1568,7 +1575,7 @@ describe("hoop MCP server", () => {
 
     // threshold=1 fits party size=1 (host only), so it applies as-is
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: 1 },
     });
 
@@ -1577,7 +1584,7 @@ describe("hoop MCP server", () => {
     expect(configMeta!.value).toEqual({ mode: "zero-trust", threshold: 1 });
   }, 30_000);
 
-  it("hoop_set_mode returns unchanged when mode and threshold are the same", async () => {
+  it("hoop_set_settings returns unchanged when mode and threshold are the same", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1586,12 +1593,12 @@ describe("hoop MCP server", () => {
     });
 
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: "consensus" },
     });
 
     const result = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: "consensus" },
     });
 
@@ -1601,7 +1608,7 @@ describe("hoop MCP server", () => {
     expect(data.governance.threshold).toBe("consensus");
   }, 30_000);
 
-  it("hoop_set_mode updates only threshold when mode stays zero-trust", async () => {
+  it("hoop_set_settings updates only threshold when mode stays zero-trust", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1610,13 +1617,13 @@ describe("hoop MCP server", () => {
     });
 
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: "consensus" },
     });
 
     // threshold=1 fits party size=1, so it applies as-is
     const result = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: 1 },
     });
 
@@ -1639,7 +1646,7 @@ describe("hoop MCP server", () => {
     });
 
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: 1 },
     });
 
@@ -1652,7 +1659,7 @@ describe("hoop MCP server", () => {
 
     // Switch to zero-trust to check the default threshold
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust" },
     });
 
@@ -1664,7 +1671,7 @@ describe("hoop MCP server", () => {
 
   // ── Threshold fallback (CRE-27) ───────────────────────────────────
 
-  it("hoop_set_mode falls back to consensus when integer threshold exceeds party size", async () => {
+  it("hoop_set_settings falls back to consensus when integer threshold exceeds party size", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1674,7 +1681,7 @@ describe("hoop MCP server", () => {
 
     // party size = 1 (host only), threshold 3 exceeds it
     const result = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: 3 },
     });
 
@@ -1686,7 +1693,7 @@ describe("hoop MCP server", () => {
     expect(data.warning).toContain("consensus");
   }, 30_000);
 
-  it("hoop_set_mode fallback warning suggests new threshold when party size > 2", async () => {
+  it("hoop_set_settings fallback warning suggests new threshold when party size > 2", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1702,7 +1709,7 @@ describe("hoop MCP server", () => {
 
     // threshold 5 exceeds party size 3
     const result = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: 5 },
     });
 
@@ -1715,7 +1722,7 @@ describe("hoop MCP server", () => {
     hub.unsubscribe("fake-peer-2");
   }, 30_000);
 
-  it("hoop_set_mode fallback omits 'new threshold' suggestion when party size = 2", async () => {
+  it("hoop_set_settings fallback omits 'new threshold' suggestion when party size = 2", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1730,7 +1737,7 @@ describe("hoop MCP server", () => {
 
     // threshold 3 exceeds party size 2
     const result = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: 3 },
     });
 
@@ -1741,7 +1748,7 @@ describe("hoop MCP server", () => {
     hub.unsubscribe("fake-peer-1");
   }, 30_000);
 
-  it("hoop_set_mode clears governance alert on successful mode change", async () => {
+  it("hoop_set_settings clears governance alert on successful mode change", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1751,14 +1758,14 @@ describe("hoop MCP server", () => {
 
     // Trigger fallback to set alert
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: 5 },
     });
     expect(state!.governanceAlert).not.toBeNull();
 
     // Set a valid mode — alert should clear
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "yolo" },
     });
     expect(state!.governanceAlert).toBeNull();
@@ -1773,7 +1780,7 @@ describe("hoop MCP server", () => {
     });
 
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: 3 },
     });
 
@@ -1812,7 +1819,7 @@ describe("hoop MCP server", () => {
     hub.subscribe("fake-peer-2", mockStream);
 
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: 3 },
     });
 
@@ -1842,7 +1849,7 @@ describe("hoop MCP server", () => {
 
     // majority and consensus should work regardless of party size
     const result1 = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: "majority" },
     });
     const data1 = parseJson(result1) as { governance: { threshold: string }; warning?: string };
@@ -1850,7 +1857,7 @@ describe("hoop MCP server", () => {
     expect(data1).not.toHaveProperty("warning");
 
     const result2 = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: "consensus" },
     });
     const data2 = parseJson(result2) as { governance: { threshold: string }; warning?: string };
@@ -1868,7 +1875,7 @@ describe("hoop MCP server", () => {
 
     // Trigger fallback to set alert
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: 5 },
     });
     expect(state!.governanceAlert).not.toBeNull();
@@ -1887,7 +1894,7 @@ describe("hoop MCP server", () => {
     expect(state!.governanceAlert).toBeNull();
   }, 30_000);
 
-  it("idempotent hoop_set_mode clears stale governance alert", async () => {
+  it("idempotent hoop_set_settings clears stale governance alert", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1897,7 +1904,7 @@ describe("hoop MCP server", () => {
 
     // Trigger fallback — threshold 3 exceeds party size 1 → falls back to consensus
     await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: 3 },
     });
     expect(state!.governanceAlert).not.toBeNull();
@@ -1905,7 +1912,7 @@ describe("hoop MCP server", () => {
 
     // Re-apply consensus explicitly — unchanged path should still clear the alert
     const result = await client!.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "zero-trust", threshold: "consensus" },
     });
     const data = parseJson(result) as { unchanged: boolean };
@@ -1931,7 +1938,7 @@ describe("hoop MCP server", () => {
     });
 
     // Should still be the default
-    expect(state!.observedGovernanceConfig).toEqual({ mode: "host-only" });
+    expect(state!.observedGovernanceConfig).toEqual({ mode: "captain" });
   }, 30_000);
 
   it("mirrorObservedUpdate applies governance config from published update", async () => {

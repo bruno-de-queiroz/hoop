@@ -18,12 +18,15 @@ import {
 import type { StateUpdate, MetadataUpdate, NonLockStateUpdate } from "../state/stateUpdate.js";
 import {
   type GovernanceConfig,
+  type GovernanceMode,
+  type ZeroTrustThreshold,
   GOVERNANCE_MODES,
   GOVERNANCE_CONFIG_KEY,
   DEFAULT_GOVERNANCE_CONFIG,
   isGovernanceConfig,
   isZeroTrustThreshold,
 } from "../session/session.js";
+import type { ExecutionTarget } from "../session/session.js";
 import { createFreeHoopLock } from "../state/hoopLock.js";
 import { ActiveEditsTracker } from "../state/activeEditsTracker.js";
 import { PendingUpdatesWriter } from "../state/pendingUpdatesWriter.js";
@@ -199,23 +202,208 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.pendingPromptRequestsWriter?.sync(entries);
   }
 
+  // ── Helpers: resolve session settings via elicit form ─────────────
+  //
+  // Skills (/hoop:new, /hoop:settings) call the underlying tools argless
+  // so the MCP server owns the UX entirely — it elicits a form via
+  // server.elicitInput rather than relying on the model to interpret a
+  // numbered menu in the skill markdown. Tests and headless environments
+  // (HOOP_ADMISSION_MODE=tool, or clients without elicit capability)
+  // bypass elicitation: callers either pass the args directly or accept
+  // the defaults.
+
+  async function elicitZeroTrustThreshold(): Promise<ZeroTrustThreshold> {
+    const form = await server.server.elicitInput({
+      message: "Zero-trust approval threshold",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          threshold: {
+            type: "string",
+            enum: ["consensus", "majority", "other"],
+            description: [
+              "Approval threshold required to apply changes.",
+              "  • consensus — 100% of connected peers must approve",
+              "  • majority  — more than 50% of connected peers must approve",
+              "  • other     — exact peer count (set customCount below)",
+            ].join("\n"),
+          },
+          customCount: {
+            type: "integer",
+            minimum: 1,
+            description: "Used only when threshold = other. The exact number of peers required to approve.",
+          },
+        },
+        required: ["threshold"],
+      },
+    });
+    if (form.action !== "accept" || !form.content) {
+      throw new Error("Threshold selection cancelled");
+    }
+    const choice = form.content as { threshold: string; customCount?: number };
+    if (choice.threshold === "other") {
+      if (typeof choice.customCount !== "number" || !isZeroTrustThreshold(choice.customCount)) {
+        throw new Error("'Other' threshold requires a positive integer count");
+      }
+      return choice.customCount;
+    }
+    return choice.threshold as "consensus" | "majority";
+  }
+
+  async function resolveGovernance(opts: {
+    mode?: GovernanceMode;
+    threshold?: ZeroTrustThreshold;
+  }): Promise<GovernanceConfig> {
+    // Tool mode (tests, headless docker E2E): args win, fall back to defaults.
+    // Elicit mode (interactive REPL): the form fires unconditionally — args
+    // from the model are ignored. We can't trust the model to "remember to
+    // call argless"; the harness must own the form regardless.
+    if ((process.env.HOOP_ADMISSION_MODE ?? "elicit") === "tool") {
+      if (opts.mode) {
+        return opts.mode === "zero-trust"
+          ? { mode: "zero-trust", threshold: opts.threshold ?? "majority" }
+          : { mode: opts.mode };
+      }
+      return { mode: "captain" };
+    }
+
+    const form = await server.server.elicitInput({
+      message: "Update session governance",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          governanceMode: {
+            type: "string",
+            enum: ["captain", "zero-trust", "yolo"],
+            description: [
+              "How changes are approved during this session.",
+              "  • captain    — the host approves or rejects every change",
+              "  • zero-trust — a configurable number of peers must approve",
+              "  • yolo       — no approval gate, every change auto-applies",
+            ].join("\n"),
+          },
+        },
+        required: ["governanceMode"],
+      },
+    });
+    if (form.action !== "accept" || !form.content) {
+      throw new Error("Settings update cancelled");
+    }
+    const { governanceMode } = form.content as { governanceMode: GovernanceMode };
+    if (governanceMode !== "zero-trust") {
+      return { mode: governanceMode };
+    }
+    const threshold = await elicitZeroTrustThreshold();
+    return { mode: "zero-trust", threshold };
+  }
+
+  async function resolveSessionSettings(opts: {
+    executionTarget?: ExecutionTarget;
+    governanceMode?: GovernanceMode;
+    threshold?: ZeroTrustThreshold;
+  }): Promise<{ executionTarget: ExecutionTarget; governance: GovernanceConfig }> {
+    // Tool mode (tests, headless docker E2E): args win, fall back to defaults.
+    // Elicit mode (interactive REPL): the form fires unconditionally — args
+    // from the model are ignored. We can't trust the model to "remember to
+    // call argless"; the harness must own the form regardless.
+    if ((process.env.HOOP_ADMISSION_MODE ?? "elicit") === "tool") {
+      const argMode = opts.governanceMode;
+      const argThreshold = opts.threshold;
+      return {
+        executionTarget: opts.executionTarget ?? "host-only",
+        governance: argMode === "zero-trust"
+          ? { mode: "zero-trust", threshold: argThreshold ?? "majority" }
+          : { mode: argMode ?? "captain" },
+      };
+    }
+
+    const form1 = await server.server.elicitInput({
+      message: "Configure your Hoop session",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          executionTarget: {
+            type: "string",
+            enum: ["host-only", "proponent-side"],
+            description: [
+              "Where agent tool calls actually execute.",
+              "  • host-only      — only the host machine runs changes",
+              "  • proponent-side — each peer's host agent runs its own changes",
+            ].join("\n"),
+          },
+          governanceMode: {
+            type: "string",
+            enum: ["captain", "zero-trust", "yolo"],
+            description: [
+              "How changes are approved during this session.",
+              "  • captain    — the host approves or rejects every change",
+              "  • zero-trust — a configurable number of peers must approve",
+              "  • yolo       — no approval gate, every change auto-applies",
+            ].join("\n"),
+          },
+        },
+        required: ["executionTarget", "governanceMode"],
+      },
+    });
+
+    if (form1.action !== "accept" || !form1.content) {
+      throw new Error("Session setup cancelled");
+    }
+    const { executionTarget: pickedTarget, governanceMode: pickedMode } =
+      form1.content as { executionTarget: ExecutionTarget; governanceMode: GovernanceMode };
+
+    if (pickedMode !== "zero-trust") {
+      return {
+        executionTarget: pickedTarget,
+        governance: { mode: pickedMode },
+      };
+    }
+
+    const resolvedThreshold = await elicitZeroTrustThreshold();
+    return {
+      executionTarget: pickedTarget,
+      governance: { mode: "zero-trust", threshold: resolvedThreshold },
+    };
+  }
+
   // ── 1. hoop_create_session ──────────────────────────────────────
 
   server.registerTool(
     "hoop_create_session",
     {
       description:
-        "Start a P2P node, create a git worktree, and begin hosting a collaborative session. Returns the session code and listen addresses for peers to connect.",
+        "Start a P2P node, create a git worktree, and begin hosting a collaborative session. Returns the session code and listen addresses for peers to connect. INTERACTIVE: when called with only `password` (or argless), the server elicits executionTarget + governanceMode (+ threshold if zero-trust) via a form — this is the expected path for the /hoop:new skill. The other fields are reserved for non-interactive callers (programmatic tests).",
       inputSchema: z.object({
         password: z.string().optional(),
-        executionTarget: z.enum(["host-only", "proponent-side"]),
-        autoExecutePrompts: z.boolean().optional(),
+        executionTarget: z.enum(["host-only", "proponent-side"]).optional()
+          .describe("[Programmatic only] Leave undefined to elicit via the server form. Skill callers must NOT set this — doing so bypasses the interactive form and silently uses the supplied value."),
+        governanceMode: z.enum(GOVERNANCE_MODES).optional()
+          .describe("[Programmatic only] Leave undefined to elicit via the server form. Skill callers must NOT set this."),
+        threshold: z.union([
+          z.literal("majority"),
+          z.literal("consensus"),
+          z.number().refine(isZeroTrustThreshold, "Must be a positive safe integer"),
+        ]).optional()
+          .describe("[Programmatic only] Zero-trust approval threshold. Leave undefined to elicit via the server form."),
+        autoExecutePrompts: z.boolean().optional()
+          .describe("[Programmatic only] Auto-execute peer prompt requests without confirmation. Leave undefined unless explicitly required."),
       }),
     },
-    async ({ password, executionTarget, autoExecutePrompts }) => {
+    async ({ password, executionTarget, governanceMode, threshold, autoExecutePrompts }) => {
       if (state.role !== null) {
         return errorResult("Session already active. Leave current session first.");
       }
+
+      let resolved: Awaited<ReturnType<typeof resolveSessionSettings>>;
+      try {
+        resolved = await resolveSessionSettings({ executionTarget, governanceMode, threshold });
+      } catch (e) {
+        return errorResult(
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+      const resolvedTarget = resolved.executionTarget;
+      const resolvedGovernance = resolved.governance;
 
       try {
         // Initialize before createSession resolves so admission requests that
@@ -231,7 +419,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
         const result = await createSession({
           password,
-          executionTarget,
+          executionTarget: resolvedTarget,
           autoExecutePrompts,
           gitOps,
           onAdmissionRequest: async (email, peerId) => {
@@ -304,6 +492,27 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
         state.hostSession = result;
         state.role = "host";
+
+        // Apply the elicited governance config locally. Broadcast the
+        // metadata update only when the resolved config differs from the
+        // default — late-joining peers fall back to DEFAULT_GOVERNANCE_CONFIG
+        // when no metadata is present, so unconditional broadcasting would
+        // bump seqNo for every default session and break consumers that
+        // assume the first user-driven publish is seqNo=1.
+        state.observedGovernanceConfig = resolvedGovernance;
+        const isDefaultGovernance = resolvedGovernance.mode === DEFAULT_GOVERNANCE_CONFIG.mode
+          && resolvedGovernance.mode !== "zero-trust";
+        if (!isDefaultGovernance) {
+          const initialGovernanceUpdate: MetadataUpdate = {
+            type: "metadata-update",
+            peerId: result.peerId,
+            key: GOVERNANCE_CONFIG_KEY,
+            value: resolvedGovernance,
+            timestamp: Date.now(),
+          };
+          result.publishUpdate(initialGovernanceUpdate);
+        }
+
         writeSessionStatus({
           role: "host",
           sessionCode: result.sessionCode,
@@ -353,6 +562,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           hostId: result.hostId,
           peerId: result.peerId,
           executionTarget: result.executionTarget,
+          governance: resolvedGovernance,
           autoExecutePrompts: result.autoExecutePrompts,
           passwordProtected: result.passwordProtected,
           listenAddresses: result.listenAddresses,
@@ -1056,28 +1266,44 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     return { left: true, previousRole, sessionCode };
   }
 
-  // ── 21. hoop_set_mode ─────────────────────────────────────────────
+  // ── 21. hoop_set_settings ─────────────────────────────────────────
 
   server.registerTool(
-    "hoop_set_mode",
+    "hoop_set_settings",
     {
       description:
-        "Set the session governance mode. Host only. Broadcasts the change to all peers instantly. When mode is 'zero-trust', an optional threshold parameter configures the approval threshold: 'majority' (>50%), 'consensus' (100%), or an exact integer peer count.",
+        "Update session settings on the active host session. Host only. INTERACTIVE: when called argless, the server elicits governanceMode (+ threshold if zero-trust) via a form — this is the expected path for the /hoop:settings skill. Skill callers must NOT pass `mode` or `threshold`; those fields are reserved for non-interactive programmatic callers.",
       inputSchema: z.object({
-        mode: z.enum(GOVERNANCE_MODES),
+        mode: z.enum(GOVERNANCE_MODES).optional()
+          .describe("[Programmatic only] Leave undefined to elicit via the server form. Skill callers must NOT set this — doing so bypasses the interactive form and silently uses the supplied value."),
         threshold: z.union([
           z.literal("majority"),
           z.literal("consensus"),
           z.number().refine(isZeroTrustThreshold, "Must be a positive safe integer"),
-        ]).optional().describe("Approval threshold for zero-trust mode: 'majority' (>50%), 'consensus' (100%), or an exact peer count"),
+        ]).optional()
+          .describe("[Programmatic only] Zero-trust approval threshold. Leave undefined to elicit via the server form."),
       }),
     },
     async ({ mode, threshold }) => {
       if (state.role !== "host") {
-        return errorResult("Only the host can set the governance mode.");
+        return errorResult("Only the host can update session settings.");
       }
       if (!state.hostSession) {
         return errorResult("No active host session.");
+      }
+
+      // If mode is missing, elicit it (and threshold if zero-trust).
+      // Tool-mode and missing-capability fall back to defaults.
+      if (mode === undefined) {
+        try {
+          const resolved = await resolveGovernance({ mode, threshold });
+          mode = resolved.mode;
+          threshold = resolved.mode === "zero-trust" ? resolved.threshold : undefined;
+        } catch (e) {
+          return errorResult(
+            e instanceof Error ? e.message : String(e),
+          );
+        }
       }
 
       if (mode !== "zero-trust" && threshold !== undefined) {
@@ -1112,7 +1338,13 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
             const seqNo = state.hostSession.publishUpdate(configUpdate);
             state.observedGovernanceConfig = newConfig;
 
-            return jsonResult({ accepted: true, governance: newConfig, seqNo, warning });
+            return jsonResult({
+              accepted: true,
+              governance: newConfig,
+              executionTarget: state.hostSession.executionTarget,
+              seqNo,
+              warning,
+            });
           }
         }
 
@@ -1129,7 +1361,13 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
       if (unchanged) {
         state.governanceAlert = null;
-        return jsonResult({ accepted: true, governance: newConfig, seqNo: null, unchanged: true });
+        return jsonResult({
+          accepted: true,
+          governance: newConfig,
+          executionTarget: state.hostSession.executionTarget,
+          seqNo: null,
+          unchanged: true,
+        });
       }
 
       // Single atomic broadcast
@@ -1144,7 +1382,12 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       state.observedGovernanceConfig = newConfig;
       state.governanceAlert = null;
 
-      return jsonResult({ accepted: true, governance: newConfig, seqNo });
+      return jsonResult({
+        accepted: true,
+        governance: newConfig,
+        executionTarget: state.hostSession.executionTarget,
+        seqNo,
+      });
     },
   );
 

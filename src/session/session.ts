@@ -1,6 +1,6 @@
 export type ExecutionTarget = "host-only" | "proponent-side";
 
-export const GOVERNANCE_MODES = ["host-only", "zero-trust", "yolo"] as const;
+export const GOVERNANCE_MODES = ["captain", "zero-trust", "yolo"] as const;
 export type GovernanceMode = (typeof GOVERNANCE_MODES)[number];
 
 export const GOVERNANCE_CONFIG_KEY = "governance-config";
@@ -9,11 +9,11 @@ export const ZERO_TRUST_NAMED_THRESHOLDS = ["majority", "consensus"] as const;
 export type ZeroTrustThreshold = (typeof ZERO_TRUST_NAMED_THRESHOLDS)[number] | number;
 
 export type GovernanceConfig =
-  | { mode: "host-only" }
+  | { mode: "captain" }
   | { mode: "yolo" }
   | { mode: "zero-trust"; threshold: ZeroTrustThreshold };
 
-export const DEFAULT_GOVERNANCE_CONFIG: GovernanceConfig = { mode: "host-only" };
+export const DEFAULT_GOVERNANCE_CONFIG: GovernanceConfig = { mode: "captain" };
 
 function isGovernanceMode(value: unknown): value is GovernanceMode {
   return typeof value === "string" && (GOVERNANCE_MODES as readonly string[]).includes(value);
