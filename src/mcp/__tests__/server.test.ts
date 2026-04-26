@@ -1315,7 +1315,7 @@ describe("hoop MCP server", () => {
     expect(typeof data.seqNo).toBe("number");
   }, 30_000);
 
-  it("hoop_get_status defaults to host-only governance mode", async () => {
+  it("hoop_get_status defaults to captain governance mode", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
@@ -1366,7 +1366,7 @@ describe("hoop MCP server", () => {
     expect(metadata!.value).toEqual({ mode: "yolo" });
   }, 30_000);
 
-  it("governance mode resets to host-only after leaving and creating a new session", async () => {
+  it("governance mode resets to captain after leaving and creating a new session", async () => {
     ({ server, state, client } = await setup());
 
     await client!.callTool({
