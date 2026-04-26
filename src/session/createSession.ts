@@ -99,6 +99,7 @@ export interface CreateSessionParams {
   onLockChange?: (lock: HoopLock) => void;
   onPromptRequest?: (request: PromptRequest) => void;
   onPeerDisconnect?: (peerId: string) => void;
+  onPatchEnqueued?: (reviewId: string, peerId: string) => void;
   isCaptainMode?: () => boolean;
   executionTarget: ExecutionTarget;
   autoExecutePrompts?: boolean;
@@ -749,9 +750,22 @@ export async function createSession(
     }
 
     // Conflict resolution: file-change baseHash check
+    // When captain mode is active, also check against held patches in the review queue
+    // so that chained edits to the same file (A→B, B→C) don't fail on the second patch.
     if (update.type === "file-change") {
-      const lastHash = accumulator.getFileHash(update.filePath);
-      if (lastHash !== undefined && update.baseHash !== lastHash) {
+      let expectedHash = accumulator.getFileHash(update.filePath);
+      if (isCaptainMode()) {
+        const pending = patchReviewQueue.getPendingForPeer(remotePeerId);
+        if (pending) {
+          const lastHeld = [...pending.entries]
+            .reverse()
+            .find((e) => e.filePath === update.filePath);
+          if (lastHeld && lastHeld.update.type === "file-change") {
+            expectedHash = lastHeld.update.resultHash;
+          }
+        }
+      }
+      if (expectedHash !== undefined && update.baseHash !== expectedHash) {
         const response: StateUpdateResponse = {
           kind: "state-update",
           accepted: false,
@@ -765,6 +779,7 @@ export async function createSession(
     // Captain mode: gate file-change updates for host review
     if (update.type === "file-change" && isCaptainMode()) {
       const reviewId = patchReviewQueue.enqueue(update, remotePeerId);
+      params.onPatchEnqueued?.(reviewId, remotePeerId);
       const response: PendingReviewResponse = {
         kind: "pending-review",
         reviewId,
@@ -792,6 +807,7 @@ export async function createSession(
     }
     broadcastHub.unsubscribe(peerId);
     accumulator.removePeerPresence(peerId);
+    patchReviewQueue.reject(peerId, "peer-disconnected");
     try {
       params.onPeerDisconnect?.(peerId);
     } catch (err) {

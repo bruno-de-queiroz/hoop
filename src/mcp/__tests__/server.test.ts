@@ -1968,4 +1968,299 @@ describe("hoop MCP server", () => {
 
     expect(state!.observedGovernanceConfig).toEqual({ mode: "zero-trust", threshold: "consensus" });
   }, 30_000);
+
+  // ── Captain mode patch review tests ──────────────────────────────
+
+  const VALID_PATCH = [
+    "--- a/src/app.ts",
+    "+++ b/src/app.ts",
+    "@@ -1,3 +1,3 @@",
+    " line1",
+    "-line2",
+    "+line2-modified",
+    " line3",
+  ].join("\n");
+
+  function makeFileChange(peerId: string, filePath: string, baseHash: string, resultHash: string) {
+    return {
+      type: "file-change" as const,
+      peerId,
+      filePath,
+      patch: VALID_PATCH,
+      baseHash,
+      resultHash,
+      timestamp: Date.now(),
+    };
+  }
+
+  it("captain mode: hoop_check_patch_reviews returns empty when no patches pending", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_check_patch_reviews",
+      arguments: {},
+    });
+    const data = parseJson(result) as { reviews: unknown[] };
+    expect(data.reviews).toEqual([]);
+  }, 30_000);
+
+  it("captain mode: hoop_check_patch_reviews rejects non-host", async () => {
+    ({ server, state, client } = await setup());
+
+    // No session active
+    const result = await client!.callTool({
+      name: "hoop_check_patch_reviews",
+      arguments: {},
+    });
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+    expect(text).toMatch(/host/i);
+    expect(result.isError).toBe(true);
+  }, 30_000);
+
+  it("captain mode: enqueue + approve broadcasts patches", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    // Default mode is captain — enqueue a file-change for a fake peer
+    expect(state!.observedGovernanceConfig.mode).toBe("captain");
+    const peerUpdate = makeFileChange("peer-A", "src/app.ts", "hash-0", "hash-1");
+    const queue = state!.hostSession!.patchReviewQueue;
+    const reviewId = queue.enqueue(peerUpdate, "peer-A");
+
+    // Check reviews shows the pending batch
+    const checkResult = await client!.callTool({
+      name: "hoop_check_patch_reviews",
+      arguments: {},
+    });
+    const checkData = parseJson(checkResult) as { reviews: Array<{ reviewId: string; peerId: string }> };
+    expect(checkData.reviews).toHaveLength(1);
+    expect(checkData.reviews[0].reviewId).toBe(reviewId);
+    expect(checkData.reviews[0].peerId).toBe("peer-A");
+
+    // Approve the patches
+    const approveResult = await client!.callTool({
+      name: "hoop_approve_patches",
+      arguments: { peerId: "peer-A" },
+    });
+    const approveData = parseJson(approveResult) as { approved: boolean; fileCount: number; seqNos: number[] };
+    expect(approveData.approved).toBe(true);
+    expect(approveData.fileCount).toBe(1);
+    expect(approveData.seqNos).toHaveLength(1);
+
+    // Queue is now empty
+    const checkResult2 = await client!.callTool({
+      name: "hoop_check_patch_reviews",
+      arguments: {},
+    });
+    const checkData2 = parseJson(checkResult2) as { reviews: unknown[] };
+    expect(checkData2.reviews).toHaveLength(0);
+  }, 30_000);
+
+  it("captain mode: reject notifies with reason", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const peerUpdate = makeFileChange("peer-B", "src/lib.ts", "hash-0", "hash-1");
+    const queue = state!.hostSession!.patchReviewQueue;
+    queue.enqueue(peerUpdate, "peer-B");
+
+    const rejectResult = await client!.callTool({
+      name: "hoop_reject_patches",
+      arguments: { peerId: "peer-B", reason: "code quality" },
+    });
+    const rejectData = parseJson(rejectResult) as { rejected: boolean; reason: string; fileCount: number };
+    expect(rejectData.rejected).toBe(true);
+    expect(rejectData.reason).toBe("code quality");
+    expect(rejectData.fileCount).toBe(1);
+
+    // Queue is now empty
+    const pending = queue.listPending();
+    expect(pending).toHaveLength(0);
+  }, 30_000);
+
+  it("captain mode: approve with unknown peerId returns error", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_approve_patches",
+      arguments: { peerId: "nonexistent-peer" },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+    expect(text).toMatch(/no pending/i);
+  }, 30_000);
+
+  it("captain mode: reject with unknown peerId returns error", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_reject_patches",
+      arguments: { peerId: "nonexistent-peer" },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+    expect(text).toMatch(/no pending/i);
+  }, 30_000);
+
+  it("captain mode: per-peer batching accumulates multiple file-changes", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const queue = state!.hostSession!.patchReviewQueue;
+    const update1 = makeFileChange("peer-C", "src/a.ts", "h0", "h1");
+    const update2 = makeFileChange("peer-C", "src/b.ts", "h0", "h1");
+    const id1 = queue.enqueue(update1, "peer-C");
+    const id2 = queue.enqueue(update2, "peer-C");
+
+    // Same batch — stable reviewId
+    expect(id1).toBe(id2);
+
+    const approveResult = await client!.callTool({
+      name: "hoop_approve_patches",
+      arguments: { peerId: "peer-C" },
+    });
+    const data = parseJson(approveResult) as { approved: boolean; fileCount: number; seqNos: number[] };
+    expect(data.approved).toBe(true);
+    expect(data.fileCount).toBe(2);
+    expect(data.seqNos).toHaveLength(2);
+  }, 30_000);
+
+  it("captain mode: hoop_poll_patch_status returns status for known reviewId", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const queue = state!.hostSession!.patchReviewQueue;
+    const update = makeFileChange("peer-D", "src/x.ts", "h0", "h1");
+    const reviewId = queue.enqueue(update, "peer-D");
+
+    const pollResult = await client!.callTool({
+      name: "hoop_poll_patch_status",
+      arguments: { reviewId },
+    });
+    const pollData = parseJson(pollResult) as { reviewId: string; status: string };
+    expect(pollData.reviewId).toBe(reviewId);
+    expect(pollData.status).toBe("pending-review");
+
+    // Approve and re-poll
+    queue.approve("peer-D");
+    const pollResult2 = await client!.callTool({
+      name: "hoop_poll_patch_status",
+      arguments: { reviewId },
+    });
+    const pollData2 = parseJson(pollResult2) as { status: string };
+    expect(pollData2.status).toBe("approved");
+  }, 30_000);
+
+  it("captain mode: hoop_poll_patch_status returns error for unknown reviewId", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_poll_patch_status",
+      arguments: { reviewId: "nonexistent-id" },
+    });
+    expect(result.isError).toBe(true);
+  }, 30_000);
+
+  it("captain mode: approve detects baseHash conflicts at approve time", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const queue = state!.hostSession!.patchReviewQueue;
+    const update = makeFileChange("peer-E", "src/conflict.ts", "old-hash", "new-hash");
+    queue.enqueue(update, "peer-E");
+
+    // Simulate the file being changed by the host between enqueue and approve
+    // by publishing a host-side file-change that changes the file hash
+    state!.hostSession!.accumulator.accumulate({
+      type: "file-change",
+      peerId: state!.hostSession!.peerId,
+      filePath: "src/conflict.ts",
+      patch: VALID_PATCH,
+      baseHash: "old-hash",
+      resultHash: "host-changed-hash",
+      timestamp: Date.now(),
+    });
+
+    const approveResult = await client!.callTool({
+      name: "hoop_approve_patches",
+      arguments: { peerId: "peer-E" },
+    });
+    const data = parseJson(approveResult) as { approved: boolean; conflicts: string[]; fileCount: number };
+    expect(data.approved).toBe(true);
+    expect(data.conflicts).toContain("src/conflict.ts");
+    expect(data.fileCount).toBe(0); // conflicted entry was skipped
+  }, 30_000);
+
+  it("captain mode: non-file-change updates pass through ungated", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    // Default mode is captain
+    expect(state!.observedGovernanceConfig.mode).toBe("captain");
+
+    // Cursor updates should not be gated
+    const queue = state!.hostSession!.patchReviewQueue;
+    expect(queue.listPending()).toHaveLength(0);
+
+    // Host-side send of cursor update should succeed directly
+    const result = await client!.callTool({
+      name: "hoop_send_update",
+      arguments: {
+        type: "cursor-update",
+        filePath: "src/app.ts",
+        line: 10,
+        column: 5,
+      },
+    });
+    const data = parseJson(result) as { accepted: boolean; seqNo: number };
+    expect(data.accepted).toBe(true);
+    expect(typeof data.seqNo).toBe("number");
+
+    // Queue still empty — cursor was not gated
+    expect(queue.listPending()).toHaveLength(0);
+  }, 30_000);
 });

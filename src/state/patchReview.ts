@@ -65,6 +65,8 @@ export class PatchReviewQueue {
         });
         return existingId;
       }
+      // Stale mapping — the review was evicted or resolved; clean up
+      this.pendingByPeer.delete(peerId);
     }
 
     const reviewId = randomUUID();
@@ -112,6 +114,7 @@ export class PatchReviewQueue {
    * Returns the approved review (with held updates) or undefined if no pending review.
    */
   approve(peerId: string): QueuedPatchReview | undefined {
+    this.evictStale();
     const reviewId = this.pendingByPeer.get(peerId);
     if (!reviewId) return undefined;
     const review = this.reviews.get(reviewId);
@@ -128,6 +131,7 @@ export class PatchReviewQueue {
    * Returns the rejected review or undefined if no pending review.
    */
   reject(peerId: string, reason?: string): QueuedPatchReview | undefined {
+    this.evictStale();
     const reviewId = this.pendingByPeer.get(peerId);
     if (!reviewId) return undefined;
     const review = this.reviews.get(reviewId);

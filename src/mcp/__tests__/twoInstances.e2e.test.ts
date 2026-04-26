@@ -208,6 +208,12 @@ describe("E2E: two claude-code instances in a hoop session", () => {
     expect(hostData.listenAddresses.length).toBeGreaterThan(0);
     expect(host.state.role).toBe("host");
 
+    // Switch to yolo so peer file-changes are not gated by captain mode
+    await host.client.callTool({
+      name: "hoop_set_mode",
+      arguments: { mode: "yolo" },
+    });
+
     // --- Step 2: Peer joins (joinSession blocks until admitted) ---
     peer = await createMcpInstance(pDeps);
 
