@@ -4,7 +4,8 @@
 #      (e.g. /hoop:leave) directly to the MCP server via signal. The
 #      harness owns these commands; the model never sees them.
 #   2. For everything else, surface pending admissions / prompt requests /
-#      peer file changes as additionalContext so the model can act on them.
+#      peer file changes / captain mode patch reviews as additionalContext
+#      so the model can act on them.
 
 set -euo pipefail
 
@@ -14,6 +15,7 @@ STATUS_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-session-status.json"
 ADMISSIONS_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-admissions.json"
 UPDATES_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-updates.json"
 PROMPT_REQUESTS_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-prompt-requests.json"
+PATCH_REVIEWS_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-patch-reviews.json"
 MAX_PATCH_LINES=20
 MAX_FILES=5
 
@@ -99,7 +101,7 @@ fi
 
 PID=$(jq -r '.pid // empty' "$STATUS_FILE" 2>/dev/null) || exit 0
 if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then
-  rm -f "$STATUS_FILE" "$ADMISSIONS_FILE" "$UPDATES_FILE" "$PROMPT_REQUESTS_FILE"
+  rm -f "$STATUS_FILE" "$ADMISSIONS_FILE" "$UPDATES_FILE" "$PROMPT_REQUESTS_FILE" "$PATCH_REVIEWS_FILE"
   exit 0
 fi
 
@@ -145,6 +147,25 @@ if [ "$ROLE" = "host" ] && [ -f "$PROMPT_REQUESTS_FILE" ]; then
   ' "$PROMPT_REQUESTS_FILE" 2> >(cat >&2)) || PROMPT_REQUESTS_CONTEXT=""
 fi
 
+PATCH_REVIEWS_CONTEXT=""
+if [ "$ROLE" = "host" ] && [ -f "$PATCH_REVIEWS_FILE" ]; then
+  PATCH_REVIEWS_CONTEXT=$(jq -r '
+    (.reviews // []) as $reviews |
+    ($reviews | map(select(.status == "pending-review"))) as $pending |
+    if ($pending | length) == 0 then empty
+    else
+      ($pending | map(
+        "Peer " + .peerId + " proposed changes:\n" +
+        (.files | map(
+          "\n  " + .filePath + ":\n" +
+          (.patchPreview | split("\n") | map("    " + .) | join("\n"))
+        ) | join("\n")) +
+        "\n\nApprove, Reject, or chat about it.\nUse hoop_approve_patches(\"" + .peerId + "\") or hoop_reject_patches(\"" + .peerId + "\", reason)."
+      ) | join("\n\n---\n\n"))
+    end
+  ' "$PATCH_REVIEWS_FILE" 2> >(cat >&2)) || PATCH_REVIEWS_CONTEXT=""
+fi
+
 UPDATES_CONTEXT=$(format_peer_changes_context "$UPDATES_FILE" "$MAX_PATCH_LINES" "$MAX_FILES")
 
 if [ -n "$UPDATES_CONTEXT" ]; then
@@ -163,6 +184,13 @@ if [ -n "$PROMPT_REQUESTS_CONTEXT" ]; then
     CONTEXT+=$'\n\n'
   fi
   CONTEXT="$CONTEXT$PROMPT_REQUESTS_CONTEXT"
+fi
+
+if [ -n "$PATCH_REVIEWS_CONTEXT" ]; then
+  if [ -n "$CONTEXT" ]; then
+    CONTEXT+=$'\n\n'
+  fi
+  CONTEXT="$CONTEXT$PATCH_REVIEWS_CONTEXT"
 fi
 
 if [ -n "$UPDATES_CONTEXT" ]; then
