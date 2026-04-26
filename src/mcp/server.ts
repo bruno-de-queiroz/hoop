@@ -201,7 +201,6 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     // Peer-side: detect patch rejection targeted at this peer
     if (
       update.type === "metadata-update" &&
-      update.key.startsWith("patch-rejected:") &&
       update.key === `patch-rejected:${selfPeerId}`
     ) {
       const val = update.value as { reviewId?: string; reason?: string; files?: string[] } | undefined;
@@ -544,6 +543,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
             });
           },
           onPromptRequest: () => syncPromptRequests(),
+          onPatchEnqueued: () => syncPatchReviews(),
           onLockChange: () => flushLockStatus(),
           onPeerDisconnect: (peerId) => {
             state.activeEditsTracker?.removePeer(peerId);
@@ -642,6 +642,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         state.pendingAdmissionsWriter = null;
         state.pendingPromptRequestsWriter?.clear();
         state.pendingPromptRequestsWriter = null;
+        state.pendingPatchReviewsWriter?.clear();
+        state.pendingPatchReviewsWriter = null;
         return errorResult(
           `Failed to create session: ${e instanceof Error ? e.message : String(e)}`,
         );
@@ -896,6 +898,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       }
 
       try {
+        // Host publishes directly — captain mode only gates *peer* updates.
         if (state.role === "host" && state.hostSession) {
           const update = {
             ...input,
@@ -1329,7 +1332,16 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       }
 
       const seqNos: number[] = [];
+      const conflicts: string[] = [];
       for (const entry of review.entries) {
+        // Re-validate baseHash — the file may have changed between enqueue and approve
+        if (entry.update.type === "file-change") {
+          const currentHash = state.hostSession.accumulator.getFileHash(entry.update.filePath);
+          if (currentHash !== undefined && entry.update.baseHash !== currentHash) {
+            conflicts.push(entry.filePath);
+            continue;
+          }
+        }
         const seqNo = state.hostSession.publishUpdate(entry.update, peerId);
         seqNos.push(seqNo);
       }
@@ -1339,8 +1351,9 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         approved: true,
         reviewId: review.reviewId,
         peerId,
-        fileCount: review.entries.length,
+        fileCount: seqNos.length,
         seqNos,
+        ...(conflicts.length > 0 ? { conflicts } : {}),
       });
     },
   );
