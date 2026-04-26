@@ -38,50 +38,84 @@ function ensure(name) {
 // plugin-discovery prefix "mcp__plugin_hoop_hoop__*" (claude plugin install).
 const isHoopTool = (name) => name?.startsWith("mcp__hoop__") || name?.startsWith("mcp__plugin_hoop_hoop__");
 
-// Conversation-state-driven scenario serving.
+// Conversation-state-driven, multi-step scenario serving.
 //
-// A scenario file declares a single tool_use response.  When the incoming
-// conversation already has a matching tool_result, we ECHO that tool_result's
-// text (success or error) back as the assistant's end_turn — no scripted
-// "Successfully X" template, so the mock can't lie.  Tests that grep the
-// result string see what the real MCP tool actually returned.
+// A scenario file is an ORDERED list of steps.  Each step has a tool_use
+// (with a unique id) and may have a `when` condition gating when it fires.
+// The mock-llm walks the list in order and serves the first not-yet-completed
+// step whose condition is met.  When all steps are done (or the next step is
+// waiting for its condition) we ECHO the most recent tool_result back as the
+// assistant's end_turn — no scripted success template, so the mock can't lie.
 //
-// {SESSION_CODE} / {HOST_ADDRESS} substitution is still honoured for the
-// tool_use input (driven by setScenarioVars from the test side), so the
-// peer scenario can be aimed at a specific live host.
+// Vars priority (highest wins): user-prompt slash args > tool_result
+// extractions (e.g. PENDING_PEER_ID from a prior hoop_check_admissions) >
+// set-vars presets.
 function nextResponse(scenario, messages, tools) {
   if (!ensure(scenario)) return endTurn(`[mock-llm] unknown scenario: ${scenario}`);
   const s = registry.get(scenario);
 
-  // Hoop-tools-ready gate (Claude Code's init phase makes hoop-less requests
-  // first; serving the tool_use to those would be wrong).
-  const scenarioUsesMcp = s.responses.some(r =>
-    r.content?.some(c => c.type === "tool_use" && isHoopTool(c.name)));
-  const hoopToolsReady = (tools ?? []).some(t => isHoopTool(t.name));
-  if (scenarioUsesMcp && !hoopToolsReady) {
+  // Tools-ready gate (Claude Code's init phase issues messages with no tool
+  // schemas; serving a tool_use against an unregistered tool would error).
+  // We wait until *every* tool the scenario references is present in the
+  // request's `tools` list.
+  const scenarioToolNames = new Set();
+  for (const r of s.responses) {
+    for (const c of r.content ?? []) {
+      if (c?.type === "tool_use" && typeof c.name === "string") scenarioToolNames.add(c.name);
+    }
+  }
+  const advertisedToolNames = new Set((tools ?? []).map(t => t.name));
+  const allToolsReady = [...scenarioToolNames].every(n => advertisedToolNames.has(n));
+  if (scenarioToolNames.size > 0 && !allToolsReady) {
     return endTurn("[mock-llm] waiting for MCP tools to initialize");
   }
 
-  const toolUseStep = s.responses.find(r =>
-    r.content?.some(c => c.type === "tool_use"));
-  const toolUseId = toolUseStep?.content?.find(c => c.type === "tool_use")?.id;
-
-  // If a tool_result for our tool_use is in the conversation, echo it.
-  if (toolUseId) {
-    const result = extractToolResult(messages, toolUseId);
-    if (result) {
-      const prefix = result.isError ? "Tool error: " : "";
-      return endTurn(prefix + result.text);
+  // Tool_use ids already echoed back as tool_results — these steps are done.
+  const seenToolUseIds = new Set();
+  for (const m of messages ?? []) {
+    if (!Array.isArray(m?.content)) continue;
+    for (const c of m.content) {
+      if (c?.type === "tool_result" && c.tool_use_id) seenToolUseIds.add(c.tool_use_id);
     }
   }
 
-  // No tool_result yet — serve the scripted tool_use step.
-  // Vars priority: user-prompt args > set-vars presets.  This makes
-  // `/hoop-join NAQ-BN5` use NAQ-BN5 even without a prior set-vars,
-  // closer to how a real LLM would parse the user's request.
-  if (!toolUseStep) return endTurn("[mock-llm] scenario has no tool_use step");
-  const vars = { ...s.vars, ...extractVarsFromUserPrompt(messages) };
-  const tmpl = JSON.parse(JSON.stringify(toolUseStep));
+  // First not-yet-completed step.  If its `when` condition isn't met, we
+  // stop — don't skip ahead, otherwise step ordering is meaningless.
+  let stepToServe = null;
+  for (const step of s.responses) {
+    const tu = step.content?.find(c => c.type === "tool_use");
+    if (!tu) continue;
+    if (seenToolUseIds.has(tu.id)) continue;
+    if (step.when && !whenSatisfied(step.when, messages)) break;
+    stepToServe = step;
+    break;
+  }
+
+  if (!stepToServe) {
+    // All scripted steps done OR waiting on a condition — echo last result.
+    const lastResult = lastToolResult(messages);
+    if (lastResult) {
+      const prefix = lastResult.isError ? "Tool error: " : "";
+      return endTurn(prefix + lastResult.text);
+    }
+    return endTurn("[mock-llm] no actionable step");
+  }
+
+  const promptVars = extractVarsFromUserPrompt(messages);
+  const toolResultVars = extractVarsFromToolResults(messages);
+  const vars = { ...s.vars, ...toolResultVars, ...promptVars };
+
+  // Log var provenance so stale presets (set-vars left over from a prior
+  // run) are visible the moment they leak into a substitution.
+  const provenance = Object.keys(vars).map(k => {
+    if (k in promptVars) return `${k}=${vars[k]}(prompt)`;
+    if (k in toolResultVars) return `${k}=${vars[k]}(tool_result)`;
+    return `${k}=${vars[k]}(preset)`;
+  }).join(" ");
+  if (provenance) console.log(`[mock-llm] ${scenario} vars: ${provenance}`);
+
+  const tmpl = JSON.parse(JSON.stringify(stepToServe));
+  delete tmpl.when;
   deepSub(tmpl, vars);
 
   // Defensive: refuse to serve if any {PLACEHOLDER} is still in the
@@ -90,7 +124,7 @@ function nextResponse(scenario, messages, tools) {
   const missing = findUnsubstitutedPlaceholders(tmpl);
   if (missing.length) {
     return endTurn(
-      `[mock-llm] missing var(s): ${missing.join(", ")} — pass them in the slash command (e.g. /hoop-join <code>) or POST /scenario/${scenario}/set-vars first`
+      `[mock-llm] missing var(s): ${missing.join(", ")} — pass them in the slash command (e.g. /hoop:join <code>) or POST /scenario/${scenario}/set-vars first`
     );
   }
 
@@ -104,9 +138,74 @@ function nextResponse(scenario, messages, tools) {
   };
 }
 
+// Step gate.  Today only `userMessageMatches` is supported — a regex string
+// tested against the concatenated text of any user message in the history.
+// Used by the host scenario's check_admissions step to fire only after the
+// UserPromptSubmit hook injects "Peer X wants to join …".
+function whenSatisfied(when, messages) {
+  if (typeof when?.userMessageMatches === "string") {
+    const re = new RegExp(when.userMessageMatches);
+    for (const m of messages ?? []) {
+      if (m?.role !== "user") continue;
+      if (re.test(userMessageText(m))) return true;
+    }
+    return false;
+  }
+  return true;
+}
+
+function userMessageText(m) {
+  if (typeof m.content === "string") return m.content;
+  if (Array.isArray(m.content)) {
+    return m.content
+      .filter(c => c?.type === "text" && typeof c.text === "string")
+      .map(c => c.text)
+      .join("\n");
+  }
+  return "";
+}
+
+// Walk every tool_result and pull well-known fields out of any JSON payload.
+// Lets later steps reference values produced by earlier steps without the
+// scenario file having to know IDs in advance.
+//   sessionCode               → SESSION_CODE
+//   listenAddresses[loopback] → HOST_ADDRESS  (prefer 127.0.0.1, else first)
+//   requests[0].peerId        → PENDING_PEER_ID  (from hoop_check_admissions)
+function extractVarsFromToolResults(messages) {
+  const out = {};
+  for (const m of messages ?? []) {
+    if (!Array.isArray(m?.content)) continue;
+    for (const block of m.content) {
+      if (block?.type !== "tool_result") continue;
+      let text = "";
+      if (typeof block.content === "string") text = block.content;
+      else if (Array.isArray(block.content)) {
+        text = block.content
+          .filter(c => c?.type === "text" && typeof c.text === "string")
+          .map(c => c.text).join("\n");
+      }
+      let obj;
+      try { obj = JSON.parse(text); } catch { continue; }
+      if (!obj || typeof obj !== "object") continue;
+
+      if (typeof obj.sessionCode === "string") out.SESSION_CODE = obj.sessionCode;
+      if (Array.isArray(obj.listenAddresses) && obj.listenAddresses.length) {
+        const loopback = obj.listenAddresses.find(
+          a => typeof a === "string" && a.startsWith("/ip4/127.0.0.1/"));
+        out.HOST_ADDRESS = loopback ?? obj.listenAddresses[0];
+      }
+      if (Array.isArray(obj.requests) && obj.requests.length > 0) {
+        const peerId = obj.requests[0]?.peerId;
+        if (typeof peerId === "string") out.PENDING_PEER_ID = peerId;
+      }
+    }
+  }
+  return out;
+}
+
 // Pull vars out of the user's most recent slash-command invocation.
-// Claude Code expands `/hoop-join NAQ-BN5` into a user message containing:
-//   <command-name>/hoop:hoop-join</command-name>
+// Claude Code expands `/hoop:join NAQ-BN5` into a user message containing:
+//   <command-name>/hoop:join</command-name>
 //   <command-args>NAQ-BN5</command-args>
 // We parse that tag rather than the raw prompt because the prompt also
 // includes the SKILL.md body and system reminders.
@@ -126,7 +225,12 @@ function extractVarsFromUserPrompt(messages) {
     const out = {};
     if (args[0]) out.SESSION_CODE = args[0];
     for (const a of args.slice(1)) {
-      if (a.startsWith("/ip") || a.startsWith("/dns")) out.HOST_ADDRESS = a;
+      // Multiaddrs MUST start with `/` but users often forget — auto-prepend.
+      const normalized = /^\/?(ip4|ip6|dns)\b/.test(a) && !a.startsWith("/")
+        ? `/${a}` : a;
+      if (normalized.startsWith("/ip") || normalized.startsWith("/dns")) {
+        out.HOST_ADDRESS = normalized;
+      }
     }
     return out;
   }
@@ -158,16 +262,17 @@ function endTurn(text) {
   };
 }
 
-// Walk messages in reverse looking for the tool_result that matches
-// `toolUseId`.  Returns { text, isError } or null.  The MCP server emits
-// success results as content:[{type:"text",text:"..."}] and errors as a
-// plain string content with is_error:true — handle both shapes.
-function extractToolResult(messages, toolUseId) {
+// Walk messages in reverse and return the most recent tool_result.
+// Returns { text, isError } or null.  The MCP server emits success results as
+// content:[{type:"text",text:"..."}] and errors as a plain string content
+// with is_error:true — handle both shapes.
+function lastToolResult(messages) {
   for (let i = (messages?.length ?? 0) - 1; i >= 0; i--) {
     const m = messages[i];
     if (!Array.isArray(m?.content)) continue;
-    for (const block of m.content) {
-      if (block?.type !== "tool_result" || block.tool_use_id !== toolUseId) continue;
+    for (let j = m.content.length - 1; j >= 0; j--) {
+      const block = m.content[j];
+      if (block?.type !== "tool_result") continue;
       const isError = block.is_error === true;
       let text = "";
       if (typeof block.content === "string") {

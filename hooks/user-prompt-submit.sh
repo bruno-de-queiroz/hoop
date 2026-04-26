@@ -29,7 +29,10 @@ fi
 ROLE=$(jq -r '.role // empty' "$STATUS_FILE" 2>/dev/null) || exit 0
 
 ADMISSIONS_CONTEXT=""
-if [ "$ROLE" = "host" ] && [ -f "$ADMISSIONS_FILE" ]; then
+# Default admission flow is MCP elicitation (server pushes Ask UI to client),
+# so we only inject pending-admissions context here when explicitly opted into
+# the tool-based fallback (used by docker E2E and headless --print runs).
+if [ "$ROLE" = "host" ] && [ "${HOOP_ADMISSION_MODE:-elicit}" = "tool" ] && [ -f "$ADMISSIONS_FILE" ]; then
   ADMISSIONS_CONTEXT=$(jq -r '
     (.requests // []) as $requests |
     if ($requests | length) == 0 then empty

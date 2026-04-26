@@ -1,5 +1,5 @@
 ---
-name: hoop-new
+name: new
 description: Initialize a new Hoop P2P collaborative session and generate a unique session code
 ---
 
@@ -7,7 +7,7 @@ description: Initialize a new Hoop P2P collaborative session and generate a uniq
 
 ## Arguments
 
-The user may invoke this skill as `/hoop-new` or `/hoop-new <password>`. Extract the optional password from the args string — everything after the command name, trimmed. If no password is provided, proceed without one.
+The user may invoke this skill as `/hoop:new` or `/hoop:new <password>`. Extract the optional password from the args string — everything after the command name, trimmed. If no password is provided, proceed without one.
 
 ## Steps
 
@@ -52,7 +52,7 @@ The user may invoke this skill as `/hoop-new` or `/hoop-new <password>`. Extract
      <each address from result.listenAddresses>
 
    Share this code with peers — they can join with:
-     /hoop-join <result.sessionCode>
+     /hoop:join <result.sessionCode>
 
    Provide the listen address above so peers can connect.
    ```

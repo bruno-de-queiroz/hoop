@@ -25,11 +25,16 @@ function writeJson(filePath: string, data: unknown) {
   writeFileSync(filePath, JSON.stringify(data), "utf-8");
 }
 
-function runHook(tempDir: string) {
+function runHook(tempDir: string, env: Record<string, string> = {}) {
   const output = execFileSync(SCRIPT_PATH, {
     env: {
       ...process.env,
       TMPDIR: tempDir,
+      // Existing tests assert the tool-based admission injection; that path
+      // only fires when HOOP_ADMISSION_MODE=tool.  Default elicit mode skips
+      // it (Claude Code surfaces the Ask UI directly).
+      HOOP_ADMISSION_MODE: "tool",
+      ...env,
     },
     encoding: "utf-8",
   });

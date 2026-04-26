@@ -1,5 +1,5 @@
 ---
-name: hoop-unlock
+name: unlock
 description: Force-release the Hot Seat mutex lock when a peer agent hangs or crashes (host only)
 ---
 
@@ -7,7 +7,7 @@ description: Force-release the Hot Seat mutex lock when a peer agent hangs or cr
 
 ## Arguments
 
-No arguments. Invoke as `/hoop-unlock`.
+No arguments. Invoke as `/hoop:unlock`.
 
 ## Steps
 

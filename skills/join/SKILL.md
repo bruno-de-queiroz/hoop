@@ -1,5 +1,5 @@
 ---
-name: hoop-join
+name: join
 description: Join an existing Hoop P2P collaborative session by session code
 ---
 
@@ -7,14 +7,14 @@ description: Join an existing Hoop P2P collaborative session by session code
 
 ## Arguments
 
-The user may invoke this skill as `/hoop-join <sessionCode>` or `/hoop-join <sessionCode> <password>`. Parse the session code (first argument, required) and optional password (second argument) from the args string. The user's email will be prompted for during the join flow.
+The user may invoke this skill as `/hoop:join <sessionCode>` or `/hoop:join <sessionCode> <password>`. Parse the session code (first argument, required) and optional password (second argument) from the args string. The user's email will be prompted for during the join flow.
 
 ## Steps
 
 1. **Parse the session code.** Extract the session code from the first argument. If no session code is provided, display an error and stop:
 
    ```
-   Usage: /hoop-join <sessionCode> [password]
+   Usage: /hoop:join <sessionCode> [password]
    ```
 
 2. **Prompt for the host's listen address.** Ask the user to provide the host's multiaddr (listen address). The host displays this when creating a session. Present exactly this prompt:

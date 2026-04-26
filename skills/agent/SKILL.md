@@ -1,5 +1,5 @@
 ---
-name: hoop-agent
+name: agent
 description: Spawn a sub-agent within an active Hoop session with an optional model override
 ---
 
@@ -7,7 +7,7 @@ description: Spawn a sub-agent within an active Hoop session with an optional mo
 
 ## Arguments
 
-The user invokes this skill as `/hoop-agent [--model <name>] <prompt>`. Parse the args string as follows:
+The user invokes this skill as `/hoop:agent [--model <name>] <prompt>`. Parse the args string as follows:
 
 1. If the args string starts with `--model `, consume the next token as the model override. It must be one of the known model names: `opus`, `sonnet`, `haiku`. If the token after `--model` is not a recognized model name, display an error and stop:
 
@@ -18,19 +18,19 @@ The user invokes this skill as `/hoop-agent [--model <name>] <prompt>`. Parse th
    Everything after the model token is the prompt.
 2. Otherwise, there is no model override — the entire args string is the prompt.
 
-This flag-based syntax avoids ambiguity when the prompt itself starts with a model name (e.g. `/hoop-agent haiku generator` is unambiguously a prompt, not a model override).
+This flag-based syntax avoids ambiguity when the prompt itself starts with a model name (e.g. `/hoop:agent haiku generator` is unambiguously a prompt, not a model override).
 
 If the prompt is empty after parsing, display a usage error and stop:
 
 ```
-Usage: /hoop-agent [--model <name>] <prompt>
+Usage: /hoop:agent [--model <name>] <prompt>
 
   --model   Optional. One of: opus, sonnet, haiku
   prompt    Required. The task for the sub-agent to execute.
 
 Examples:
-  /hoop-agent Fix the auth bug in login.ts
-  /hoop-agent --model sonnet Refactor the database module
+  /hoop:agent Fix the auth bug in login.ts
+  /hoop:agent --model sonnet Refactor the database module
 ```
 
 ## Steps
@@ -39,8 +39,8 @@ Examples:
 
    ```
    No active Hoop session. Start or join one first:
-     /hoop-new    — create a new session
-     /hoop-join   — join an existing session
+     /hoop:new    — create a new session
+     /hoop:join   — join an existing session
    ```
 
    On success, extract the session details from the response. The available fields differ by role:

@@ -234,8 +234,57 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           executionTarget,
           autoExecutePrompts,
           gitOps,
-          onAdmissionRequest: (email, peerId) =>
-            new Promise<boolean>((resolve) => {
+          onAdmissionRequest: async (email, peerId) => {
+            // Default: ask the operator via MCP elicitation (server→client
+            // JSON-RPC).  Claude Code surfaces this as an Ask UI prompt in
+            // interactive REPL mode — even when claude is idle at end_turn,
+            // the prompt fires reactively the moment the libp2p admission
+            // handler invokes this callback.  If elicitation isn't supported
+            // (older clients, headless --print, or the client throws because
+            // the form capability isn't advertised) we fall back to the
+            // tool-based path: queue a pending admission that
+            // hoop_admit_peer / hoop_deny_peer / hoop_check_admissions can
+            // drive.  The fallback also kicks in when the env var
+            // HOOP_ADMISSION_MODE is set to "tool" — used by the docker E2E
+            // suite which runs --print and auto-cancels elicitations.
+            const mode = process.env.HOOP_ADMISSION_MODE ?? "elicit";
+
+            if (mode === "elicit") {
+              try {
+                const result = await server.server.elicitInput({
+                  message: `Peer ${email} (peerId: ${peerId}) wants to join. Admit them?`,
+                  requestedSchema: {
+                    type: "object",
+                    properties: {
+                      admit: {
+                        type: "boolean",
+                        description: "Admit this peer to the session",
+                      },
+                    },
+                    required: ["admit"],
+                  },
+                });
+                if (result.action === "accept") {
+                  return result.content?.admit === true;
+                }
+                // decline / cancel — treat as deny.  No fallback: the operator
+                // explicitly answered (or explicitly closed the prompt).
+                return false;
+              } catch (err) {
+                const errObj = err as { code?: number; message?: string };
+                const methodNotFound = errObj?.code === -32601;
+                const capabilityMissing = typeof errObj?.message === "string"
+                  && /does not support .* elicitation/i.test(errObj.message);
+                if (!methodNotFound && !capabilityMissing) {
+                  console.error("[hoop] unexpected elicitInput failure, falling back to tool flow:", err);
+                }
+                // fall through to tool-based path
+              }
+            }
+
+            // Tool-based: queue the admission and resolve when hoop_admit_peer
+            // (or hoop_deny_peer) is called.
+            return new Promise<boolean>((resolve) => {
               state.pendingAdmissions.set(peerId, {
                 email,
                 peerId,
@@ -243,7 +292,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
                 requestedAt: Date.now(),
               });
               syncPendingAdmissions();
-            }),
+            });
+          },
           onPromptRequest: () => syncPromptRequests(),
           onLockChange: () => flushLockStatus(),
           onPeerDisconnect: (peerId) => {

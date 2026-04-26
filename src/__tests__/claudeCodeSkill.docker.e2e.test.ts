@@ -97,6 +97,10 @@ function runClaude(
     "-v", `${opts.hoopTmpDir}:/hoop-tmp`,
     "-w", "/repo",
     "-e", `HOOP_REGISTRY_DIR=/repo/.hoop`,
+    // Headless --print can't render MCP elicitation prompts (Claude Code
+    // auto-cancels them), so the docker E2E suite forces the tool-based
+    // admission flow.  Real interactive runs default to elicit.
+    "-e", "HOOP_ADMISSION_MODE=tool",
     "-e", `ANTHROPIC_BASE_URL=${MOCK_LLM_URL}/${opts.scenarioPrefix}`,
     "-e", "ANTHROPIC_API_KEY=test-key-not-real",
     "-e", "GIT_AUTHOR_NAME=hoop-test",
@@ -172,9 +176,9 @@ describe.skipIf(skip)("Claude Code skill flow — hoop session via mock LLM", ()
 
     await resetScenario("host");
 
-    // Invoke the /hoop-new skill — proves the plugin is loaded (skills,
+    // Invoke the /hoop:new skill — proves the plugin is loaded (skills,
     // hooks, and MCP server all auto-wired through `claude plugin install`).
-    const rawOutput = await runClaude("/hoop-new", {
+    const rawOutput = await runClaude("/hoop:new", {
       cwd: repoDir,
       hoopTmpDir,
       scenarioPrefix: "host",
@@ -248,7 +252,7 @@ describe.skipIf(skip)("Claude Code skill flow — hoop session via mock LLM", ()
       expect(sessionCode).toMatch(/^[A-Z0-9]{3}-[A-Z0-9]{3}/);
       expect(hostAddress, `expected loopback listen addr; got ${host.listenAddresses}`).toBeTruthy();
 
-      // --- Peer container: real claude → /hoop-join → real libp2p dial ------
+      // --- Peer container: real claude → /hoop:join → real libp2p dial ------
       const peerTmpDir = await mkdtemp(join(tmpdir(), "hoop-peer-tmp-"));
       const peerRepoDir = await createTempRepo("hoop-peer-");
       try {
@@ -263,7 +267,7 @@ describe.skipIf(skip)("Claude Code skill flow — hoop session via mock LLM", ()
           HOST_ADDRESS: hostAddress!,
         });
 
-        const peerOutput = await runClaude(`/hoop-join ${sessionCode}`, {
+        const peerOutput = await runClaude(`/hoop:join ${sessionCode}`, {
           cwd: peerRepoDir,
           hoopTmpDir: peerTmpDir,
           scenarioPrefix: "peer",
@@ -340,7 +344,7 @@ describe.skipIf(skip)("Claude Code skill flow — hoop session via mock LLM", ()
       // hoop_join_session will fail because the libp2p dial can't connect.
       // Mock-llm echoes the real error tool_result back, and the MCP server
       // never writes a role:"peer" status file.  Both signals must agree.
-      const out = await runClaude(`/hoop-join ${badSessionCode}`, {
+      const out = await runClaude(`/hoop:join ${badSessionCode}`, {
         cwd: peerRepoDir,
         hoopTmpDir: peerTmpDir,
         scenarioPrefix: "peer",

@@ -1,13 +1,13 @@
 ---
-name: hoop-mode
-description: Set the governance mode for the active Hoop session
+name: settings
+description: Configure the active Hoop session — currently sets the governance mode (host-only, zero-trust, yolo)
 ---
 
-# Hoop Mode
+# Hoop Settings
 
 ## Arguments
 
-The user invokes this skill as `/hoop-mode <mode> [threshold]`. Parse the args string as follows:
+The user invokes this skill as `/hoop:settings <mode> [threshold]`. Parse the args string as follows:
 
 1. The first token is the **mode**. It must be one of: `host-only`, `zero-trust`, `yolo`. If the token is not recognized, display an error and stop:
 
@@ -37,18 +37,18 @@ The user invokes this skill as `/hoop-mode <mode> [threshold]`. Parse the args s
 If no mode is provided, display a usage error and stop:
 
 ```
-Usage: /hoop-mode <mode> [threshold]
+Usage: /hoop:settings <mode> [threshold]
 
   mode        Required. One of: host-only, zero-trust, yolo
   threshold   Optional. Only for zero-trust mode.
               One of: majority (>50%), consensus (100%), or a positive integer
 
 Examples:
-  /hoop-mode host-only
-  /hoop-mode zero-trust majority
-  /hoop-mode zero-trust consensus
-  /hoop-mode zero-trust 3
-  /hoop-mode yolo
+  /hoop:settings host-only
+  /hoop:settings zero-trust majority
+  /hoop:settings zero-trust consensus
+  /hoop:settings zero-trust 3
+  /hoop:settings yolo
 ```
 
 ## Steps
@@ -57,8 +57,8 @@ Examples:
 
    ```
    No active Hoop session. Start or join one first:
-     /hoop-new    — create a new session
-     /hoop-join   — join an existing session
+     /hoop:new    — create a new session
+     /hoop:join   — join an existing session
    ```
 
    If the role is not `host`, display an error and stop:

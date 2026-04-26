@@ -7,8 +7,8 @@ function readSkill(...parts: string[]) {
 }
 
 describe("skill definitions", () => {
-  it("/hoop-new uses the MCP create-session tool and preserves the prompt/output UX", () => {
-    const content = readSkill("skills", "hoop-new", "SKILL.md");
+  it("/hoop:new uses the MCP create-session tool and preserves the prompt/output UX", () => {
+    const content = readSkill("skills", "new", "SKILL.md");
 
     expect(content).toContain("hoop_create_session");
     expect(content).not.toContain("import { createSession }");
@@ -20,8 +20,8 @@ describe("skill definitions", () => {
     expect(content).toContain("Share this code with peers");
   });
 
-  it("/hoop-join uses the MCP join-session tool and preserves the prompt/output UX", () => {
-    const content = readSkill("skills", "hoop-join", "SKILL.md");
+  it("/hoop:join uses the MCP join-session tool and preserves the prompt/output UX", () => {
+    const content = readSkill("skills", "join", "SKILL.md");
 
     expect(content).toContain("hoop_join_session");
     expect(content).not.toContain("import { joinSession }");
@@ -31,8 +31,8 @@ describe("skill definitions", () => {
     expect(content).toContain("Connected to session!");
   });
 
-  it("/hoop-agent uses MCP status/lock tools and Agent for sub-agent spawning", () => {
-    const content = readSkill("skills", "hoop-agent", "SKILL.md");
+  it("/hoop:agent uses MCP status/lock tools and Agent for sub-agent spawning", () => {
+    const content = readSkill("skills", "agent", "SKILL.md");
 
     // Uses MCP tools, not internal TypeScript
     expect(content).toContain("hoop_get_status");
@@ -55,20 +55,34 @@ describe("skill definitions", () => {
     expect(content).toContain("`prompt`:");
 
     // UX strings — happy path and error paths
-    expect(content).toContain("Usage: /hoop-agent");
+    expect(content).toContain("Usage: /hoop:agent");
     expect(content).toContain("Unknown model:");
     expect(content).toContain("No active Hoop session");
     expect(content).toContain("Cannot start agent");
     expect(content).toContain("Agent completed. Lock released.");
   });
 
-  it("/hoop-unlock uses the MCP force-unlock tool and includes confirmation UX", () => {
-    const content = readSkill("skills", "hoop-unlock", "SKILL.md");
+  it("/hoop:unlock uses the MCP force-unlock tool and includes confirmation UX", () => {
+    const content = readSkill("skills", "unlock", "SKILL.md");
 
     expect(content).toContain("hoop_force_unlock");
     expect(content).toContain("hoop_lock_status");
     expect(content).not.toContain("import ");
     expect(content).toContain("Proceed? (y/n)");
     expect(content).toContain("Lock force-released successfully");
+  });
+
+  it("/hoop:leave wraps the MCP leave-session tool and explains scope vs unlock", () => {
+    const content = readSkill("skills", "leave", "SKILL.md");
+
+    expect(content).toContain("hoop_leave_session");
+    expect(content).not.toContain("import ");
+    // Validates session before leaving
+    expect(content).toContain("hoop_get_status");
+    // Result UX
+    expect(content).toContain("Left Hoop session");
+    // Disambiguates from /hoop:unlock so users pick the right action
+    expect(content).toContain("/hoop:unlock");
+    expect(content).toContain("does NOT delete the worktree");
   });
 });

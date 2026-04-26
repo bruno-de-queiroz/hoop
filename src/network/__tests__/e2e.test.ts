@@ -91,7 +91,7 @@ describe('E2E: network layer', () => {
     });
 
     it('joiner connects to host using session listen address', async () => {
-      // Host creates session and starts node (simulates /hoop-new)
+      // Host creates session and starts node (simulates /hoop:new)
       const store = new SessionStore();
       const sessionCode = generateSessionCode();
       expect(validateSessionCode(sessionCode)).toBe(true);
@@ -111,7 +111,7 @@ describe('E2E: network layer', () => {
         listenAddresses: host.getListenAddresses(),
       });
 
-      // Joiner retrieves host address (simulates /hoop-join prompting for address)
+      // Joiner retrieves host address (simulates /hoop:join prompting for address)
       const session = store.get(sessionCode);
       expect(session).toBeDefined();
       expect(session!.listenAddresses).toBeDefined();

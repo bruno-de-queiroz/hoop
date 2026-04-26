@@ -10,5 +10,30 @@
         "input": { "executionTarget": "host-only" }
       }
     ]
+  },
+  {
+    "when": { "userMessageMatches": "wants to join" },
+    "stop_reason": "tool_use",
+    "content": [
+      { "type": "text", "text": "A peer wants to join — checking pending admissions." },
+      {
+        "type": "tool_use",
+        "id": "toolu_host_check_admissions_01",
+        "name": "mcp__plugin_hoop_hoop__hoop_check_admissions",
+        "input": {}
+      }
+    ]
+  },
+  {
+    "stop_reason": "tool_use",
+    "content": [
+      { "type": "text", "text": "Admitting the pending peer." },
+      {
+        "type": "tool_use",
+        "id": "toolu_host_admit_01",
+        "name": "mcp__plugin_hoop_hoop__hoop_admit_peer",
+        "input": { "peerId": "{PENDING_PEER_ID}" }
+      }
+    ]
   }
 ]

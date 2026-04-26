@@ -17,7 +17,7 @@ The script:
 2. Registers a local marketplace via `claude plugin marketplace add`.
 3. Installs and enables the plugin via `claude plugin install hoop@hoop`.
 
-After install, `claude plugin list` should show `hoop@hoop` as `enabled`. Skills (`/hoop-new`, `/hoop-join`, …), hooks, and the MCP server are all wired automatically.
+After install, `claude plugin list` should show `hoop@hoop` as `enabled`. Skills (`/hoop:new`, `/hoop:join`, `/hoop:leave`, …), hooks, and the MCP server are all wired automatically.
 
 Env vars:
 - `HOOP_SRC` — source checkout (default: `$PWD`)
@@ -121,7 +121,7 @@ The `-v` flag removes the Gitea data volume so the next run starts clean.
 Useful when you want to poke at the same container the test uses — e.g. to debug a hook, try a different prompt, or watch the plugin's MCP server in real time. Prereqs: claude-runner image built, services up, Gitea initialised (steps 1–3 above).
 
 > **Mock-llm picks scenarios by URL path, not by user prompt.**
-> `ANTHROPIC_BASE_URL=http://localhost:4000/host` always serves the `host.json` script (which calls `hoop_create_session`), regardless of whether you typed `/hoop-new`, `/hoop-join`, or anything else. To exercise the join flow you must point at `/peer` *and* preload `SESSION_CODE` / `HOST_ADDRESS` (see the `/hoop-join` recipe below).
+> `ANTHROPIC_BASE_URL=http://localhost:4000/host` walks the `host.json` script in order: step 1 calls `hoop_create_session`; step 2 (`hoop_check_admissions`) is gated on the user-prompt-submit hook injecting `wants to join` (only when `HOOP_ADMISSION_MODE=tool`) and only fires once a peer has dialled; step 3 (`hoop_admit_peer`) auto-fills its `peerId` from the previous tool_result and unblocks the peer. The default admission flow is elicit-based (`server.elicitInput` over MCP stdio → Claude Code Ask UI), so steps 2–3 are vestigial unless you explicitly opt into tool mode. Regardless of whether you typed `/hoop:new`, `/hoop:join`, or anything else, the host scenario advances based on conversation state. To exercise the join side instead, point at `/peer` (see the `/hoop:join` recipe below).
 >
 > Scenarios are conversation-state-driven (each fresh conversation re-serves the tool_use step until a `tool_result` comes back), so you don't need to reset between manual runs.
 
@@ -148,7 +148,7 @@ docker run --rm --network host \
   -e GIT_CONFIG_KEY_0=safe.directory \
   -e GIT_CONFIG_VALUE_0='*' \
   hoop-claude-runner \
-  claude "/hoop-new" \
+  claude "/hoop:new" \
     --print --output-format json \
     --allowedTools 'mcp__plugin_hoop_hoop__*'
 
@@ -163,8 +163,10 @@ sudo rm -rf "$REPO" "$HOOPTMP"   # sudo because root-owned files from the contai
 
 Swap-outs:
 - **Run against a real Anthropic endpoint** — drop `ANTHROPIC_BASE_URL` and provide a real `ANTHROPIC_API_KEY`. Skill flow then depends on the LLM's actual decisions.
-- **Use the peer scenario** — change `ANTHROPIC_BASE_URL` to `http://localhost:4000/peer` and run `/hoop-join <code> <multiaddr>`. Mock-llm parses the slash-command args from `<command-args>` in the user message: first token → `SESSION_CODE`, any token starting with `/ip` or `/dns` → `HOST_ADDRESS`. If anything's missing it returns an explicit `[mock-llm] missing var(s): …` error before forwarding to the MCP tool, so unsubstituted placeholders never reach the validator. Presets via `POST /scenario/peer/set-vars` still work and are used as fallback if the prompt doesn't carry them.
-- **Try a different skill** — replace `/hoop-new` with any of the other skill commands (`/hoop-join`, `/hoop-mode`, `/hoop-unlock`, `/hoop-agent`).
+- **Use the peer scenario** — change `ANTHROPIC_BASE_URL` to `http://localhost:4000/peer` and run `/hoop:join <code> <multiaddr>`. Mock-llm parses the slash-command args from `<command-args>` in the user message: first token → `SESSION_CODE`, any token starting with `/ip` or `/dns` → `HOST_ADDRESS`. If anything's missing it returns an explicit `[mock-llm] missing var(s): …` error before forwarding to the MCP tool, so unsubstituted placeholders never reach the validator. Presets via `POST /scenario/peer/set-vars` still work and are used as fallback if the prompt doesn't carry them.
+- **Run a real two-claude P2P handshake (default elicit mode)** — open two host shells, start the docker test infra, and in **terminal A** run the host recipe above (interactive `claude`, no `-p`). At the REPL: `/hoop:new` → note the `sessionCode` and the `/ip4/127.0.0.1/...` listen address. In **terminal B** start a peer container the same way but with `ANTHROPIC_BASE_URL=…/peer`, then `/hoop:join <code> /ip4/127.0.0.1/tcp/<port>/p2p/<peerId>`. The peer's libp2p dial reaches the host's MCP server, which calls `server.elicitInput(...)` over the MCP stdio channel. **Claude Code's interactive UI surfaces an Ask-style yes/no prompt** in terminal A — answer it, and the peer's `/hoop:join` returns `"admitted":true` (or denied). Reactive, event-driven, no polling, no `type ok at the REPL` dance.
+- **Force the legacy tool-based admission flow** — set `-e HOOP_ADMISSION_MODE=tool` on the host's `docker run`. Pending admissions are queued in `hoop-pending-admissions.json` and the host claude must call `hoop_check_admissions` then `hoop_admit_peer` (or `hoop_deny_peer`). The `user-prompt-submit` hook re-enables its admission injection only in this mode. Used by the docker E2E suite (which runs `claude --print` and can't render the elicit UI — Claude Code auto-cancels elicitations in headless mode). The mock-llm host scenario's three-step script (`hoop_create_session` → `hoop_check_admissions` → `hoop_admit_peer`) is what drives this in tests; in interactive elicit mode it gracefully degrades to just step 1 because the "wants to join" injection never fires.
+- **Try a different skill** — replace `/hoop:new` with any of the other skill commands (`/hoop:join`, `/hoop:settings`, `/hoop:unlock`, `/hoop:agent`, `/hoop:leave`).
 - **Drop into a shell instead** — replace the trailing `claude …` with `sh` to inspect `/root/.claude/plugins/hoop/`, run `claude plugin list`, etc.
 
 > **What the result string contains.** Mock-llm echoes the real tool_result back as the assistant's `end_turn`, so `result` in the JSON output is the literal output of the MCP tool — successful runs surface the `sessionCode`, `peerId`, listen addresses, etc.; failures surface the actual error message prefixed with `Tool error: `. There is no scripted "Successfully X" template that could mislead you.
