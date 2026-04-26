@@ -198,6 +198,18 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     if (update.type === "metadata-update" && update.key === GOVERNANCE_CONFIG_KEY && isGovernanceConfig(update.value)) {
       state.observedGovernanceConfig = update.value;
     }
+    // Peer-side: detect patch rejection targeted at this peer
+    if (
+      update.type === "metadata-update" &&
+      update.key.startsWith("patch-rejected:") &&
+      update.key === `patch-rejected:${selfPeerId}`
+    ) {
+      const val = update.value as { reviewId?: string; reason?: string; files?: string[] } | undefined;
+      if (val?.files) {
+        // Queue as a pending update so the peer's Claude sees the rejection
+        state.pendingUpdates.push(update);
+      }
+    }
     state.activeEditsTracker?.handleUpdate(update);
     state.pendingUpdatesWriter?.handleUpdate(update);
   }
@@ -901,6 +913,15 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
             timestamp: Date.now(),
           } as NonLockStateUpdate;
           const response = await state.peerSession.sendUpdate(update);
+
+          if (response.kind === "pending-review") {
+            return jsonResult({
+              accepted: false,
+              pendingReview: true,
+              reviewId: response.reviewId,
+            });
+          }
+
           return jsonResult({
             accepted: response.accepted,
             ...(response.seqNo !== undefined ? { seqNo: response.seqNo } : {}),
@@ -1343,6 +1364,20 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       if (!review) {
         return errorResult(`No pending patch review found for peer: ${peerId}`);
       }
+
+      // Broadcast rejection notification so the peer can revert
+      const rejectionUpdate: MetadataUpdate = {
+        type: "metadata-update",
+        peerId: state.hostSession.peerId,
+        key: `patch-rejected:${peerId}`,
+        value: {
+          reviewId: review.reviewId,
+          reason,
+          files: review.entries.map((e) => e.filePath),
+        },
+        timestamp: Date.now(),
+      };
+      state.hostSession.publishUpdate(rejectionUpdate);
 
       syncPatchReviews();
       return jsonResult({

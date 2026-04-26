@@ -19,6 +19,7 @@ import type {
 } from "../state/stateUpdate.js";
 import { HOOP_LOCK_TTL_MS } from "../state/hoopLock.js";
 import { hashContent } from "../git/gitBranch.js";
+import type { StateUpdateResponse } from "../network/protocol.js";
 
 const VALID_PATCH = `--- a/src/index.ts
 +++ b/src/index.ts
@@ -558,7 +559,7 @@ describe("State reconciliation and concurrency handling", () => {
         value: "dark",
         timestamp: 1000,
       };
-      const response1 = await joinResult.sendUpdate(newerMeta);
+      const response1 = await joinResult.sendUpdate(newerMeta) as StateUpdateResponse;
       expect(response1.accepted).toBe(true);
 
       // Peer 2 sends metadata at t=500 (stale) — should be rejected
@@ -569,7 +570,7 @@ describe("State reconciliation and concurrency handling", () => {
         value: "light",
         timestamp: 500,
       };
-      const response2 = await joinResult2.sendUpdate(olderMeta);
+      const response2 = await joinResult2.sendUpdate(olderMeta) as StateUpdateResponse;
       expect(response2.accepted).toBe(false);
       expect(response2.reason).toBe("stale-metadata");
 
@@ -611,7 +612,7 @@ describe("State reconciliation and concurrency handling", () => {
         value: { mode: "yolo" },
         timestamp: Date.now(),
       };
-      const response = await joinResult.sendUpdate(forgedConfig);
+      const response = await joinResult.sendUpdate(forgedConfig) as StateUpdateResponse;
       expect(response.accepted).toBe(false);
       expect(response.reason).toBe("reserved-metadata-key");
     }, 30_000);
@@ -666,7 +667,7 @@ describe("State reconciliation and concurrency handling", () => {
         resultHash: hashContent(updatedContent),
         timestamp: Date.now(),
       };
-      const response1 = await joinResult.sendUpdate(fileChange1);
+      const response1 = await joinResult.sendUpdate(fileChange1) as StateUpdateResponse;
       expect(response1.accepted).toBe(true);
 
       // Peer 2 sends a file-change with the WRONG baseHash (uses original, not updated)
@@ -679,7 +680,7 @@ describe("State reconciliation and concurrency handling", () => {
         resultHash: hashContent("const a = 1;\nconst b = 99;\nconst c = 3;\n"),
         timestamp: Date.now(),
       };
-      const response2 = await joinResult2.sendUpdate(fileChange2);
+      const response2 = await joinResult2.sendUpdate(fileChange2) as StateUpdateResponse;
       expect(response2.accepted).toBe(false);
       expect(response2.reason).toBe("base-hash-mismatch");
     }, 30_000);
@@ -722,7 +723,7 @@ describe("State reconciliation and concurrency handling", () => {
         timestamp: Date.now(),
       };
 
-      const response = await joinResult.sendUpdate(cursor);
+      const response = await joinResult.sendUpdate(cursor) as StateUpdateResponse;
 
       expect(response.accepted).toBe(true);
       expect(typeof response.seqNo).toBe("number");
