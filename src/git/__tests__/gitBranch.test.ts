@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { getGitRoot, createSessionWorktree, removeSessionWorktree, fetchBranch, checkoutBranch, pushBranch } from "../gitBranch.js";
+import { getGitRoot, createSessionWorktree, removeSessionWorktree, fetchBranch, checkoutBranch, pushBranch, computeContentDiff } from "../gitBranch.js";
 import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 
@@ -362,5 +362,115 @@ describe("checkoutBranch", () => {
       ok: false,
       error: "error: pathspec 'hoop/session-ABC-XYZ' did not match any file(s) known to git",
     });
+  });
+});
+
+describe("computeContentDiff", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns error when filePath contains newline", async () => {
+    const result = await computeContentDiff(
+      "file\n../../escape.txt",
+      "old content",
+      "new content",
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("forbidden control characters");
+    }
+  });
+
+  it("returns error when filePath contains carriage return", async () => {
+    const result = await computeContentDiff(
+      "file\r../../escape.txt",
+      "old content",
+      "new content",
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("forbidden control characters");
+    }
+  });
+
+  it("returns error when filePath contains null byte", async () => {
+    const result = await computeContentDiff(
+      "file\0../../escape.txt",
+      "old content",
+      "new content",
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("forbidden control characters");
+    }
+  });
+
+  it("returns error when filePath has .. path-escape segment", async () => {
+    const result = await computeContentDiff(
+      "../escape/file.txt",
+      "old content",
+      "new content",
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("path-escape segment");
+    }
+  });
+
+  it("returns error when filePath has .. in the middle", async () => {
+    const result = await computeContentDiff(
+      "foo/../../../escape.txt",
+      "old content",
+      "new content",
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("path-escape segment");
+    }
+  });
+
+  it("accepts valid filePath with legitimate nested paths", async () => {
+    simulateExecFile(`diff --git a/src/file.txt b/src/file.txt
+index 1234567..abcdef0 100644
+--- a/src/file.txt
++++ b/src/file.txt
+@@ -1 +1 @@
+-old
++new`);
+
+    const result = await computeContentDiff(
+      "src/components/Button.tsx",
+      "old content",
+      "new content",
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toContain("src/components/Button.tsx");
+    }
+  });
+
+  it("accepts filePath with double-dots in filename (not path-escape)", async () => {
+    simulateExecFile(`diff --git a/foo..bar.txt b/foo..bar.txt
+index 1234567..abcdef0 100644
+--- a/foo..bar.txt
++++ b/foo..bar.txt
+@@ -1 +1 @@
+-old
++new`);
+
+    const result = await computeContentDiff(
+      "foo..bar.txt",
+      "old content",
+      "new content",
+    );
+
+    expect(result.ok).toBe(true);
   });
 });

@@ -159,6 +159,24 @@ export async function computeContentDiff(
   oldContent: string,
   newContent: string,
 ): Promise<GitResult<string>> {
+  // Validate filePath before using it in regex/string substitution
+  if (filePath.includes("\n") || filePath.includes("\r") || filePath.includes("\0")) {
+    return {
+      ok: false,
+      error: "Invalid filePath: contains forbidden control characters",
+    };
+  }
+
+  const segments = filePath.split("/");
+  for (const segment of segments) {
+    if (segment === "..") {
+      return {
+        ok: false,
+        error: "Invalid filePath: contains path-escape segment",
+      };
+    }
+  }
+
   if (oldContent === newContent) {
     return { ok: true, value: "" };
   }

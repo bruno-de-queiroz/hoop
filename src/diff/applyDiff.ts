@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { applyGitPatch, hashContent } from "../git/gitBranch.js";
+import { validatePatchPaths } from "./validatePatch.js";
 
 export interface PatchSuccess {
   ok: true;
@@ -37,6 +38,16 @@ export async function applyFilePatch(
       ok: false,
       error: "patch-failed",
       message: `Invalid file path: ${filePath}`,
+    };
+  }
+
+  // Validate patch headers don't contain path-traversal attempts
+  const patchValidation = validatePatchPaths(patch, worktreePath);
+  if (!patchValidation.valid) {
+    return {
+      ok: false,
+      error: "patch-failed",
+      message: `Patch path validation failed: ${patchValidation.reason}`,
     };
   }
 

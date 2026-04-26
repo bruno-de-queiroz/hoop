@@ -149,7 +149,7 @@ describe("applyFilePatch", () => {
     );
   });
 
-  it("rejects path traversal attempts", async () => {
+  it("rejects path traversal attempts via filePath argument", async () => {
     const content = "hello";
     const baseHash = gitBranch.hashContent(content);
 
@@ -167,6 +167,34 @@ describe("applyFilePatch", () => {
       expect(result.error).toBe("patch-failed");
       expect(result.message).toContain("Invalid file path");
     }
+    expect(mockApplyGitPatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects patches with path-traversal in patch headers (+++ b/../../escape)", async () => {
+    const content = "hello";
+    const baseHash = gitBranch.hashContent(content);
+
+    const maliciousPatch = `--- a/file.txt
++++ b/../../etc/passwd
+@@ -1 +1 @@
+-hello
++hacked`;
+
+    const result = await applyFilePatch(
+      "/tmp/worktree",
+      "file.txt",
+      maliciousPatch,
+      content,
+      baseHash,
+      "some-hash",
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("patch-failed");
+      expect(result.message).toContain("path validation failed");
+    }
+    // applyGitPatch should not be called because validation happens first
     expect(mockApplyGitPatch).not.toHaveBeenCalled();
   });
 
