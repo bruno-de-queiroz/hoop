@@ -34,6 +34,7 @@ import { PendingAdmissionsWriter } from "../state/pendingAdmissionsWriter.js";
 import { OutboundUpdatesReader } from "../state/outboundUpdatesReader.js";
 import { LockStatusWriter } from "../state/lockStatusWriter.js";
 import { PendingPromptRequestsWriter } from "../state/pendingPromptRequestsWriter.js";
+import { PendingPatchReviewsWriter } from "../state/pendingPatchReviewsWriter.js";
 import { PROMPT_PROTOCOL, writeHalf, readFromStream, writeToStream } from "../network/protocol.js";
 import type { PromptRequestMessage, PromptStatusQuery, PromptResponse, PromptRequestStatus } from "../state/promptRequest.js";
 
@@ -62,6 +63,7 @@ interface ServerState {
   pendingAdmissions: Map<string, PendingAdmission>;
   pendingAdmissionsWriter: PendingAdmissionsWriter | null;
   pendingPromptRequestsWriter: PendingPromptRequestsWriter | null;
+  pendingPatchReviewsWriter: PendingPatchReviewsWriter | null;
   peerPromptRequests: Map<string, PeerPromptRequest>;
   activeEditsTracker: ActiveEditsTracker | null;
   pendingUpdatesWriter: PendingUpdatesWriter | null;
@@ -80,6 +82,7 @@ export interface HoopMcpDeps {
   outboundUpdatesRegistryPath?: string;
   lockStatusRegistryPath?: string;
   pendingPromptRequestsRegistryPath?: string;
+  pendingPatchReviewsRegistryPath?: string;
   sessionStatusPath?: string;
 }
 
@@ -105,6 +108,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
   const outboundUpdatesRegistryPath = deps?.outboundUpdatesRegistryPath;
   const lockStatusRegistryPath = deps?.lockStatusRegistryPath;
   const pendingPromptRequestsRegistryPath = deps?.pendingPromptRequestsRegistryPath;
+  const pendingPatchReviewsRegistryPath = deps?.pendingPatchReviewsRegistryPath;
 
   const state: ServerState = {
     role: null,
@@ -117,6 +121,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     pendingAdmissions: new Map(),
     pendingAdmissionsWriter: null,
     pendingPromptRequestsWriter: null,
+    pendingPatchReviewsWriter: null,
     peerPromptRequests: new Map(),
     activeEditsTracker: null,
     pendingUpdatesWriter: null,
@@ -208,6 +213,22 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       requestedAt: e.request.timestamp,
     }));
     state.pendingPromptRequestsWriter?.sync(entries);
+  }
+
+  function syncPatchReviews(): void {
+    if (!state.hostSession) return;
+    const pending = state.hostSession.patchReviewQueue.listPending();
+    const entries = pending.map((r) => ({
+      reviewId: r.reviewId,
+      peerId: r.peerId,
+      status: r.status,
+      createdAt: r.createdAt,
+      files: r.entries.map((e) => ({
+        filePath: e.filePath,
+        patchPreview: e.patch.split("\n").slice(0, 20).join("\n"),
+      })),
+    }));
+    state.pendingPatchReviewsWriter?.sync(entries);
   }
 
   // ── Helpers: resolve session settings via elicit form ─────────────
@@ -433,12 +454,16 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         state.pendingPromptRequestsWriter = new PendingPromptRequestsWriter(
           pendingPromptRequestsRegistryPath,
         );
+        state.pendingPatchReviewsWriter = new PendingPatchReviewsWriter(
+          pendingPatchReviewsRegistryPath,
+        );
 
         const result = await createSession({
           password,
           executionTarget: resolvedTarget,
           autoExecutePrompts,
           gitOps,
+          isCaptainMode: () => state.observedGovernanceConfig.mode === "captain",
           onAdmissionRequest: async (email, peerId) => {
             // Default: ask the operator via MCP elicitation (server→client
             // JSON-RPC).  Claude Code surfaces this as an Ask UI prompt in
@@ -1233,6 +1258,145 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
+  // ── Patch review tools (captain mode) ─────────────────────────────
+
+  server.registerTool(
+    "hoop_check_patch_reviews",
+    {
+      description:
+        "List pending patch review batches. Host only. Returns per-peer batches of file-change patches awaiting captain review.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      if (state.role !== "host" || !state.hostSession) {
+        return errorResult("Only the host can check patch reviews.");
+      }
+
+      const pending = state.hostSession.patchReviewQueue.listPending();
+      return jsonResult({
+        reviews: pending.map((r) => ({
+          reviewId: r.reviewId,
+          peerId: r.peerId,
+          status: r.status,
+          createdAt: r.createdAt,
+          files: r.entries.map((e) => ({
+            filePath: e.filePath,
+            patchPreview: e.patch.split("\n").slice(0, 20).join("\n"),
+          })),
+        })),
+      });
+    },
+  );
+
+  server.registerTool(
+    "hoop_approve_patches",
+    {
+      description:
+        "Approve all pending file-change patches from a peer. Host only. The held updates are accumulated and broadcast to all peers.",
+      inputSchema: z.object({
+        peerId: z.string().describe("The peer whose patches to approve"),
+      }),
+    },
+    async ({ peerId }) => {
+      if (state.role !== "host" || !state.hostSession) {
+        return errorResult("Only the host can approve patches.");
+      }
+
+      const review = state.hostSession.patchReviewQueue.approve(peerId);
+      if (!review) {
+        return errorResult(`No pending patch review found for peer: ${peerId}`);
+      }
+
+      const seqNos: number[] = [];
+      for (const entry of review.entries) {
+        const seqNo = state.hostSession.publishUpdate(entry.update, peerId);
+        seqNos.push(seqNo);
+      }
+
+      syncPatchReviews();
+      return jsonResult({
+        approved: true,
+        reviewId: review.reviewId,
+        peerId,
+        fileCount: review.entries.length,
+        seqNos,
+      });
+    },
+  );
+
+  server.registerTool(
+    "hoop_reject_patches",
+    {
+      description:
+        "Reject all pending file-change patches from a peer. Host only. The peer will be notified and should revert the changes.",
+      inputSchema: z.object({
+        peerId: z.string().describe("The peer whose patches to reject"),
+        reason: z.string().optional().describe("Reason for rejection"),
+      }),
+    },
+    async ({ peerId, reason }) => {
+      if (state.role !== "host" || !state.hostSession) {
+        return errorResult("Only the host can reject patches.");
+      }
+
+      const review = state.hostSession.patchReviewQueue.reject(peerId, reason);
+      if (!review) {
+        return errorResult(`No pending patch review found for peer: ${peerId}`);
+      }
+
+      syncPatchReviews();
+      return jsonResult({
+        rejected: true,
+        reviewId: review.reviewId,
+        peerId,
+        fileCount: review.entries.length,
+        reason,
+      });
+    },
+  );
+
+  server.registerTool(
+    "hoop_poll_patch_status",
+    {
+      description:
+        "Poll the status of a patch review by reviewId. Used by peers to check whether their patches were approved or rejected.",
+      inputSchema: z.object({
+        reviewId: z.string().describe("The review ID returned from hoop_send_update"),
+      }),
+    },
+    async ({ reviewId }) => {
+      if (state.role === null) {
+        return errorResult("No active session.");
+      }
+
+      // Peers poll their own reviews; host can also poll
+      const queue = state.role === "host"
+        ? state.hostSession?.patchReviewQueue
+        : undefined;
+
+      // For peers, the review lives on the host side — we need a peer-side tracking mechanism.
+      // For now, the peer sends the poll via the UPDATE_PROTOCOL to the host.
+      // TODO: implement peer-side poll over protocol in a follow-up
+      if (!queue) {
+        return errorResult("Patch status polling is currently only available on the host side.");
+      }
+
+      const review = queue.get(reviewId);
+      if (!review) {
+        return errorResult(`No patch review found with ID: ${reviewId}`);
+      }
+
+      return jsonResult({
+        reviewId: review.reviewId,
+        peerId: review.peerId,
+        status: review.status,
+        reason: review.reason,
+        fileCount: review.entries.length,
+        files: review.entries.map((e) => e.filePath),
+      });
+    },
+  );
+
   // ── hoop_leave_session ────────────────────────────────────────────
 
   function cleanupState(): void {
@@ -1249,6 +1413,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.pendingAdmissionsWriter = null;
     state.pendingPromptRequestsWriter?.clear();
     state.pendingPromptRequestsWriter = null;
+    state.pendingPatchReviewsWriter?.clear();
+    state.pendingPatchReviewsWriter = null;
     state.peerPromptRequests.clear();
     state.stopHostUpdateMirror?.();
     state.stopHostUpdateMirror = null;
@@ -1296,6 +1462,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           pending.resolve(false);
         }
         state.hostSession.promptRequestQueue.clear();
+        state.hostSession.patchReviewQueue.clear();
         state.hostSession.broadcastHub.close();
         await state.hostSession.node.stop();
       }

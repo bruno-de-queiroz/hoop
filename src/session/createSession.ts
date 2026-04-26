@@ -24,6 +24,7 @@ import {
   type StateUpdateResponse,
   type LockAcquireResponse,
   type LockReleaseResponse,
+  type PendingReviewResponse,
 } from "../network/protocol.js";
 import { BroadcastHub } from "../network/broadcastHub.js";
 import { ReplayBuffer } from "../network/replayBuffer.js";
@@ -44,6 +45,7 @@ import {
   type PromptRequest,
   type PromptResponse,
 } from "../state/promptRequest.js";
+import { PatchReviewQueue } from "../state/patchReview.js";
 import { randomUUID } from "node:crypto";
 import { type ExecutionTarget, type Session, SessionStore, GOVERNANCE_CONFIG_KEY } from "./session.js";
 import { generateSessionCode } from "./sessionCode.js";
@@ -97,6 +99,7 @@ export interface CreateSessionParams {
   onLockChange?: (lock: HoopLock) => void;
   onPromptRequest?: (request: PromptRequest) => void;
   onPeerDisconnect?: (peerId: string) => void;
+  isCaptainMode?: () => boolean;
   executionTarget: ExecutionTarget;
   autoExecutePrompts?: boolean;
   networkConfig?: NetworkConfig;
@@ -140,6 +143,7 @@ export interface CreateSessionResult {
   accumulator: HostStateAccumulator;
   replayBuffer: ReplayBuffer;
   promptRequestQueue: PromptRequestQueue;
+  patchReviewQueue: PatchReviewQueue;
   /**
    * Publishes a host-side update through the canonical accumulate → broadcast →
    * replay flow. Prefer acquireLock()/releaseLock() for lock updates so their
@@ -345,6 +349,8 @@ export async function createSession(
   const accumulator = new HostStateAccumulator();
   const replayBuffer = new ReplayBuffer();
   const promptRequestQueue = new PromptRequestQueue();
+  const patchReviewQueue = new PatchReviewQueue();
+  const isCaptainMode = params.isCaptainMode ?? (() => false);
   const autoExecutePrompts = params.autoExecutePrompts ?? false;
   const publishedUpdateListeners = new Set<PublishedUpdateListener>();
   let pendingPush: Promise<void> | null = null;
@@ -756,6 +762,17 @@ export async function createSession(
       }
     }
 
+    // Captain mode: gate file-change updates for host review
+    if (update.type === "file-change" && isCaptainMode()) {
+      const reviewId = patchReviewQueue.enqueue(update, remotePeerId);
+      const response: PendingReviewResponse = {
+        kind: "pending-review",
+        reviewId,
+      };
+      await writeToStream(stream, response);
+      return;
+    }
+
     const seqNo = publishUpdate(update, remotePeerId);
     const response: StateUpdateResponse = {
       kind: "state-update",
@@ -830,6 +847,7 @@ export async function createSession(
     accumulator,
     replayBuffer,
     promptRequestQueue,
+    patchReviewQueue,
     publishUpdate,
     onPublishedUpdate,
     acquireLock,

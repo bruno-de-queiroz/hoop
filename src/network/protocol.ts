@@ -78,7 +78,12 @@ export interface LockReleaseResponse {
   lock: HoopLock;
 }
 
-export type UpdateResponse = StateUpdateResponse | LockAcquireResponse | LockReleaseResponse;
+export interface PendingReviewResponse {
+  kind: "pending-review";
+  reviewId: string;
+}
+
+export type UpdateResponse = StateUpdateResponse | LockAcquireResponse | LockReleaseResponse | PendingReviewResponse;
 
 function concatBytes(chunks: Uint8Array[]): Uint8Array {
   const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
