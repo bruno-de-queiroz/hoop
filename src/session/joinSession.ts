@@ -20,6 +20,7 @@ import {
   type StateUpdateResponse,
   type LockAcquireResponse,
   type LockReleaseResponse,
+  type PendingReviewResponse,
 } from "../network/protocol.js";
 import type { StateTree } from "../state/stateTree.js";
 import type { AccumulatedState } from "../state/hostStateAccumulator.js";
@@ -89,8 +90,8 @@ export interface JoinSessionResult {
   branchName?: string;
   executionTarget: ExecutionTarget;
   accumulatedState?: AccumulatedState;
-  sendUpdate: (update: NonLockStateUpdate) => Promise<StateUpdateResponse>;
-  sendFileChange: (filePath: string, oldContent: string, newContent: string) => Promise<StateUpdateResponse>;
+  sendUpdate: (update: NonLockStateUpdate) => Promise<StateUpdateResponse | PendingReviewResponse>;
+  sendFileChange: (filePath: string, oldContent: string, newContent: string) => Promise<StateUpdateResponse | PendingReviewResponse>;
   onBroadcast: (handler: (update: StateUpdate) => void) => () => void;
   getLastSeqNo: () => number;
   requestReplay: (fromSeq: number) => Promise<SyncResponse>;
@@ -257,10 +258,10 @@ export async function joinSession(
       console.warn("[joinSession] Broadcast stream closed:", err);
     });
 
-    const sendUpdate = async (update: NonLockStateUpdate): Promise<StateUpdateResponse> => {
+    const sendUpdate = async (update: NonLockStateUpdate): Promise<StateUpdateResponse | PendingReviewResponse> => {
       const stream = await node.openStream(params.hostAddress, UPDATE_PROTOCOL);
       await writeHalf(stream, update);
-      return readFromStream<StateUpdateResponse>(stream);
+      return readFromStream<StateUpdateResponse | PendingReviewResponse>(stream);
     };
 
     const sendLockAcquire = async (update: LockAcquireUpdate): Promise<LockAcquireResponse> => {
@@ -279,7 +280,7 @@ export async function joinSession(
       filePath: string,
       oldContent: string,
       newContent: string,
-    ): Promise<StateUpdateResponse> => {
+    ): Promise<StateUpdateResponse | PendingReviewResponse> => {
       const diff = await computeFileDiff(filePath, oldContent, newContent);
       const update: FileChangeUpdate = {
         type: "file-change",

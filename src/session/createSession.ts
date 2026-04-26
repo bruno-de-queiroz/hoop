@@ -722,8 +722,8 @@ export async function createSession(
       return;
     }
 
-    // Reserved keys: only the host may set governance config
-    if (update.type === "metadata-update" && update.key === GOVERNANCE_CONFIG_KEY) {
+    // Reserved keys: only the host may set governance config or patch rejections
+    if (update.type === "metadata-update" && (update.key === GOVERNANCE_CONFIG_KEY || update.key.startsWith("patch-rejected:"))) {
       const response: StateUpdateResponse = {
         kind: "state-update",
         accepted: false,
