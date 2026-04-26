@@ -63,9 +63,15 @@ if [ -z "$PATCH" ]; then
   exit 0
 fi
 
-# Compute hashes (MD5, matching hashContent in TypeScript)
-BASE_CONTENT=$(cd "$GIT_DIR" && git show :"$REL_PATH" 2>/dev/null) || BASE_CONTENT=""
-BASE_HASH=$(printf '%s' "$BASE_CONTENT" | md5sum | cut -d' ' -f1)
+# Compute hashes (MD5, matching hashContent in TypeScript).
+# Pipe `git show` directly into md5sum — going through a shell variable via
+# $(...) strips trailing newlines AND mangles binary bytes, producing a
+# BASE_HASH that disagrees with the TypeScript receiver's hashContent over
+# the same content. Every text file with a final \n hit this. Pipe-only
+# preserves raw bytes end-to-end.
+# For files not in the index (new/untracked), git show fails silently and
+# md5sum hashes empty input → matches hashContent("") on the receiver.
+BASE_HASH=$(cd "$GIT_DIR" && git show :"$REL_PATH" 2>/dev/null | md5sum | cut -d' ' -f1)
 RESULT_HASH=$(md5sum < "$FILE_PATH" | cut -d' ' -f1)
 
 TIMESTAMP=$(date +%s000)

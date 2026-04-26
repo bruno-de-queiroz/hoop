@@ -794,6 +794,9 @@ describe("hoop MCP server", () => {
       timestamp: Date.now(),
     });
 
+    // Allow async write queue to process
+    await new Promise(resolve => setImmediate(resolve));
+
     const registry = PendingUpdatesWriter.readRegistry(PENDING_UPDATES_REGISTRY);
     expect(registry).not.toBeNull();
     expect(registry!.updates).toHaveLength(1);

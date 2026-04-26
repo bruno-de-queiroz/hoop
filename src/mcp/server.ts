@@ -57,6 +57,7 @@ interface ServerState {
   peerSession: JoinSessionResult | null;
   stopHostUpdateMirror: (() => void) | null;
   stopPeerDisconnectCleanup: (() => void) | null;
+  stopPeerBroadcastSubscription: (() => void) | null;
   pendingUpdates: StateUpdate[];
   pendingAdmissions: Map<string, PendingAdmission>;
   pendingAdmissionsWriter: PendingAdmissionsWriter | null;
@@ -111,6 +112,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     peerSession: null,
     stopHostUpdateMirror: null,
     stopPeerDisconnectCleanup: null,
+    stopPeerBroadcastSubscription: null,
     pendingUpdates: [],
     pendingAdmissions: new Map(),
     pendingAdmissionsWriter: null,
@@ -259,6 +261,15 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     // from the model are ignored. We can't trust the model to "remember to
     // call argless"; the harness must own the form regardless.
     if ((process.env.HOOP_ADMISSION_MODE ?? "elicit") === "tool") {
+      // Reject inconsistent inputs explicitly rather than silently dropping
+      // them. Caller passing { mode: "yolo", threshold: "majority" } is a
+      // contract bug, not something to paper over.
+      if (opts.mode && opts.mode !== "zero-trust" && opts.threshold !== undefined) {
+        throw new Error("Threshold is only valid for zero-trust mode.");
+      }
+      if (opts.mode === undefined && opts.threshold !== undefined) {
+        throw new Error("Threshold cannot be set without a mode.");
+      }
       if (opts.mode) {
         return opts.mode === "zero-trust"
           ? { mode: "zero-trust", threshold: opts.threshold ?? "majority" }
@@ -650,7 +661,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         flushLockStatus();
 
         // Queue incoming broadcasts for hoop_check_updates
-        result.onBroadcast((update) => {
+        state.stopPeerBroadcastSubscription = result.onBroadcast((update) => {
           mirrorObservedUpdate(update, result.localPeerId);
         });
 
@@ -1231,6 +1242,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.stopHostUpdateMirror = null;
     state.stopPeerDisconnectCleanup?.();
     state.stopPeerDisconnectCleanup = null;
+    state.stopPeerBroadcastSubscription?.();
+    state.stopPeerBroadcastSubscription = null;
     // Intentionally do NOT clearSessionStatus here — signal-triggered shutdowns
     // (SIGTERM/SIGINT) should leave the status file so external tooling can
     // detect the zombie session.  Explicit hoop_leave_session clears it after
@@ -1252,6 +1265,13 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
     try {
       if (state.role === "host" && state.hostSession) {
+        // Order matters: gate auto-pushes BEFORE node.stop() so the
+        // cascade of peer:disconnect events doesn't trigger N concurrent
+        // `git push` calls during shutdown. Then clear pending auth
+        // timeouts so they don't fire after the node is gone.
+        state.hostSession.markShuttingDown();
+        state.hostSession.clearAuthTimeouts();
+
         for (const pending of state.pendingAdmissions.values()) {
           pending.resolve(false);
         }
@@ -1263,6 +1283,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       if (state.role === "peer" && state.peerSession) {
         state.stopPeerDisconnectCleanup?.();
         state.stopPeerDisconnectCleanup = null;
+        state.stopPeerBroadcastSubscription?.();
+        state.stopPeerBroadcastSubscription = null;
         state.peerSession.stopAckInterval();
         await state.peerSession.node.stop();
       }
@@ -1299,18 +1321,19 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         return errorResult("No active host session.");
       }
 
-      // If mode is missing, elicit it (and threshold if zero-trust).
-      // Tool-mode and missing-capability fall back to defaults.
-      if (mode === undefined) {
-        try {
-          const resolved = await resolveGovernance({ mode, threshold });
-          mode = resolved.mode;
-          threshold = resolved.mode === "zero-trust" ? resolved.threshold : undefined;
-        } catch (e) {
-          return errorResult(
-            e instanceof Error ? e.message : String(e),
-          );
-        }
+      // Always go through resolveGovernance — it gates on tool-mode vs
+      // elicit-mode internally. Conditional dispatch on `mode === undefined`
+      // would let a model in elicit-mode bypass the form by passing `mode`
+      // directly, which is exactly the harness-owns-UX guarantee we built
+      // resolveGovernance to enforce.
+      try {
+        const resolved = await resolveGovernance({ mode, threshold });
+        mode = resolved.mode;
+        threshold = resolved.mode === "zero-trust" ? resolved.threshold : undefined;
+      } catch (e) {
+        return errorResult(
+          e instanceof Error ? e.message : String(e),
+        );
       }
 
       if (mode !== "zero-trust" && threshold !== undefined) {

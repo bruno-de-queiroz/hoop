@@ -37,8 +37,9 @@ The user may invoke this skill as `/hoop:new` or `/hoop:new <password>`. Extract
    Session created!
 
    Code: <result.sessionCode>
-   Target: <result.executionTarget>
-   Mode: <result.governance.mode>[ (threshold: <threshold>)]
+   Execution target: <result.executionTarget>
+   Governance mode: <result.governance.mode>
+   Approval threshold: <threshold>
    Branch: <result.branchName>
    Worktree: <result.worktreePath>
    Peer ID: <result.peerId>
@@ -51,6 +52,10 @@ The user may invoke this skill as `/hoop:new` or `/hoop:new <password>`. Extract
    Provide the listen address above so peers can connect.
    ```
 
-   Show the threshold suffix only when `result.governance.mode === "zero-trust"`.
+   Show the `Approval threshold` line ONLY when `result.governance.mode === "zero-trust"`. Render `<threshold>` using the same format as `/hoop:settings`:
+   - `majority (>50% of peers)` when `result.governance.threshold === "majority"`
+   - `consensus (100% of peers)` when `result.governance.threshold === "consensus"`
+   - `<N> peer(s)` when `result.governance.threshold` is a positive integer
+
    If `result.passwordProtected` is true, also note that a password is required to join.
    If `result.branchName` is undefined, note that git worktree creation was skipped (not a git repository).

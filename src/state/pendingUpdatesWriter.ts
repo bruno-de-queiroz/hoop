@@ -1,4 +1,4 @@
-import { writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdirSync, renameSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import type { StateUpdate } from "./stateUpdate.js";
@@ -22,7 +22,9 @@ export interface PendingUpdatesRegistry {
 const REGISTRY_FILENAME = "hoop-pending-updates.json";
 
 export function defaultPendingUpdatesPath(): string {
-  return join(process.env.HOOP_REGISTRY_DIR || tmpdir(), REGISTRY_FILENAME);
+  // Suffix with process.pid to avoid collisions across concurrent hoop sessions on the same machine
+  const filename = `${REGISTRY_FILENAME.replace(".json", "")}-${process.pid}.json`;
+  return join(process.env.HOOP_REGISTRY_DIR || tmpdir(), filename);
 }
 
 // ── Writer ──────────────────────────────────────────────────────────
@@ -34,10 +36,14 @@ export function defaultPendingUpdatesPath(): string {
  * Only tracks `file-change` updates from other peers — cursor, buffer,
  * and metadata updates are ignored (those are handled by ActiveEditsTracker
  * or are not relevant for context injection).
+ *
+ * All writes are serialized via an in-process async mutex (promise chain) to
+ * prevent lost updates when multiple concurrent calls to handleUpdate() occur.
  */
 export class PendingUpdatesWriter {
   private readonly registryPath: string;
   private readonly selfPeerId: string;
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(selfPeerId: string, registryPath?: string) {
     this.selfPeerId = selfPeerId;
@@ -49,28 +55,39 @@ export class PendingUpdatesWriter {
     if (update.peerId === this.selfPeerId) return;
     if (update.type !== "file-change") return;
 
-    const current = PendingUpdatesWriter.readRegistry(this.registryPath);
-    const updates = current?.updates ?? [];
-
-    updates.push({
-      peerId: update.peerId,
-      filePath: update.filePath,
-      patch: update.patch,
-      timestamp: update.timestamp,
+    // Serialize writes by enqueuing on the promise chain
+    this.writeQueue = this.writeQueue.then(() => {
+      const current = PendingUpdatesWriter.readRegistry(this.registryPath);
+      const updates = current?.updates ?? [];
+      updates.push({
+        peerId: update.peerId,
+        filePath: update.filePath,
+        patch: update.patch,
+        timestamp: update.timestamp,
+      });
+      this.writeAtomicSync({ updates, updatedAt: Date.now() });
     });
-
-    this.write({ updates, updatedAt: Date.now() });
   }
 
   /** Clear all pending updates. */
   clear(): void {
-    this.write({ updates: [], updatedAt: Date.now() });
+    this.writeQueue = this.writeQueue.then(() => {
+      this.writeAtomicSync({ updates: [], updatedAt: Date.now() });
+    });
   }
 
-  private write(registry: PendingUpdatesRegistry): void {
+  /** Wait for all pending writes to complete. Useful for testing. */
+  async flushWrites(): Promise<void> {
+    await this.writeQueue;
+  }
+
+  private writeAtomicSync(registry: PendingUpdatesRegistry): void {
     try {
-      mkdirSync(dirname(this.registryPath), { recursive: true });
-      writeFileSync(this.registryPath, JSON.stringify(registry), "utf-8");
+      const dir = dirname(this.registryPath);
+      mkdirSync(dir, { recursive: true });
+      const tmpPath = this.registryPath + ".tmp";
+      writeFileSync(tmpPath, JSON.stringify(registry), "utf-8");
+      renameSync(tmpPath, this.registryPath);
     } catch {
       // Best-effort: if we can't write, hooks will see stale data or no file
     }
@@ -79,6 +96,7 @@ export class PendingUpdatesWriter {
   /** Read the registry from disk. */
   static readRegistry(registryPath?: string): PendingUpdatesRegistry | null {
     const path = registryPath ?? defaultPendingUpdatesPath();
+    if (!existsSync(path)) return null;
     try {
       const data = readFileSync(path, "utf-8");
       return JSON.parse(data) as PendingUpdatesRegistry;
@@ -93,7 +111,9 @@ export class PendingUpdatesWriter {
     const registry = PendingUpdatesWriter.readRegistry(path);
     if (registry && registry.updates.length > 0) {
       try {
-        writeFileSync(path, JSON.stringify({ updates: [], updatedAt: Date.now() }), "utf-8");
+        const tmpPath = path + ".tmp";
+        writeFileSync(tmpPath, JSON.stringify({ updates: [], updatedAt: Date.now() }), "utf-8");
+        renameSync(tmpPath, path);
       } catch {
         // Best-effort
       }

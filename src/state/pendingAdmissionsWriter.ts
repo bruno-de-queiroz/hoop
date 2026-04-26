@@ -1,4 +1,4 @@
-import { writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdirSync, renameSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 
@@ -16,7 +16,9 @@ export interface PendingAdmissionsRegistry {
 const REGISTRY_FILENAME = "hoop-pending-admissions.json";
 
 export function defaultPendingAdmissionsPath(): string {
-  return join(process.env.HOOP_REGISTRY_DIR || tmpdir(), REGISTRY_FILENAME);
+  // Suffix with process.pid to avoid collisions across concurrent hoop sessions on the same machine
+  const filename = `${REGISTRY_FILENAME.replace(".json", "")}-${process.pid}.json`;
+  return join(process.env.HOOP_REGISTRY_DIR || tmpdir(), filename);
 }
 
 export class PendingAdmissionsWriter {
@@ -36,8 +38,11 @@ export class PendingAdmissionsWriter {
 
   private write(registry: PendingAdmissionsRegistry): void {
     try {
-      mkdirSync(dirname(this.registryPath), { recursive: true });
-      writeFileSync(this.registryPath, JSON.stringify(registry), "utf-8");
+      const dir = dirname(this.registryPath);
+      mkdirSync(dir, { recursive: true });
+      const tmpPath = this.registryPath + ".tmp";
+      writeFileSync(tmpPath, JSON.stringify(registry), "utf-8");
+      renameSync(tmpPath, this.registryPath);
     } catch {
       // Best-effort: if we can't write, hooks will see stale data or no file
     }
@@ -45,6 +50,7 @@ export class PendingAdmissionsWriter {
 
   static readRegistry(registryPath?: string): PendingAdmissionsRegistry | null {
     const path = registryPath ?? defaultPendingAdmissionsPath();
+    if (!existsSync(path)) return null;
     try {
       const data = readFileSync(path, "utf-8");
       return JSON.parse(data) as PendingAdmissionsRegistry;

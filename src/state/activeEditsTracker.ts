@@ -1,4 +1,4 @@
-import { writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdirSync, renameSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import type { StateUpdate } from "./stateUpdate.js";
@@ -27,7 +27,9 @@ export interface ConflictRegistry {
 const REGISTRY_FILENAME = "hoop-active-edits.json";
 
 export function defaultRegistryPath(): string {
-  return join(process.env.HOOP_REGISTRY_DIR || tmpdir(), REGISTRY_FILENAME);
+  // Suffix with process.pid to avoid collisions across concurrent hoop sessions on the same machine
+  const filename = `${REGISTRY_FILENAME.replace(".json", "")}-${process.pid}.json`;
+  return join(process.env.HOOP_REGISTRY_DIR || tmpdir(), filename);
 }
 
 // ── Tracker ─────────────────────────────────────────────────────────
@@ -132,8 +134,11 @@ export class ActiveEditsTracker {
   private flush(): void {
     const data = JSON.stringify(this.getRegistry());
     try {
-      mkdirSync(dirname(this.registryPath), { recursive: true });
-      writeFileSync(this.registryPath, data, "utf-8");
+      const dir = dirname(this.registryPath);
+      mkdirSync(dir, { recursive: true });
+      const tmpPath = this.registryPath + ".tmp";
+      writeFileSync(tmpPath, data, "utf-8");
+      renameSync(tmpPath, this.registryPath);
     } catch {
       // Best-effort: if we can't write, hooks will see stale data or no file
     }
@@ -142,6 +147,7 @@ export class ActiveEditsTracker {
   /** Read the registry from disk (static, for use by hook scripts or tests). */
   static readRegistry(registryPath?: string): ConflictRegistry | null {
     const path = registryPath ?? defaultRegistryPath();
+    if (!existsSync(path)) return null;
     try {
       const data = readFileSync(path, "utf-8");
       return JSON.parse(data) as ConflictRegistry;

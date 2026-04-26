@@ -155,6 +155,8 @@ export interface CreateSessionResult {
   drainPendingPush: (timeoutMs?: number) => Promise<void>;
   /** Clears all pending auth timeout timers (F1 security hardening). Call before node.stop() during teardown. */
   clearAuthTimeouts: () => void;
+  /** Gates auto-push during shutdown to prevent N concurrent pushes on peer disconnect. Idempotent. Call before node.stop(). */
+  markShuttingDown: () => void;
 }
 
 export async function createSession(
@@ -334,6 +336,7 @@ export async function createSession(
   const autoExecutePrompts = params.autoExecutePrompts ?? false;
   const publishedUpdateListeners = new Set<PublishedUpdateListener>();
   let pendingPush: Promise<void> | null = null;
+  let shuttingDown = false;
 
   const onPublishedUpdate = (listener: PublishedUpdateListener): (() => void) => {
     publishedUpdateListeners.add(listener);
@@ -364,7 +367,11 @@ export async function createSession(
     // previous holder timed out or crashed, the worktree already contains whatever
     // partial work was applied — pushing it ensures remote peers start from reality
     // rather than a stale snapshot.
-    if (update.type === "lock-release") {
+    //
+    // During shutdown (shuttingDown=true), auto-push is gated to prevent N concurrent
+    // pushes when all peers disconnect at once. The caller (gracefulShutdown/destroySession)
+    // is responsible for a single final auto-push after all peer-disconnect handlers fire.
+    if (update.type === "lock-release" && !shuttingDown) {
       const previous = pendingPush ?? Promise.resolve();
       const current = previous.then(async () => {
         try {
@@ -767,6 +774,12 @@ export async function createSession(
     authTimeouts.clear();
   };
 
+  // Gate auto-push during shutdown to prevent N concurrent pushes when all peers
+  // disconnect. Idempotent: safe to call multiple times.
+  const markShuttingDown = (): void => {
+    shuttingDown = true;
+  };
+
   return {
     sessionCode,
     hostId,
@@ -791,5 +804,6 @@ export async function createSession(
     getLockStatus,
     drainPendingPush,
     clearAuthTimeouts,
+    markShuttingDown,
   };
 }

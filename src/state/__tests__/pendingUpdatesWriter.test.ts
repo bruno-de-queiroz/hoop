@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -25,6 +25,10 @@ function fileChange(peerId: string, filePath: string, patch: string): StateUpdat
 }
 
 describe("PendingUpdatesWriter", () => {
+  beforeEach(() => {
+    try { unlinkSync(TEST_REGISTRY); } catch { /* ignore */ }
+  });
+
   afterEach(() => {
     try { unlinkSync(TEST_REGISTRY); } catch { /* ignore */ }
   });
@@ -68,10 +72,12 @@ describe("PendingUpdatesWriter", () => {
     expect(registry).toBeNull();
   });
 
-  it("accumulates file-change updates from other peers", () => {
+  it("accumulates file-change updates from other peers", async () => {
     const writer = makeWriter();
     writer.handleUpdate(fileChange("peer-alice", "src/main.ts", "+line 1"));
     writer.handleUpdate(fileChange("peer-bob", "src/utils.ts", "+line 2"));
+
+    await writer.flushWrites();
 
     const registry = PendingUpdatesWriter.readRegistry(TEST_REGISTRY);
     expect(registry).not.toBeNull();
@@ -83,18 +89,22 @@ describe("PendingUpdatesWriter", () => {
     expect(registry!.updates[1].filePath).toBe("src/utils.ts");
   });
 
-  it("accumulates multiple updates to the same file", () => {
+  it("accumulates multiple updates to the same file", async () => {
     const writer = makeWriter();
     writer.handleUpdate(fileChange("peer-alice", "src/main.ts", "+v1"));
     writer.handleUpdate(fileChange("peer-alice", "src/main.ts", "+v2"));
+
+    await writer.flushWrites();
 
     const registry = PendingUpdatesWriter.readRegistry(TEST_REGISTRY);
     expect(registry!.updates).toHaveLength(2);
   });
 
-  it("readAndDrain returns updates and clears the file", () => {
+  it("readAndDrain returns updates and clears the file", async () => {
     const writer = makeWriter();
     writer.handleUpdate(fileChange("peer-alice", "src/main.ts", "+change"));
+
+    await writer.flushWrites();
 
     const drained = PendingUpdatesWriter.readAndDrain(TEST_REGISTRY);
     expect(drained).not.toBeNull();
@@ -111,9 +121,11 @@ describe("PendingUpdatesWriter", () => {
     expect(result).toBeNull();
   });
 
-  it("readAndDrain is a no-op on empty updates", () => {
+  it("readAndDrain is a no-op on empty updates", async () => {
     const writer = makeWriter();
     writer.clear(); // writes empty state
+
+    await writer.flushWrites();
 
     const result = PendingUpdatesWriter.readAndDrain(TEST_REGISTRY);
     expect(result).not.toBeNull();
@@ -124,11 +136,13 @@ describe("PendingUpdatesWriter", () => {
     expect(after!.updates).toHaveLength(0);
   });
 
-  it("clear() empties the registry", () => {
+  it("clear() empties the registry", async () => {
     const writer = makeWriter();
     writer.handleUpdate(fileChange("peer-alice", "src/main.ts", "+change"));
 
     writer.clear();
+
+    await writer.flushWrites();
 
     const registry = PendingUpdatesWriter.readRegistry(TEST_REGISTRY);
     expect(registry!.updates).toHaveLength(0);

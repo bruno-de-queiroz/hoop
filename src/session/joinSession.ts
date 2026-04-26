@@ -91,7 +91,7 @@ export interface JoinSessionResult {
   accumulatedState?: AccumulatedState;
   sendUpdate: (update: NonLockStateUpdate) => Promise<StateUpdateResponse>;
   sendFileChange: (filePath: string, oldContent: string, newContent: string) => Promise<StateUpdateResponse>;
-  onBroadcast: (handler: (update: StateUpdate) => void) => void;
+  onBroadcast: (handler: (update: StateUpdate) => void) => () => void;
   getLastSeqNo: () => number;
   requestReplay: (fromSeq: number) => Promise<SyncResponse>;
   acquireLock: () => Promise<{ acquired: boolean; holder: string | null }>;
@@ -290,8 +290,12 @@ export async function joinSession(
       return sendUpdate(update);
     };
 
-    const onBroadcast = (handler: (update: StateUpdate) => void): void => {
+    const onBroadcast = (handler: (update: StateUpdate) => void): (() => void) => {
       broadcastHandlers.push(handler);
+      return () => {
+        const idx = broadcastHandlers.indexOf(handler);
+        if (idx >= 0) broadcastHandlers.splice(idx, 1);
+      };
     };
 
     const getLastSeqNo = (): number => lastSeqNo;
