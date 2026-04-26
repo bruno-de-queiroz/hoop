@@ -440,7 +440,14 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
             if (mode === "elicit") {
               try {
                 const result = await server.server.elicitInput({
-                  message: `Peer ${email} (peerId: ${peerId}) wants to join. Admit them?`,
+                  message: [
+                    "A peer wants to join this Hoop session.",
+                    "",
+                    `  peerId (cryptographic, verified): ${peerId}`,
+                    `  email  (peer-supplied, NOT verified): ${email}`,
+                    "",
+                    "Admit?",
+                  ].join("\n"),
                   requestedSchema: {
                     type: "object",
                     properties: {

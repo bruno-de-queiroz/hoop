@@ -87,6 +87,10 @@ export const stubGitOps: GitOps = {
 
 export const defaultAdmissionHandler = async (_email: string, _peerId: string): Promise<boolean> => true;
 
+// F3: Global admission rate limiting constants
+export const ADMISSION_RATE_WINDOW_MS = 60_000;
+export const MAX_ADMISSION_REQUESTS_PER_WINDOW = 20;
+
 export interface CreateSessionParams {
   password?: string;
   onAdmissionRequest: (email: string, peerId: string) => Promise<boolean>;
@@ -149,6 +153,8 @@ export interface CreateSessionResult {
   getLockStatus: () => HoopLock;
   /** Resolves when any in-flight auto-push completes. Rejects on timeout. Call during teardown. */
   drainPendingPush: (timeoutMs?: number) => Promise<void>;
+  /** Clears all pending auth timeout timers (F1 security hardening). Call before node.stop() during teardown. */
+  clearAuthTimeouts: () => void;
 }
 
 export async function createSession(
@@ -187,10 +193,32 @@ export async function createSession(
   const node = new HoopNode(networkConfig);
   await node.start();
 
+  // F1: Track auth timeouts to prevent closure leaks
+  const authTimeouts = new Map<string, NodeJS.Timeout>();
+
+  // F3: Track admission request timestamps for rate limiting
+  const admissionRequestTimestamps: number[] = [];
+
   const deniedPeers = new Map<string, number>();
 
   await node.handle(ADMISSION_PROTOCOL, async (stream, connection) => {
     try {
+      // F3: Check global rate limit before processing.
+      // Prune-then-check-then-push: pushing before the check would let a
+      // rejected flood self-poison the window — after a 100-request flood,
+      // the array stays full for the next 60s and blocks legitimate peers
+      // even after the attack stops.
+      const now = Date.now();
+      while (admissionRequestTimestamps.length > 0 && admissionRequestTimestamps[0] < now - ADMISSION_RATE_WINDOW_MS) {
+        admissionRequestTimestamps.shift();
+      }
+      if (admissionRequestTimestamps.length >= MAX_ADMISSION_REQUESTS_PER_WINDOW) {
+        console.warn(`[hoop] admission rate limit exceeded: ${admissionRequestTimestamps.length} requests in ${ADMISSION_RATE_WINDOW_MS}ms`);
+        await connection.close();
+        return;
+      }
+      admissionRequestTimestamps.push(now);
+
       const request = await readFromStream<AdmissionRequest>(stream);
       const remotePeerId = connection.remotePeer.toString();
 
@@ -211,6 +239,12 @@ export async function createSession(
 
       const admitted = await params.onAdmissionRequest(request.email, remotePeerId);
       if (admitted) {
+        // F1: Clear the auth timeout on successful authentication
+        const existingTimeout = authTimeouts.get(remotePeerId);
+        if (existingTimeout) {
+          clearTimeout(existingTimeout);
+          authTimeouts.delete(remotePeerId);
+        }
         node.markPeerAuthenticated(remotePeerId);
         await writeToStream(stream, { admitted: true } as AdmissionResponse);
       } else {
@@ -247,11 +281,14 @@ export async function createSession(
 
   node.addEventListener("peer:connect", (evt: CustomEvent) => {
     const peerId = evt.detail.toString();
-    setTimeout(async () => {
+    // F1: Track timeout handle to allow cleanup
+    const timeout = setTimeout(async () => {
       if (node.getState() !== "stopped" && !node.isPeerAuthenticated(peerId)) {
         await node.closeConnection(peerId);
       }
+      authTimeouts.delete(peerId);
     }, AUTH_TIMEOUT_MS);
+    authTimeouts.set(peerId, timeout);
   });
 
   store.update(sessionCode, {
@@ -689,6 +726,12 @@ export async function createSession(
 
   node.addEventListener("peer:disconnect", (evt: CustomEvent) => {
     const peerId = evt.detail.toString();
+    // F1: Clear any pending auth timeout for this peer
+    const existingTimeout = authTimeouts.get(peerId);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+      authTimeouts.delete(peerId);
+    }
     broadcastHub.unsubscribe(peerId);
     accumulator.removePeerPresence(peerId);
     try {
@@ -716,6 +759,14 @@ export async function createSession(
     ]).finally(() => clearTimeout(timer!));
   };
 
+  // F1: Clear all pending auth timeouts (called on session shutdown)
+  const clearAuthTimeouts = (): void => {
+    for (const [peerId, timeout] of authTimeouts.entries()) {
+      clearTimeout(timeout);
+    }
+    authTimeouts.clear();
+  };
+
   return {
     sessionCode,
     hostId,
@@ -739,5 +790,6 @@ export async function createSession(
     forceReleaseLock,
     getLockStatus,
     drainPendingPush,
+    clearAuthTimeouts,
   };
 }

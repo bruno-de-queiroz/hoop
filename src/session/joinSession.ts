@@ -120,17 +120,18 @@ export async function joinSession(
   try {
     await node.dial(params.hostAddress);
   } catch (err) {
-    await node.stop();
+    await node.stop().catch(() => {});
+    const detail = err instanceof Error ? err.message : String(err);
     throw new Error(
-      "Failed to connect to host. Check the address and try again.",
+      `Failed to connect to host (dial): ${detail}`,
     );
   }
 
   const connectedPeers = node.getConnectedPeers();
   if (connectedPeers.length === 0) {
-    await node.stop();
+    await node.stop().catch(() => {});
     throw new Error(
-      "Failed to connect to host. Check the address and try again.",
+      "Failed to connect to host: dial returned but no peers connected",
     );
   }
 
@@ -159,7 +160,14 @@ export async function joinSession(
       try {
         const stream = await node.openStream(params.hostAddress, ADMISSION_PROTOCOL);
         await writeToStream(stream, { email: params.email } as AdmissionRequest);
-        const response = await readFromStream<AdmissionResponse>(stream);
+        // Admission is human-gated on the host (operator clicks admit/deny
+        // in Claude Code's elicit UI). The default 5s idle timeout is for
+        // machine-to-machine reads — admission needs minutes. Cap at 10 min
+        // so a hung peer doesn't park forever, but give the operator real
+        // time to look at the form.
+        const response = await readFromStream<AdmissionResponse>(stream, {
+          idleTimeoutMs: 10 * 60_000,
+        });
         if (!response.admitted) {
           const retryMsg = response.retryAfterMs
             ? ` Retry after ${Math.ceil(response.retryAfterMs / 1000)}s.`

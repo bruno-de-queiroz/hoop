@@ -93,13 +93,72 @@ export async function writeToStream(
   await stream.close();
 }
 
-export async function readFromStream<T>(stream: Stream): Promise<T> {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of stream) {
-    chunks.push(chunk instanceof Uint8Array ? chunk : chunk.subarray());
-  }
-  const bytes = concatBytes(chunks);
-  return JSON.parse(new TextDecoder().decode(bytes)) as T;
+export async function readFromStream<T>(
+  stream: Stream,
+  opts: ReadFromStreamOptions = {}
+): Promise<T> {
+  const maxBytes = opts.maxBytes ?? 1_048_576; // 1 MiB default
+  const idleTimeoutMs = opts.idleTimeoutMs ?? 5_000; // 5 seconds default
+
+  return new Promise((resolve, reject) => {
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    let timeoutId: NodeJS.Timeout | null = null;
+    let completed = false;
+
+    const setIdleTimeout = () => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+      timeoutId = setTimeout(() => {
+        completed = true;
+        reject(new Error(`Read timed out after ${idleTimeoutMs}ms`));
+      }, idleTimeoutMs);
+    };
+
+    setIdleTimeout();
+
+    (async () => {
+      try {
+        for await (const chunk of stream) {
+          if (completed) break;
+
+          if (timeoutId !== null) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+
+          const data = chunk instanceof Uint8Array ? chunk : chunk.subarray();
+          totalBytes += data.byteLength;
+
+          if (totalBytes > maxBytes) {
+            completed = true;
+            reject(new Error(`Message exceeds max size of ${maxBytes} bytes`));
+            return;
+          }
+
+          chunks.push(data);
+          setIdleTimeout();
+        }
+
+        if (completed) return;
+
+        if (timeoutId !== null) {
+          clearTimeout(timeoutId);
+        }
+
+        const bytes = concatBytes(chunks);
+        const result = JSON.parse(new TextDecoder().decode(bytes)) as T;
+        completed = true;
+        resolve(result);
+      } catch (error) {
+        if (!completed) {
+          completed = true;
+          reject(error);
+        }
+      }
+    })();
+  });
 }
 
 /**
@@ -113,6 +172,13 @@ export async function writeHalf(stream: Stream, message: unknown): Promise<void>
   const bytes = new TextEncoder().encode(JSON.stringify(message));
   stream.send(bytes);
   await stream.close();
+}
+
+export interface ReadFromStreamOptions {
+  /** Maximum total bytes to read before throwing. Default: 1_048_576 (1 MiB). */
+  maxBytes?: number;
+  /** Idle timeout in ms — if no chunk arrives within this window, throw. Default: 5_000. */
+  idleTimeoutMs?: number;
 }
 
 export const BROADCAST_PROTOCOL = "/hoop/broadcast/1.0.0";

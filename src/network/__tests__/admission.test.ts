@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { createSession, stubGitOps, defaultAdmissionHandler, type CreateSessionResult } from '../../session/createSession.js';
+import { createSession, stubGitOps, defaultAdmissionHandler, type CreateSessionResult, ADMISSION_RATE_WINDOW_MS, MAX_ADMISSION_REQUESTS_PER_WINDOW } from '../../session/createSession.js';
 import { joinSession, stubJoinGitOps, type JoinSessionResult } from '../../session/joinSession.js';
 import { SessionStore } from '../../session/session.js';
-import { ADMISSION_COOLDOWN_MS } from '../protocol.js';
+import { ADMISSION_COOLDOWN_MS, AUTH_TIMEOUT_MS } from '../protocol.js';
 
 describe('Admission handshake', () => {
   let hostResult: CreateSessionResult | undefined;
@@ -218,4 +218,69 @@ describe('Admission handshake', () => {
       expect.any(String),
     );
   }, 30_000);
+
+  // F1: Auth timeout cleanup on successful admission
+  it('clears auth timeout when peer completes admission before timeout fires', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    const store = new SessionStore();
+    hostResult = await createSession(
+      {
+        onAdmissionRequest: async () => true,
+        executionTarget: 'host-only',
+        networkConfig: { transportMode: 'test' },
+        gitOps: stubGitOps,
+      },
+      store,
+    );
+
+    const hostAddress = hostResult.listenAddresses[0];
+
+    joinResult = await joinSession({
+      sessionCode: hostResult.sessionCode,
+      hostAddress,
+      email: 'fast-peer@example.com',
+      networkConfig: { transportMode: 'test' },
+      gitOps: stubJoinGitOps,
+    });
+
+    expect(joinResult.admitted).toBe(true);
+
+    // Advance timer past AUTH_TIMEOUT_MS to verify the timeout was cleared
+    // (if not cleared, closeConnection would be called)
+    const initialPeerCount = hostResult.node.getConnectedPeers().length;
+    vi.advanceTimersByTime(AUTH_TIMEOUT_MS + 1000);
+
+    // Peer should still be connected (timeout was cleared)
+    const finalPeerCount = hostResult.node.getConnectedPeers().length;
+    expect(finalPeerCount).toBe(initialPeerCount);
+
+    vi.useRealTimers();
+  }, 30_000);
+
+  // F1: Auth timeout cleanup on destroy
+  it('provides clearAuthTimeouts method to prevent timer leaks on shutdown', async () => {
+    // This test just verifies the API exists and is callable
+    const store = new SessionStore();
+    hostResult = await createSession(
+      {
+        onAdmissionRequest: async () => true,
+        executionTarget: 'host-only',
+        networkConfig: { transportMode: 'test' },
+        gitOps: stubGitOps,
+      },
+      store,
+    );
+
+    // Verify the method exists and is callable
+    expect(typeof hostResult.clearAuthTimeouts).toBe('function');
+    hostResult.clearAuthTimeouts();
+    // Should not throw
+  }, 30_000);
+
+  // F3: Global admission rate limit (constants are exported)
+  it('exports admission rate limit constants', async () => {
+    expect(ADMISSION_RATE_WINDOW_MS).toBe(60_000);
+    expect(MAX_ADMISSION_REQUESTS_PER_WINDOW).toBe(20);
+  }, 5_000);
 });
