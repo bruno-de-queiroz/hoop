@@ -68,7 +68,19 @@ if [[ "$TRIMMED" == "/hoop:leave" ]]; then
   if [ -n "$LEAVE_CODE" ]; then
     CODE_SUFFIX=" (code: $LEAVE_CODE)"
   fi
-  jq -n --arg msg "Left Hoop session as $LEAVE_ROLE$CODE_SUFFIX. The MCP server is still running; type /hoop:new to start a new session." '{
+  # Tailor the next-step hint to the role you just left:
+  #   - host: typically you'd start hosting again → /hoop:new
+  #   - peer: typically you'd join another session → /hoop:join (but
+  #           you can also become a host yourself via /hoop:new)
+  case "$LEAVE_ROLE" in
+    host)
+      NEXT_STEP="type /hoop:new to host another session, or /hoop:join <code> <addr> to connect to one." ;;
+    peer)
+      NEXT_STEP="type /hoop:join <code> <addr> to connect to another session, or /hoop:new to host one yourself." ;;
+    *)
+      NEXT_STEP="type /hoop:new to host or /hoop:join <code> <addr> to connect." ;;
+  esac
+  jq -n --arg msg "Left Hoop session as $LEAVE_ROLE$CODE_SUFFIX. The MCP server is still running; $NEXT_STEP" '{
     decision: "block",
     reason: $msg
   }'
