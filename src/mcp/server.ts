@@ -524,8 +524,14 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         // bump seqNo for every default session and break consumers that
         // assume the first user-driven publish is seqNo=1.
         state.observedGovernanceConfig = resolvedGovernance;
-        const isDefaultGovernance = resolvedGovernance.mode === DEFAULT_GOVERNANCE_CONFIG.mode
-          && resolvedGovernance.mode !== "zero-trust";
+        // Structural equality against DEFAULT_GOVERNANCE_CONFIG. The previous
+        // form (`mode === DEFAULT.mode && mode !== "zero-trust"`) coincidentally
+        // worked because today's default is "captain" (non-zero-trust); if the
+        // default ever changes to a zero-trust shape, the threshold must be
+        // compared too. JSON.stringify is enough because GovernanceConfig is a
+        // flat tagged union with primitive fields.
+        const isDefaultGovernance =
+          JSON.stringify(resolvedGovernance) === JSON.stringify(DEFAULT_GOVERNANCE_CONFIG);
         if (!isDefaultGovernance) {
           const initialGovernanceUpdate: MetadataUpdate = {
             type: "metadata-update",
@@ -1271,10 +1277,18 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
     try {
       if (state.role === "host" && state.hostSession) {
-        // Order matters: gate auto-pushes BEFORE node.stop() so the
-        // cascade of peer:disconnect events doesn't trigger N concurrent
-        // `git push` calls during shutdown. Then clear pending auth
-        // timeouts so they don't fire after the node is gone.
+        // Teardown order matters:
+        // 1. Stop EXTERNAL inputs first (outbound-update reader watching the
+        //    PostToolUse hook's file, host update mirror) so no new events
+        //    flow into the publish path while the node is stopping.
+        // 2. Gate auto-pushes BEFORE node.stop so the cascade of
+        //    peer:disconnect events doesn't trigger N concurrent `git push`.
+        // 3. Clear pending auth timeouts so they don't fire after node is gone.
+        // 4. Drain admin queues, close broadcast hub, then node.stop.
+        // 5. cleanupState() clears writers afterwards (idempotent).
+        state.outboundUpdatesReader?.stop();
+        state.stopHostUpdateMirror?.();
+
         state.hostSession.markShuttingDown();
         state.hostSession.clearAuthTimeouts();
 
@@ -1287,6 +1301,10 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       }
 
       if (state.role === "peer" && state.peerSession) {
+        // Symmetric to host: stop external inputs and broadcast subscription
+        // before stopping the libp2p node so in-flight broadcasts don't get
+        // mirrored into a teardown-state writer.
+        state.outboundUpdatesReader?.stop();
         state.stopPeerDisconnectCleanup?.();
         state.stopPeerDisconnectCleanup = null;
         state.stopPeerBroadcastSubscription?.();
