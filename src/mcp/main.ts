@@ -4,7 +4,7 @@ import { PassThrough } from "node:stream";
 import { StdioServerTransport } from "@modelcontextprotocol/server";
 import { createHoopMcpServer } from "./server.js";
 
-const { server, gracefulShutdown } = createHoopMcpServer();
+const { server, gracefulShutdown, leaveSession } = createHoopMcpServer();
 
 // Claude Code closes MCP server stdin after tool discovery in --print mode but
 // still needs to call tools via the same stdio pair.  Piping through a
@@ -35,3 +35,21 @@ async function handleShutdown() {
 process.on("SIGTERM", handleShutdown);
 process.on("SIGINT", handleShutdown);
 process.on("SIGUSR1", handleShutdown);
+
+// SIGUSR2: harness-driven leave-session (from the user-prompt-submit hook
+// matching `/hoop:leave`). Distinct from SIGUSR1: this tears down the
+// active session but keeps the MCP process running so the user can
+// `/hoop:new` again without re-launching Claude Code. The hook handles
+// blocking the prompt from reaching the model so the leave is
+// hardware-guaranteed regardless of model behavior.
+let leaveInFlight: Promise<unknown> | null = null;
+process.on("SIGUSR2", () => {
+  if (leaveInFlight) return;
+  leaveInFlight = leaveSession()
+    .catch((err) => {
+      console.error("[hoop] SIGUSR2 leaveSession failed:", err);
+    })
+    .finally(() => {
+      leaveInFlight = null;
+    });
+});

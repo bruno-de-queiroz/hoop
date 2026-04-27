@@ -15,38 +15,20 @@ Each entry: what, why-it's-deferred, what-the-fix-looks-like.
 
 ---
 
-## Hook-routed direct-action skills (e.g. `/hoop:leave`)
+## Hook-routed direct-action skills — IMPLEMENTED
 
-**Problem:** Skills like `/hoop:leave` go through the model. The model decides
-whether to call the underlying MCP tool. A scripted/distracted/throttled
-model can miss the call, leaving the user with broken UX. We hit this during
-manual testing of the mock-llm peer scenario: `/hoop:leave` returned the
-last cached `hoop_join_session` text instead of actually leaving.
+**Status:** Shipped. `/hoop:leave` is now intercepted by `UserPromptSubmit`
+hook → `SIGUSR2` to MCP server → `leaveSession()` (gracefulShutdown +
+clearSessionStatus, MCP process stays alive). Skill markdown is a fallback
+doc; under normal operation the model never sees the prompt.
 
-**Why deferred:** Adds a new IPC channel (signal or socket) between hooks
-and the MCP server; needs design for the dispatch table and signal
-semantics. Touches `hooks/`, `src/mcp/server.ts`, and the skill markdowns.
-Half-day of work + design call.
-
-**Shape of the fix:**
-1. `UserPromptSubmit` hook intercepts `/hoop:leave` (regex match) before it
-   reaches the model. Block the prompt; print confirmation to the user.
-2. Hook reads MCP server PID from a state file written at startup.
-3. Hook sends `SIGUSR2` (or pipes a JSON command via a Unix socket) to the
-   MCP process.
-4. MCP server installs a `SIGUSR2` handler mapped to `gracefulShutdown`,
-   resets state, stays alive (distinct from `SIGUSR1` in `session-end.sh`
-   which tears the whole process down).
-5. `skills/leave/SKILL.md` becomes documentation only — not in the model
-   skill list.
-
-Generalizes to any "command" action with no UX (e.g. `/hoop:unlock`,
-`/hoop:settings` when args supplied). Does NOT replace the elicit pattern
-— that's for *gathering input*; this is for *executing actions*.
-
-Related rule already in memory: "Always use MCP elicit for human input"
-(`feedback_use_elicit_for_input.md`). This is the symmetric outbound rule
-— "harness owns critical actions."
+**Future generalization:** Same pattern applies to any "command" slash
+that takes no input. Candidates worth considering: `/hoop:unlock`
+(force-release the lock), `/hoop:status` (read-only summary). Not done
+in this pass because they all currently work fine through the
+model-driven MCP tool path; only `/hoop:leave` had a real UX problem
+where mocked/scripted runs would replay stale tool results. Add when a
+similar pain point surfaces.
 
 ---
 

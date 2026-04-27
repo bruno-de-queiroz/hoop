@@ -1445,6 +1445,25 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
+  /**
+   * High-level "leave the active hoop session" path.
+   *
+   * Both the MCP tool (`hoop_leave_session`, model-driven) and the
+   * harness signal handler (`SIGUSR2`, hook-driven, model-bypassed)
+   * call this. The contract: tear down the libp2p node and writers,
+   * then clear the on-disk session-status file so external tooling
+   * (and the next `/hoop:new`) sees a clean slate. The MCP server
+   * process itself stays alive — only the session is gone.
+   */
+  async function leaveSession(): Promise<{ left: boolean; previousRole: string | null; sessionCode: string | undefined }> {
+    if (state.role === null) {
+      return { left: false, previousRole: null, sessionCode: undefined };
+    }
+    const result = await gracefulShutdown();
+    clearSessionStatus(deps?.sessionStatusPath);
+    return result;
+  }
+
   // ── 22. hoop_leave_session ──────────────────────────────────────
 
   server.registerTool(
@@ -1460,8 +1479,7 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
       }
 
       try {
-        const result = await gracefulShutdown();
-        clearSessionStatus(deps?.sessionStatusPath);
+        const result = await leaveSession();
         return jsonResult(result);
       } catch (e) {
         return errorResult(
@@ -1471,5 +1489,5 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     },
   );
 
-  return { server, state, gracefulShutdown, revalidateGovernanceThreshold };
+  return { server, state, gracefulShutdown, leaveSession, revalidateGovernanceThreshold };
 }

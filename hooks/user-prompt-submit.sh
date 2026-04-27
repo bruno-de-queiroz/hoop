@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# UserPromptSubmit hook: surface pending admissions and peer changes.
-#
-# Runs on every user message so Claude can notice:
-# 1. peers waiting for admission approval, and
-# 2. incoming peer file changes that arrived between tool calls.
+# UserPromptSubmit hook:
+#   1. Route hoop slash-commands that should bypass the model entirely
+#      (e.g. /hoop:leave) directly to the MCP server via signal. The
+#      harness owns these commands; the model never sees them.
+#   2. For everything else, surface pending admissions / prompt requests /
+#      peer file changes as additionalContext so the model can act on them.
 
 set -euo pipefail
 
@@ -15,6 +16,65 @@ UPDATES_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-updates.json"
 PROMPT_REQUESTS_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-prompt-requests.json"
 MAX_PATCH_LINES=20
 MAX_FILES=5
+
+# Read the hook input JSON from stdin once. Claude Code provides it as
+# {"prompt": "...", "session_id": "...", ...}. We only need .prompt for
+# command routing.
+HOOK_INPUT=$(cat || echo "{}")
+USER_PROMPT=$(echo "$HOOK_INPUT" | jq -r '.prompt // empty' 2>/dev/null || echo "")
+
+# ── /hoop:leave routing ─────────────────────────────────────────────
+# Trim leading whitespace; tolerant match against the slash-command. If the
+# user types `/hoop:leave` (with optional surrounding whitespace), we
+# intercept it before the model sees anything.
+TRIMMED=$(printf '%s' "$USER_PROMPT" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
+if [[ "$TRIMMED" == "/hoop:leave" ]]; then
+  if [ ! -f "$STATUS_FILE" ]; then
+    jq -n '{ decision: "block", reason: "No active Hoop session." }'
+    exit 0
+  fi
+  LEAVE_PID=$(jq -r '.pid // empty' "$STATUS_FILE" 2>/dev/null) || LEAVE_PID=""
+  if [ -z "$LEAVE_PID" ] || ! kill -0 "$LEAVE_PID" 2>/dev/null; then
+    rm -f "$STATUS_FILE" "$ADMISSIONS_FILE" "$UPDATES_FILE" "$PROMPT_REQUESTS_FILE"
+    jq -n '{ decision: "block", reason: "No active Hoop session (stale state cleaned up)." }'
+    exit 0
+  fi
+  LEAVE_ROLE=$(jq -r '.role // empty' "$STATUS_FILE" 2>/dev/null) || LEAVE_ROLE="unknown"
+  LEAVE_CODE=$(jq -r '.sessionCode // empty' "$STATUS_FILE" 2>/dev/null) || LEAVE_CODE=""
+
+  # Send SIGUSR2 to MCP server: handler calls leaveSession() which tears
+  # down the libp2p node + writers and clears the session-status file.
+  # MCP process stays alive; user can /hoop:new again.
+  kill -USR2 "$LEAVE_PID" 2>/dev/null || true
+
+  # Wait briefly for the leave to settle. Watch for the status file to
+  # disappear (clearSessionStatus inside leaveSession unlinks it).
+  for _ in $(seq 1 50); do
+    if [ ! -f "$STATUS_FILE" ]; then
+      break
+    fi
+    sleep 0.1
+  done
+
+  if [ -f "$STATUS_FILE" ]; then
+    jq -n --arg role "$LEAVE_ROLE" --arg code "$LEAVE_CODE" '{
+      decision: "block",
+      reason: ("Sent leave signal but the MCP server didn'"'"'t clear session-status within 5s. The teardown may still be in progress; check `hoop_get_status` if a follow-up command behaves unexpectedly. (role=" + $role + ", code=" + $code + ")")
+    }'
+    exit 0
+  fi
+
+  CODE_SUFFIX=""
+  if [ -n "$LEAVE_CODE" ]; then
+    CODE_SUFFIX=" (code: $LEAVE_CODE)"
+  fi
+  jq -n --arg msg "Left Hoop session as $LEAVE_ROLE$CODE_SUFFIX. The MCP server is still running; type /hoop:new to start a new session." '{
+    decision: "block",
+    reason: $msg
+  }'
+  exit 0
+fi
+# ── end /hoop:leave routing ─────────────────────────────────────────
 
 if [ ! -f "$STATUS_FILE" ]; then
   exit 0

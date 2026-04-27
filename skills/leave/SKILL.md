@@ -5,11 +5,11 @@ description: Gracefully leave the active Hoop session — closes the libp2p node
 
 # Hoop Leave Session
 
-## Arguments
+> **Note for the model:** `/hoop:leave` is normally **routed by the harness, not by you**. The `UserPromptSubmit` hook intercepts the slash command, sends `SIGUSR2` to the MCP server (which calls `leaveSession()` internally), and blocks the prompt from reaching you with a confirmation message to the user. You should not see `/hoop:leave` as a user message under normal operation.
+>
+> This skill markdown is a fallback: if for any reason the hook didn't fire and the prompt did reach you, follow the steps below to achieve the same outcome by calling the MCP tool directly.
 
-No arguments. Invoke as `/hoop:leave`.
-
-## Steps
+## Steps (fallback only)
 
 1. **Validate the session.** Call the `hoop_get_status` MCP tool. If the response shows `active: false`, display:
 
@@ -33,6 +33,10 @@ No arguments. Invoke as `/hoop:leave`.
    ```
 
    The libp2p node is closed and you are no longer connected to peers.
+
+## Why hook-routed?
+
+Slash commands that *trigger an action* (vs. gather input) are routed by the harness so the action is hardware-guaranteed regardless of the model's behavior. A scripted/distracted/throttled model can mis-call or skip an MCP tool; a hook + signal cannot. This is the symmetric outbound rule to the elicit-input pattern: **harness owns critical actions, server elicits critical input.**
 
 ## Notes
 

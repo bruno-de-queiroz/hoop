@@ -90,14 +90,21 @@ describe("skill definitions", () => {
     expect(content).toContain("Lock force-released successfully");
   });
 
-  it("/hoop:leave wraps the MCP leave-session tool and explains scope vs unlock", () => {
+  it("/hoop:leave is documented as harness-routed with a fallback path through hoop_leave_session", () => {
     const content = readSkill("skills", "leave", "SKILL.md");
 
+    // The harness intercepts /hoop:leave via UserPromptSubmit hook +
+    // SIGUSR2 — must be called out so future maintainers don't break it.
+    expect(content).toMatch(/harness/i);
+    expect(content).toMatch(/SIGUSR2/);
+    expect(content).toMatch(/UserPromptSubmit/);
+
+    // Fallback path still uses the MCP tool, in case the hook didn't fire.
     expect(content).toContain("hoop_leave_session");
-    expect(content).not.toContain("import ");
-    // Validates session before leaving
     expect(content).toContain("hoop_get_status");
-    // Result UX
+    expect(content).not.toContain("import ");
+
+    // Result UX strings preserved
     expect(content).toContain("Left Hoop session");
     // Disambiguates from /hoop:unlock so users pick the right action
     expect(content).toContain("/hoop:unlock");
