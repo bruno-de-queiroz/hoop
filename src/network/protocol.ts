@@ -44,6 +44,13 @@ export interface SyncResponse {
   accumulatedState?: AccumulatedState;
   currentSeqNo?: number;
   replayedUpdates?: BroadcastEnvelope[];
+  /**
+   * Indicates the replay request was too old and fell off the buffer.
+   * When true, the peer must consider its prior state invalid and rely on
+   * accumulatedState as the new baseline. lastSeqNo should be reset based
+   * on the current state to avoid stale gap warnings in subsequent broadcasts.
+   */
+  replayDropped?: boolean;
 }
 
 export interface StateUpdateResponse {

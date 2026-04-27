@@ -60,7 +60,7 @@ describe.skipIf(!GITEA_CLONE_URL)("git remote — Gitea HTTP", () => {
     await createSessionWorktree(branch, wtPath, repoDir);
 
     await writeFile(join(wtPath, "marker.txt"), "host-marker\n");
-    await addAndCommit("hoop: marker commit", wtPath);
+    await addAndCommit("hoop: marker commit", ["marker.txt"], wtPath);
     await pushBranch(branch, "origin", repoDir);
 
     // Peer clones and fetches the session branch

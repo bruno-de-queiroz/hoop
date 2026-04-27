@@ -415,6 +415,7 @@ describe("createSession", () => {
 
     expect(addAndCommit).toHaveBeenCalledWith(
       "hoop: sync after lock release by peer-1",
+      ["."],
       result.worktreePath,
     );
     expect(pushBranch).toHaveBeenCalledTimes(1);

@@ -198,6 +198,67 @@ describe("applyFilePatch", () => {
     expect(mockApplyGitPatch).not.toHaveBeenCalled();
   });
 
+  it("rejects multi-file patches", async () => {
+    const content = "hello";
+    const baseHash = gitBranch.hashContent(content);
+
+    const multiFilePatch = `--- a/file.txt
++++ b/file.txt
+@@ -1 +1 @@
+-hello
++world
+--- a/other.txt
++++ b/other.txt
+@@ -1 +1 @@
+-foo
++bar`;
+
+    const result = await applyFilePatch(
+      "/tmp/worktree",
+      "file.txt",
+      multiFilePatch,
+      content,
+      baseHash,
+      "some-hash",
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("patch-failed");
+      expect(result.message).toContain("Multi-file patches not supported");
+    }
+    expect(mockApplyGitPatch).not.toHaveBeenCalled();
+  });
+
+  it("accepts single-file patches with both --- and +++ headers for the same path", async () => {
+    const content = "hello";
+    const baseHash = gitBranch.hashContent(content);
+    const resultContent = "world";
+    const resultHash = gitBranch.hashContent(resultContent);
+
+    const singleFilePatch = `--- a/file.txt
++++ b/file.txt
+@@ -1 +1 @@
+-hello
++world`;
+
+    mockApplyGitPatch
+      .mockResolvedValueOnce({ ok: true, value: undefined as never })
+      .mockResolvedValueOnce({ ok: true, value: undefined as never });
+    mockReadFile.mockResolvedValueOnce(resultContent);
+
+    const result = await applyFilePatch(
+      "/tmp/worktree",
+      "file.txt",
+      singleFilePatch,
+      content,
+      baseHash,
+      resultHash,
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
   it("returns success when all checks pass including result hash", async () => {
     const content = "hello";
     const baseHash = gitBranch.hashContent(content);

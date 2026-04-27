@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { getGitRoot, createSessionWorktree, removeSessionWorktree, fetchBranch, checkoutBranch, pushBranch, computeContentDiff } from "../gitBranch.js";
+import { getGitRoot, createSessionWorktree, removeSessionWorktree, fetchBranch, checkoutBranch, pushBranch, computeContentDiff, addAndCommit } from "../gitBranch.js";
 import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 
@@ -362,6 +362,46 @@ describe("checkoutBranch", () => {
       ok: false,
       error: "error: pathspec 'hoop/session-ABC-XYZ' did not match any file(s) known to git",
     });
+  });
+});
+
+describe("addAndCommit", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("throws when called without paths", async () => {
+    const result = await addAndCommit("test message", [], "/tmp/repo");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("addAndCommit requires explicit paths");
+      expect(result.error).toContain("git add -A is unsafe");
+    }
+  });
+
+  it("stages only listed paths with git add --", async () => {
+    const allCalls: string[][] = [];
+    mockExecFile.mockImplementation(
+      ((cmd: unknown, args: unknown, _opts: unknown, cb: unknown) => {
+        if (cmd === "git" && Array.isArray(args)) {
+          allCalls.push(args as string[]);
+        }
+        (cb as (err: Error | null, stdout: string, stderr: string) => void)(null, "", "");
+      }) as typeof execFile,
+    );
+
+    await addAndCommit("test message", ["file1.txt", "file2.txt"], "/tmp/repo");
+
+    const addCall = allCalls.find((args) => args[0] === "add");
+    expect(addCall).toBeDefined();
+    expect(addCall!).toContain("--");
+    expect(addCall!).toContain("file1.txt");
+    expect(addCall!).toContain("file2.txt");
+    const addIndex = addCall!.indexOf("add");
+    const dashDashIndex = addCall!.indexOf("--");
+    expect(addIndex).toBeGreaterThan(-1);
+    expect(dashDashIndex).toBeGreaterThan(addIndex);
   });
 });
 

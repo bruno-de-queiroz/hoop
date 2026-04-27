@@ -11,7 +11,11 @@ export class BroadcastHub {
   subscribe(peerId: string, stream: Stream): void {
     const existing = this.peers.get(peerId);
     if (existing !== undefined) {
+      console.error(`[BroadcastHub] Re-subscribe for peer ${peerId}: closing previous stream`);
       existing.close().catch(() => {});
+      // Reset ack status for re-subscribing peer to avoid stale state in getSlowPeers.
+      // Callers must re-request a replay to fill any gap from the previous session.
+      this.ackStatus.delete(peerId);
     }
     this.peers.set(peerId, stream);
   }
@@ -27,7 +31,10 @@ export class BroadcastHub {
   broadcast(update: StateUpdate, excludePeerId?: string): number {
     this.seqNo += 1;
     const envelope: BroadcastEnvelope = { seqNo: this.seqNo, update };
-    for (const [peerId, stream] of this.peers) {
+    // Snapshot peers to array before iterating to avoid undefined behavior if peers are
+    // added/removed during iteration (e.g., via unsubscribe on write error).
+    const snapshot = Array.from(this.peers.entries());
+    for (const [peerId, stream] of snapshot) {
       if (peerId === excludePeerId) continue;
       try {
         writeEvent(stream, envelope);

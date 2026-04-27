@@ -233,16 +233,24 @@ export async function applyGitPatch(
 }
 
 /**
- * Stages all changes (`git add -A` — tracked, untracked, and deletions) then
- * commits with the given message. Returns `true` when a commit was created,
- * `false` when the working tree was already clean.
+ * Stages explicit paths then commits with the given message. Returns `true`
+ * when a commit was created, `false` when the working tree was already clean.
+ * Requires explicit paths — git add -A is unsafe in shared worktrees.
  */
 export async function addAndCommit(
   message: string,
+  paths: string[],
   cwd?: string,
 ): Promise<GitResult<boolean>> {
+  if (paths.length === 0) {
+    return {
+      ok: false,
+      error: "addAndCommit requires explicit paths — git add -A is unsafe in shared worktrees",
+    };
+  }
+
   try {
-    await git(["add", "-A"], cwd);
+    await git(["add", "--", ...paths], cwd);
     const staged = await git(["diff", "--cached", "--name-only"], cwd);
     if (staged === "") {
       return { ok: true, value: false };

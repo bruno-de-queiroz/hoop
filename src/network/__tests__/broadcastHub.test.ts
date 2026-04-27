@@ -48,6 +48,38 @@ describe('BroadcastHub', () => {
     expect(hub.getSubscribers()).toEqual(['peer-a']);
   });
 
+  it('re-subscribe resets ackStatus to avoid stale ack state in getSlowPeers', () => {
+    const stream1 = createMockStream();
+    const stream2 = createMockStream();
+
+    // First subscription: record some acks
+    hub.subscribe('peer-a', stream1.stream);
+    hub.broadcast(cursorUpdate); // seqNo = 1
+    hub.broadcast(cursorUpdate); // seqNo = 2
+    hub.broadcast(cursorUpdate); // seqNo = 3
+    hub.recordAck('peer-a', 2);  // lag = 1
+
+    // Verify peer is not slow initially
+    expect(hub.getSlowPeers(2)).toEqual([]);
+
+    // Re-subscribe (simulating peer reconnection)
+    hub.subscribe('peer-a', stream2.stream);
+
+    // After re-subscribe, ackStatus for peer-a should be cleared
+    expect(hub.getPeerAckStatus().has('peer-a')).toBe(false);
+
+    // Broadcast more and record a new ack from the new session
+    hub.broadcast(cursorUpdate); // seqNo = 4
+    hub.broadcast(cursorUpdate); // seqNo = 5
+    hub.recordAck('peer-a', 2);  // lag = 3 (5 - 2)
+
+    // Now peer should appear slow
+    expect(hub.getSlowPeers(2)).toEqual(['peer-a']);
+
+    // Old stream should be closed
+    expect(stream1.stream.close).toHaveBeenCalledOnce();
+  });
+
   it('unsubscribe removes the peer and closes its stream', () => {
     const { stream } = createMockStream();
     hub.subscribe('peer-a', stream);
@@ -121,6 +153,63 @@ describe('BroadcastHub', () => {
     expect(hub.getSubscribers()).toEqual(['peer-good']);
     expect(bad.stream.close).toHaveBeenCalledOnce();
     expect(good.stream.send).toHaveBeenCalledOnce();
+  });
+
+  it('broadcast snapshot iteration: error on one stream does not skip other peers', () => {
+    // Create 3 peers: good-a, bad (throws), good-b
+    const goodA = createMockStream();
+    const bad = {
+      stream: {
+        send: vi.fn(() => { throw new Error('write failed'); }),
+        close: vi.fn(() => Promise.resolve()),
+      } as unknown as Stream,
+      sent: [] as Uint8Array[],
+      closed: false,
+    };
+    const goodB = createMockStream();
+
+    hub.subscribe('peer-good-a', goodA.stream);
+    hub.subscribe('peer-bad', bad.stream);
+    hub.subscribe('peer-good-b', goodB.stream);
+
+    hub.broadcast(cursorUpdate);
+
+    // Both good peers should have received the broadcast despite bad peer error
+    expect(goodA.stream.send).toHaveBeenCalledOnce();
+    expect(goodB.stream.send).toHaveBeenCalledOnce();
+    // Bad peer should be unsubscribed
+    expect(hub.getSubscriberCount()).toBe(2);
+    expect(hub.getSubscribers()).toEqual(['peer-good-a', 'peer-good-b']);
+  });
+
+  it('broadcast snapshot iteration: new subscription mid-broadcast does not affect iteration', () => {
+    // Start with 2 peers
+    const peer1 = createMockStream();
+    const peer2 = createMockStream();
+    hub.subscribe('peer-1', peer1.stream);
+    hub.subscribe('peer-2', peer2.stream);
+
+    // Mock peer1 to trigger subscribe of new peer during iteration
+    let subscribeNewPeerDuringBroadcast = false;
+    const originalSend = peer1.stream.send as any;
+    (peer1.stream.send as any) = vi.fn((bytes: Uint8Array) => {
+      if (!subscribeNewPeerDuringBroadcast) {
+        subscribeNewPeerDuringBroadcast = true;
+        const peer3 = createMockStream();
+        hub.subscribe('peer-3', peer3.stream);
+      }
+      originalSend(bytes);
+    });
+
+    // Broadcast completes without error; iteration is deterministic regardless of new subscription
+    const seqNo = hub.broadcast(cursorUpdate);
+
+    expect(seqNo).toBe(1);
+    // Peers 1 and 2 should have the broadcast for sure (snapshot-based)
+    expect(peer1.stream.send).toHaveBeenCalledOnce();
+    expect(peer2.stream.send).toHaveBeenCalledOnce();
+    // Peer 3 may or may not have been sent to (not in snapshot), but no error
+    expect(hub.getSubscriberCount()).toBe(3);
   });
 
   it('getSubscribers returns all peer IDs', () => {

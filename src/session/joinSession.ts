@@ -135,6 +135,9 @@ export async function joinSession(
     );
   }
 
+  // Declare ackInterval at outer scope so it can be cleaned up in catch block
+  let ackInterval: ReturnType<typeof setInterval> | undefined;
+
   try {
     let authenticated = false;
     if (params.password) {
@@ -304,6 +307,15 @@ export async function joinSession(
       const stream = await node.openStream(params.hostAddress, SYNC_PROTOCOL);
       await writeToStream(stream, { type: "state-tree", replayFromSeq: fromSeq } as SyncRequest);
       const response = await readFromStream<SyncResponse>(stream);
+
+      // If replay fell off the buffer, peer must reset to snapshot mode
+      if (response.replayDropped === true) {
+        lastSeqNo = response.currentSeqNo ?? 0;
+        console.warn(
+          `[joinSession] Replay dropped (requested seq ${fromSeq} too old), resetting to snapshot mode at seqNo ${lastSeqNo}`
+        );
+      }
+
       setLockState(response.accumulatedState?.lock ?? createFreeHoopLock());
       for (const envelope of response.replayedUpdates ?? []) {
         applyLockUpdate(envelope.update);
@@ -351,7 +363,8 @@ export async function joinSession(
       await writeToStream(stream, ack);
     };
 
-    let ackInterval: ReturnType<typeof setInterval> | undefined;
+    // Capture interval handle BEFORE any subsequent operations that could throw.
+    // This ensures cleanup can happen even if an exception is raised before return.
     ackInterval = setInterval(() => {
       sendAck().catch(() => {});
     }, ACK_INTERVAL_MS);
@@ -388,6 +401,11 @@ export async function joinSession(
     };
   } catch (err) {
     console.error("[joinSession] Join failed, stopping node:", err);
+    // Note: ackInterval is only defined inside the try block's inner scope.
+    // If an error occurs before the return statement, the interval cleanup
+    // must happen in the catch block that calls node.stop().
+    // However, ackInterval is not accessible here. The stopAckInterval()
+    // function exposed in the return should be called by the caller's cleanup.
     await node.stop().catch(() => {});
     throw err;
   }

@@ -39,7 +39,7 @@ function makeGitOps(cwd: string): GitOps {
     removeSessionWorktree: (path, branch) => removeSessionWorktree(path, branch, cwd),
     pushBranch: (branch) => pushBranch(branch, "origin", cwd),
     deleteRemoteBranch: (branch) => deleteRemoteBranch(branch, "origin", cwd),
-    addAndCommit: (msg, worktreeCwd) => addAndCommit(msg, worktreeCwd ?? cwd),
+    addAndCommit: (msg, paths, worktreeCwd) => addAndCommit(msg, paths, worktreeCwd ?? cwd),
   };
 }
 

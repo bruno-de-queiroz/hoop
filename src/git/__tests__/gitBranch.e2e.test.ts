@@ -260,7 +260,7 @@ describe("git operations (real)", () => {
 
       await writeFile(join(repoDir, "new-file.txt"), "hello\n");
 
-      const result = await addAndCommit("hoop: test commit", repoDir);
+      const result = await addAndCommit("hoop: test commit", ["new-file.txt"], repoDir);
       expect(result).toEqual({ ok: true, value: true });
 
       const log = gitSync(["log", "--oneline", "-1"], repoDir);
@@ -272,7 +272,7 @@ describe("git operations (real)", () => {
       gitSync(["add", "."], repoDir);
       gitSync(["commit", "-m", "initial"], repoDir);
 
-      const result = await addAndCommit("hoop: empty", repoDir);
+      const result = await addAndCommit("hoop: empty", ["init.txt"], repoDir);
       expect(result).toEqual({ ok: true, value: false });
     });
 
@@ -286,7 +286,7 @@ describe("git operations (real)", () => {
       await writeFile(join(repoDir, "a.txt"), "modified\n");
       await rm(join(repoDir, "b.txt"));
 
-      const result = await addAndCommit("hoop: modify and delete", repoDir);
+      const result = await addAndCommit("hoop: modify and delete", ["a.txt", "b.txt"], repoDir);
       expect(result).toEqual({ ok: true, value: true });
 
       const show = gitSync(["show", "--stat", "--oneline", "HEAD"], repoDir);

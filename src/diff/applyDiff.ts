@@ -51,6 +51,26 @@ export async function applyFilePatch(
     };
   }
 
+  // Reject multi-file patches: applyFilePatch only validates the base hash
+  // for the single `filePath` argument. A peer-crafted patch that references
+  // additional files would slip past that check and modify them with no
+  // base-content validation. Hoop's own computeContentDiff only ever produces
+  // single-file patches, so rejecting multi-file is safe for legitimate use.
+  const headerPaths = new Set<string>();
+  for (const line of patch.split("\n")) {
+    const match = line.match(/^(?:--- a\/|\+\+\+ b\/)(.+)$/);
+    if (match && match[1] !== "/dev/null") {
+      headerPaths.add(match[1]);
+    }
+  }
+  if (headerPaths.size > 1) {
+    return {
+      ok: false,
+      error: "patch-failed",
+      message: `Multi-file patches not supported: patch references ${headerPaths.size} files (${Array.from(headerPaths).join(", ")}); only single-file patches are accepted.`,
+    };
+  }
+
   const checkResult = await applyGitPatch(worktreePath, patch, { check: true });
   if (!checkResult.ok) {
     return {

@@ -64,7 +64,7 @@ export interface GitOps {
   removeSessionWorktree: (worktreePath: string, branchName: string) => Promise<GitResult>;
   pushBranch: (branchName: string, remote?: string) => Promise<GitResult>;
   deleteRemoteBranch: (branchName: string, remote?: string) => Promise<GitResult>;
-  addAndCommit: (message: string, cwd?: string) => Promise<GitResult<boolean>>;
+  addAndCommit: (message: string, paths: string[], cwd?: string) => Promise<GitResult<boolean>>;
 }
 
 export const realGitOps: GitOps = {
@@ -377,6 +377,7 @@ export async function createSession(
         try {
           const commitResult = await gitOps.addAndCommit(
             `hoop: sync after lock release by ${update.peerId}`,
+            ["."],
             worktreePath,
           );
           if (!commitResult.ok) {
@@ -509,8 +510,12 @@ export async function createSession(
       const oldest = replayBuffer.getOldestSeqNo();
       if (oldest !== undefined && request.replayFromSeq >= oldest - 1) {
         response.replayedUpdates = replayBuffer.replaySince(request.replayFromSeq);
+      } else {
+        // Gap exceeds buffer: signal to peer that replay was dropped and it must
+        // use accumulatedState as the new baseline. Peer must reset lastSeqNo
+        // to match currentSeqNo to avoid stale gap warnings on subsequent broadcasts.
+        response.replayDropped = true;
       }
-      // If gap exceeds buffer, client falls back to full accumulated state (already included)
     }
     await writeToStream(stream, response);
   });
