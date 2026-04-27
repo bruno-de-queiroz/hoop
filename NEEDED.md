@@ -7,6 +7,12 @@ implementer agent without product input.
 
 Each entry: what, why-it's-deferred, what-the-fix-looks-like.
 
+> **Note**: items in this file are *deferred*, not abandoned. Mechanical
+> fixes that surfaced during the same review have already been shipped
+> across commits `10d1764` → `HEAD` (governance rename + elicit-driven
+> settings, path traversal, prompt injection, network DoS, atomicity,
+> race fixes, lock-acquire-after-disconnect protection, and more).
+
 ---
 
 ## Hook-routed direct-action skills (e.g. `/hoop:leave`)

@@ -79,7 +79,7 @@ describe("OutboundUpdatesReader", () => {
     );
     reader.start();
 
-    // Small delay to let watchFile record the initial stat before writing
+    // Small delay to let fs.watch attach
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     // Write updates to the outbound file
@@ -88,8 +88,8 @@ describe("OutboundUpdatesReader", () => {
       makeUpdate("src/utils.ts", "+line 2"),
     ]);
 
-    // watchFile polls at 500ms intervals; wait for it to fire
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // fs.watch fires asynchronously; reader debounces 25ms then drains
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(received).toHaveLength(2);
     expect(received[0].filePath).toBe("src/main.ts");

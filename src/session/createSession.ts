@@ -648,6 +648,23 @@ export async function createSession(
       if (pendingPush) {
         await pendingPush;
       }
+      // Re-check connection state after the await: the peer may have
+      // disconnected during pendingPush. Granting a lock to a
+      // disconnected peer leaves a zombie hold that only the TTL would
+      // clean up. The peer:disconnect handler that just ran couldn't
+      // release this lock either because at the time of its run the
+      // lock wasn't yet held.
+      if (!node.isPeerConnected(remotePeerId)) {
+        const response: LockAcquireResponse = {
+          kind: "lock-acquire",
+          acquired: false,
+          holder: getLockStatus(update.timestamp).holderPeerId,
+          reason: "peer-disconnected",
+          lock: getLockStatus(update.timestamp),
+        };
+        await writeToStream(stream, response).catch(() => {});
+        return;
+      }
       const result = acquireLock(update.peerId, update.timestamp, remotePeerId);
       const response: LockAcquireResponse = result.acquired
         ? {

@@ -1,4 +1,4 @@
-import { watchFile, unwatchFile, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { watch, type FSWatcher, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 
@@ -38,28 +38,59 @@ export function defaultOutboundUpdatesPath(): string {
 export class OutboundUpdatesReader {
   private readonly registryPath: string;
   private readonly onUpdate: (update: OutboundUpdate) => void;
-  private watching = false;
+  private watcher: FSWatcher | null = null;
+  private drainTimer: NodeJS.Timeout | null = null;
 
   constructor(onUpdate: (update: OutboundUpdate) => void, registryPath?: string) {
     this.onUpdate = onUpdate;
     this.registryPath = registryPath ?? defaultOutboundUpdatesPath();
   }
 
-  /** Start watching the outbound file for changes. */
+  /**
+   * Start watching the outbound file for changes.
+   *
+   * Uses fs.watch (event-based) on the file itself. The previous
+   * watchFile (interval=500ms polling) could miss writes that landed
+   * within a single poll window — e.g., a hook-write and the reader's
+   * own clearFile in the same 500ms tick would coalesce into a single
+   * stat change and the hook's update was lost. Event-based fires for
+   * every kernel-reported change.
+   *
+   * The drain itself is idempotent: an event from our own clearFile
+   * triggers a drain that reads zero entries and returns. A small
+   * debounce coalesces the multiple events some platforms emit for a
+   * single write so we don't run drain twice in a row.
+   */
   start(): void {
-    if (this.watching) return;
-    this.watching = true;
+    if (this.watcher) return;
+    try {
+      mkdirSync(dirname(this.registryPath), { recursive: true });
+    } catch {
+      // best-effort
+    }
     this.clearFile();
-    watchFile(this.registryPath, { interval: 500 }, () => {
-      this.drain();
+    this.watcher = watch(this.registryPath, () => {
+      this.scheduleDrain();
     });
   }
 
   /** Stop watching and clean up. */
   stop(): void {
-    if (!this.watching) return;
-    this.watching = false;
-    unwatchFile(this.registryPath);
+    if (!this.watcher) return;
+    this.watcher.close();
+    this.watcher = null;
+    if (this.drainTimer) {
+      clearTimeout(this.drainTimer);
+      this.drainTimer = null;
+    }
+  }
+
+  private scheduleDrain(): void {
+    if (this.drainTimer) return;
+    this.drainTimer = setTimeout(() => {
+      this.drainTimer = null;
+      this.drain();
+    }, 25);
   }
 
   /** Read and process all pending outbound updates, then clear the file. */
@@ -69,7 +100,15 @@ export class OutboundUpdatesReader {
       const registry = JSON.parse(data) as OutboundUpdatesRegistry;
       if (registry.updates.length === 0) return;
 
-      // Clear immediately to avoid reprocessing
+      // Clear immediately to avoid reprocessing.
+      // Note: this race-window remains: a hook write that started its
+      // read-modify-write before our clear and finishes after will
+      // restore the entries we just drained. The hook script flocks its
+      // read+write, but the reader does not (no built-in flock in Node
+      // without shelling out). Worst case under heavy contention: at
+      // most one duplicate delivery to the broadcast layer. The
+      // broadcast layer is idempotent on file-change updates because
+      // peers re-validate base hashes before applying.
       this.clearFile();
 
       for (const update of registry.updates) {

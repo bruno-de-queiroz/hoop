@@ -160,6 +160,15 @@ export class HoopNode {
     return this.authenticatedPeers.has(peerId);
   }
 
+  /** Returns true iff there is at least one open connection to peerId. */
+  isPeerConnected(peerId: string): boolean {
+    if (this.node === null) return false;
+    for (const conn of this.node.getConnections()) {
+      if (conn.remotePeer.toString() === peerId) return true;
+    }
+    return false;
+  }
+
   markPeerAuthenticated(peerId: string): void {
     this.authenticatedPeers.add(peerId);
   }

@@ -77,4 +77,37 @@ describe('HoopNode lifecycle', () => {
     await node.start();
     expect(node.getConnectedPeers()).toEqual([]);
   });
+
+  it('isPeerConnected() returns false when node is not started', () => {
+    const node = track(createTestNode());
+    expect(node.isPeerConnected('any-peer-id')).toBe(false);
+  });
+
+  it('isPeerConnected() returns false for an unknown peer after start', async () => {
+    const node = track(createTestNode());
+    await node.start();
+    expect(node.isPeerConnected('12D3KooWFakeFakeFake')).toBe(false);
+  });
+
+  it('isPeerConnected() returns true for a connected peer and false after disconnect', async () => {
+    const a = track(createTestNode());
+    const b = track(createTestNode());
+    await a.start();
+    await b.start();
+
+    const aAddr = a.getListenAddresses()[0];
+    await b.dial(aAddr);
+
+    // Allow libp2p to register the connection
+    await new Promise((r) => setTimeout(r, 100));
+
+    const aPeer = a.getPeerId();
+    const bPeer = b.getPeerId();
+    expect(b.isPeerConnected(aPeer)).toBe(true);
+    expect(a.isPeerConnected(bPeer)).toBe(true);
+
+    await b.closeConnection(aPeer);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(b.isPeerConnected(aPeer)).toBe(false);
+  });
 });
