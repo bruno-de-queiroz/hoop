@@ -21,11 +21,14 @@ if [ -z "$PID" ]; then
   exit 0
 fi
 
-# Signal MCP server for graceful shutdown (SIGUSR1 triggers cleanup)
+# Signal MCP server for graceful shutdown (SIGUSR1 triggers cleanup).
+# Wait up to ~10 seconds for the process to actually exit. Removing the
+# registry files while the server is still writing to them would drop
+# in-flight peer acks / outbound updates / lock changes on the floor —
+# the writer's atomic-rename pattern protects integrity, not ordering.
 if kill -0 "$PID" 2>/dev/null; then
   kill -USR1 "$PID" 2>/dev/null || true
-  # Brief wait for graceful cleanup to complete
-  for i in 1 2 3 4 5; do
+  for i in $(seq 1 50); do
     if ! kill -0 "$PID" 2>/dev/null; then
       break
     fi
@@ -37,14 +40,21 @@ fi
 # do NOT remove $STATUS_FILE here — leaving it lets the next claude session
 # detect a zombie and offer to recover.  hoop_leave_session is the only
 # code path that clears the status file.
-rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-active-edits.json"
-rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-admissions.json"
-rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-updates.json"
-rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-outbound-updates.json"
-rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-outbound-updates.json.lock"
-rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-lock-status.json"
-rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-lock-status.json.tmp"
-rm -f "${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-first-broadcast.flag"
+#
+# Default registry paths now suffix with the MCP server PID (matching the
+# writer side's defaultXxxPath() helpers). Remove both the PID-suffixed
+# variant (current default) and the un-suffixed variant (legacy / explicit
+# HOOP_REGISTRY_DIR + fixed name configurations).
+REG_DIR="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}"
+for base in hoop-active-edits hoop-pending-admissions hoop-pending-updates hoop-pending-prompt-requests; do
+  rm -f "$REG_DIR/${base}.json" "$REG_DIR/${base}-${PID}.json"
+  rm -f "$REG_DIR/${base}.json.tmp" "$REG_DIR/${base}-${PID}.json.tmp"
+done
+rm -f "$REG_DIR/hoop-outbound-updates.json"
+rm -f "$REG_DIR/hoop-outbound-updates.json.lock"
+rm -f "$REG_DIR/hoop-lock-status.json"
+rm -f "$REG_DIR/hoop-lock-status.json.tmp"
+rm -f "$REG_DIR/hoop-first-broadcast.flag"
 
 # Residual proof that this hook executed — readable by tests and by a
 # follow-up SessionStart that wants to confirm clean teardown.

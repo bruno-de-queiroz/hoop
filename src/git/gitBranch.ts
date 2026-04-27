@@ -131,13 +131,37 @@ export async function removeSessionWorktree(
   branchName: string,
   cwd?: string,
 ): Promise<GitResult> {
+  // Two-step independent: if worktree remove fails (worktree path was
+  // deleted manually, replaced with a regular file, or never created
+  // because the previous teardown crashed), the branch deletion must
+  // still run. Otherwise the next `worktree add -b <branchName>` fails
+  // with "branch already exists" and the user is stuck.
+  const errors: string[] = [];
+
   try {
     await git(["worktree", "remove", "--force", worktreePath], cwd);
-    await git(["branch", "-D", branchName], cwd);
-    return { ok: true, value: undefined as never };
   } catch (err) {
-    return { ok: false, error: (err as Error).message };
+    errors.push(`worktree remove: ${(err as Error).message}`);
+    // Prune to clear any stale registration so subsequent worktree adds
+    // for the same path don't error with "already registered".
+    await git(["worktree", "prune"], cwd).catch(() => {});
   }
+
+  try {
+    await git(["branch", "-D", branchName], cwd);
+  } catch (err) {
+    // Branch may legitimately not exist (e.g., already deleted by remote
+    // sync). Only surface the error if it isn't a "not found" case.
+    const msg = (err as Error).message;
+    if (!/not found|did not match any/i.test(msg)) {
+      errors.push(`branch -D: ${msg}`);
+    }
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, error: errors.join("; ") };
+  }
+  return { ok: true, value: undefined as never };
 }
 
 export async function createSessionWorktree(

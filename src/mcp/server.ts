@@ -181,6 +181,12 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
   }
 
   function mirrorObservedUpdate(update: StateUpdate, selfPeerId: string): void {
+    // Guard against post-shutdown deliveries: handlers registered during
+    // join/create may fire one more time after gracefulShutdown clears
+    // state.role. Mutating activeEditsTracker / pendingUpdatesWriter on
+    // those late deliveries would corrupt the next session's state.
+    if (state.role === null) return;
+
     if (update.peerId !== selfPeerId && shouldQueuePendingUpdate(update)) {
       state.pendingUpdates.push(update);
     }

@@ -258,8 +258,20 @@ export async function createSession(
         await writeToStream(stream, response);
         await connection.close();
       }
-    } catch {
-      await connection.close();
+    } catch (err) {
+      // If onAdmissionRequest throws (elicit timeout / capability missing /
+      // operator closed the prompt) we still record a denial entry so the
+      // failing peer can't spam admission requests at the rate-limit cap.
+      // Without this, a flood would cycle through the rate-limit cap each
+      // window with no per-peer backoff.
+      try {
+        const peerIdForCooldown = connection.remotePeer.toString();
+        deniedPeers.set(peerIdForCooldown, Date.now());
+      } catch {
+        // connection may already be closed — best-effort
+      }
+      console.error("[hoop] admission handler threw, applying cooldown:", err);
+      await connection.close().catch(() => {});
     }
   });
 

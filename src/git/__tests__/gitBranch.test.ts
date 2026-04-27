@@ -159,24 +159,27 @@ describe("removeSessionWorktree", () => {
     );
   });
 
-  it("returns failure when worktree remove fails", async () => {
+  it("surfaces failure when worktree remove fails but still attempts branch delete", async () => {
     simulateExecFileError("exit code 128", "fatal: '/tmp/wt' is not a working tree");
 
     const result = await removeSessionWorktree("/tmp/wt", "hoop/session-ABC");
 
-    expect(result).toEqual({
-      ok: false,
-      error: "fatal: '/tmp/wt' is not a working tree",
-    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("worktree remove:");
+      expect(result.error).toContain("'/tmp/wt' is not a working tree");
+    }
   });
 
-  it("returns failure when branch delete fails after worktree removal", async () => {
+  it("treats 'branch not found' on delete as idempotent success after worktree removal", async () => {
     mockExecFile.mockImplementation(
       ((_cmd: unknown, args: unknown, _opts: unknown, cb: unknown) => {
         callCount++;
         if (callCount === 1) {
+          // worktree remove succeeds
           (cb as (err: Error | null, stdout: string, stderr: string) => void)(null, "", "");
         } else {
+          // branch -D reports "not found" — treat as already-deleted
           const err = new Error("exit code 1");
           (cb as (err: Error | null, stdout: string, stderr: string) => void)(
             err,
@@ -189,10 +192,7 @@ describe("removeSessionWorktree", () => {
 
     const result = await removeSessionWorktree("/tmp/wt", "hoop/session-ABC");
 
-    expect(result).toEqual({
-      ok: false,
-      error: "error: branch 'hoop/session-ABC' not found",
-    });
+    expect(result).toEqual({ ok: true, value: undefined });
   });
 });
 
