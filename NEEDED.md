@@ -1,34 +1,14 @@
 # NEEDED — deferred work
 
-Items that surfaced during reviews and manual testing but were intentionally
-not fixed in the same pass either because they require architectural design
-discussion, are pre-MVP scope, or cannot be safely automated by an
-implementer agent without product input.
+Items that surfaced during reviews but were intentionally not fixed in
+the same pass either because they require architectural design or are
+pre-MVP scope.
 
-Each entry: what, why-it's-deferred, what-the-fix-looks-like.
-
-> **Note**: items in this file are *deferred*, not abandoned. Mechanical
-> fixes that surfaced during the same review have already been shipped
+> **Note:** mechanical fixes from the same review have already shipped
 > across commits `10d1764` → `HEAD` (governance rename + elicit-driven
 > settings, path traversal, prompt injection, network DoS, atomicity,
-> race fixes, lock-acquire-after-disconnect protection, and more).
-
----
-
-## Hook-routed direct-action skills — IMPLEMENTED
-
-**Status:** Shipped. `/hoop:leave` is now intercepted by `UserPromptSubmit`
-hook → `SIGUSR2` to MCP server → `leaveSession()` (gracefulShutdown +
-clearSessionStatus, MCP process stays alive). Skill markdown is a fallback
-doc; under normal operation the model never sees the prompt.
-
-**Future generalization:** Same pattern applies to any "command" slash
-that takes no input. Candidates worth considering: `/hoop:unlock`
-(force-release the lock), `/hoop:status` (read-only summary). Not done
-in this pass because they all currently work fine through the
-model-driven MCP tool path; only `/hoop:leave` had a real UX problem
-where mocked/scripted runs would replay stale tool results. Add when a
-similar pain point surfaces.
+> race fixes, lock-acquire-after-disconnect protection, harness-routed
+> `/hoop:leave`, and more).
 
 ---
 
@@ -97,7 +77,7 @@ in markdown-the-LLM-may-skip is fragile.
 **Why deferred:** Architectural — the right fix is "lock acquisition
 belongs server-side around the actual execution span," not in skill
 markdown. Needs design for how the MCP server knows when the sub-agent
-has finished. Not haiku-fixable.
+has finished.
 
 **Shape of the fix:**
 1. New MCP tool `hoop_run_with_lock(args)` that acquires lock, runs the
@@ -107,22 +87,3 @@ has finished. Not haiku-fixable.
    server-side mechanisms (subprocess? sandboxed worker?) instead of
    relying on the LLM to call back.
 3. TTL stays as a safety net, but the happy path is structured.
-
----
-
-## State writer flock & pid-tagged registry paths
-
-**Problem (separately tracked because they're code-fixable but I want them
-in one place):** Several state writers do non-atomic `writeFileSync` and
-share default paths across sessions. These are being addressed in the
-Tier-A batch — listed here only because the design choice between
-"single-machine multi-session" vs "single-session-per-machine" hasn't
-been made.
-
-**Open question:** Do we ever expect two `claude` processes on the same
-host to be in two different hoop sessions simultaneously? If yes, the
-default registry path needs a session/PID suffix (or move to `XDG_RUNTIME_DIR`
-+ session subdir). If no, document the limitation and keep the simple
-shared `tmpdir()` path.
-
-Discuss before merging the Tier-A writer fix.

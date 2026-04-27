@@ -29,14 +29,22 @@ USER_PROMPT=$(echo "$HOOK_INPUT" | jq -r '.prompt // empty' 2>/dev/null || echo 
 # intercept it before the model sees anything.
 TRIMMED=$(printf '%s' "$USER_PROMPT" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
 if [[ "$TRIMMED" == "/hoop:leave" ]]; then
+  # Output channel choice: we use {"continue": false, "stopReason": ...}
+  # rather than {"decision": "block", "reason": ...} for status-style
+  # messages. Both prevent the prompt from reaching the model, but
+  # `continue: false` renders the stopReason as a plain notification
+  # without the "UserPromptSubmit operation blocked by hook:" prefix
+  # and "Original prompt: ..." suffix that `decision: block` produces.
+  # The leave succeeded; this is a status update, not an error/policy
+  # block.
   if [ ! -f "$STATUS_FILE" ]; then
-    jq -n '{ decision: "block", reason: "No active Hoop session." }'
+    jq -n '{ continue: false, stopReason: "You are not currently in a Hoop session." }'
     exit 0
   fi
   LEAVE_PID=$(jq -r '.pid // empty' "$STATUS_FILE" 2>/dev/null) || LEAVE_PID=""
   if [ -z "$LEAVE_PID" ] || ! kill -0 "$LEAVE_PID" 2>/dev/null; then
     rm -f "$STATUS_FILE" "$ADMISSIONS_FILE" "$UPDATES_FILE" "$PROMPT_REQUESTS_FILE"
-    jq -n '{ decision: "block", reason: "No active Hoop session (stale state cleaned up)." }'
+    jq -n '{ continue: false, stopReason: "You are not currently in a Hoop session (stale state cleaned up)." }'
     exit 0
   fi
   LEAVE_ROLE=$(jq -r '.role // empty' "$STATUS_FILE" 2>/dev/null) || LEAVE_ROLE="unknown"
@@ -58,31 +66,28 @@ if [[ "$TRIMMED" == "/hoop:leave" ]]; then
 
   if [ -f "$STATUS_FILE" ]; then
     jq -n --arg role "$LEAVE_ROLE" --arg code "$LEAVE_CODE" '{
-      decision: "block",
-      reason: ("Sent leave signal but the MCP server didn'"'"'t clear session-status within 5s. The teardown may still be in progress; check `hoop_get_status` if a follow-up command behaves unexpectedly. (role=" + $role + ", code=" + $code + ")")
+      continue: false,
+      stopReason: ("The leave signal was sent but the MCP server has not finished tearing down within 5s. Try `hoop_get_status` next; the teardown may still complete. (role=" + $role + ", code=" + $code + ")")
     }'
     exit 0
   fi
 
   CODE_SUFFIX=""
   if [ -n "$LEAVE_CODE" ]; then
-    CODE_SUFFIX=" (code: $LEAVE_CODE)"
+    CODE_SUFFIX=" (code $LEAVE_CODE)"
   fi
-  # Tailor the next-step hint to the role you just left:
-  #   - host: typically you'd start hosting again → /hoop:new
-  #   - peer: typically you'd join another session → /hoop:join (but
-  #           you can also become a host yourself via /hoop:new)
+  # Tailor the next-step hint to the role you just left.
   case "$LEAVE_ROLE" in
     host)
-      NEXT_STEP="type /hoop:new to host another session, or /hoop:join <code> <addr> to connect to one." ;;
+      NEXT_STEP="Type /hoop:new to host again, or /hoop:join <code> <addr> to connect to a session." ;;
     peer)
-      NEXT_STEP="type /hoop:join <code> <addr> to connect to another session, or /hoop:new to host one yourself." ;;
+      NEXT_STEP="Type /hoop:join <code> <addr> to connect to another session, or /hoop:new to host one." ;;
     *)
-      NEXT_STEP="type /hoop:new to host or /hoop:join <code> <addr> to connect." ;;
+      NEXT_STEP="Type /hoop:new to host or /hoop:join <code> <addr> to connect." ;;
   esac
-  jq -n --arg msg "Left Hoop session as $LEAVE_ROLE$CODE_SUFFIX. The MCP server is still running; $NEXT_STEP" '{
-    decision: "block",
-    reason: $msg
+  jq -n --arg msg "You are back to your regular Claude Code session — no longer connected to the Hoop session you just left as $LEAVE_ROLE$CODE_SUFFIX. $NEXT_STEP" '{
+    continue: false,
+    stopReason: $msg
   }'
   exit 0
 fi
