@@ -210,7 +210,7 @@ describe("E2E: two claude-code instances in a hoop session", () => {
 
     // Switch to yolo so peer file-changes are not gated by captain mode
     await host.client.callTool({
-      name: "hoop_set_mode",
+      name: "hoop_set_settings",
       arguments: { mode: "yolo" },
     });
 
