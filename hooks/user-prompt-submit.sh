@@ -45,7 +45,7 @@ if [[ "$TRIMMED" == "/hoop:leave" ]]; then
   fi
   LEAVE_PID=$(jq -r '.pid // empty' "$STATUS_FILE" 2>/dev/null) || LEAVE_PID=""
   if [ -z "$LEAVE_PID" ] || ! kill -0 "$LEAVE_PID" 2>/dev/null; then
-    rm -f "$STATUS_FILE" "$ADMISSIONS_FILE" "$UPDATES_FILE" "$PROMPT_REQUESTS_FILE"
+    rm -f "$STATUS_FILE" "$ADMISSIONS_FILE" "$UPDATES_FILE" "$PROMPT_REQUESTS_FILE" "$PATCH_REVIEWS_FILE"
     jq -n '{ continue: false, stopReason: "You are not currently in a Hoop session (stale state cleaned up)." }'
     exit 0
   fi

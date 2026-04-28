@@ -1346,6 +1346,32 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
         seqNos.push(seqNo);
       }
 
+      // When ALL entries conflict, nothing was published — treat as rejection
+      // so the peer is notified to revert the stale files.
+      if (seqNos.length === 0 && conflicts.length > 0) {
+        const rejectionUpdate: MetadataUpdate = {
+          type: "metadata-update",
+          peerId: state.hostSession.peerId,
+          key: `patch-rejected:${peerId}`,
+          value: {
+            reviewId: review.reviewId,
+            reason: "all entries had stale baseHash conflicts",
+            files: conflicts,
+          },
+          timestamp: Date.now(),
+        };
+        state.hostSession.publishUpdate(rejectionUpdate);
+
+        syncPatchReviews();
+        return jsonResult({
+          approved: false,
+          reviewId: review.reviewId,
+          peerId,
+          fileCount: 0,
+          conflicts,
+        });
+      }
+
       syncPatchReviews();
       return jsonResult({
         approved: true,

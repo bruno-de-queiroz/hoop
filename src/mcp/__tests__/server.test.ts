@@ -2226,9 +2226,9 @@ describe("hoop MCP server", () => {
       arguments: { peerId: "peer-E" },
     });
     const data = parseJson(approveResult) as { approved: boolean; conflicts: string[]; fileCount: number };
-    expect(data.approved).toBe(true);
+    expect(data.approved).toBe(false); // all entries conflicted → treated as rejection
     expect(data.conflicts).toContain("src/conflict.ts");
-    expect(data.fileCount).toBe(0); // conflicted entry was skipped
+    expect(data.fileCount).toBe(0);
   }, 30_000);
 
   it("captain mode: non-file-change updates pass through ungated", async () => {
