@@ -30,6 +30,8 @@ import type { ExecutionTarget } from "../session/session.js";
 import { createFreeHoopLock } from "../state/hoopLock.js";
 import { ActiveEditsTracker } from "../state/activeEditsTracker.js";
 import { PendingUpdatesWriter } from "../state/pendingUpdatesWriter.js";
+import { PendingNotesWriter } from "../state/pendingNotesWriter.js";
+import { SessionLogAggregator } from "../state/sessionLog.js";
 import { PendingAdmissionsWriter } from "../state/pendingAdmissionsWriter.js";
 import { OutboundUpdatesReader } from "../state/outboundUpdatesReader.js";
 import { LockStatusWriter } from "../state/lockStatusWriter.js";
@@ -67,6 +69,8 @@ interface ServerState {
   peerPromptRequests: Map<string, PeerPromptRequest>;
   activeEditsTracker: ActiveEditsTracker | null;
   pendingUpdatesWriter: PendingUpdatesWriter | null;
+  pendingNotesWriter: PendingNotesWriter | null;
+  sessionLog: SessionLogAggregator | null;
   outboundUpdatesReader: OutboundUpdatesReader | null;
   lockStatusWriter: LockStatusWriter | null;
   observedGovernanceConfig: GovernanceConfig;
@@ -78,6 +82,8 @@ export interface HoopMcpDeps {
   joinGitOps?: JoinGitOps;
   conflictRegistryPath?: string;
   pendingUpdatesRegistryPath?: string;
+  pendingNotesRegistryPath?: string;
+  sessionLogPath?: string;
   pendingAdmissionsRegistryPath?: string;
   outboundUpdatesRegistryPath?: string;
   lockStatusRegistryPath?: string;
@@ -85,6 +91,14 @@ export interface HoopMcpDeps {
   pendingPatchReviewsRegistryPath?: string;
   sessionStatusPath?: string;
 }
+
+// ── Constants ───────────────────────────────────────────────────────
+
+// F14: per-peer note rate limit. Sliding window matches the admission rate
+// limit pattern (createSession.ts F3). 100 notes / 60s comfortably exceeds
+// any human typing cadence but caps a runaway model loop at ~1.6 notes/sec.
+export const NOTES_RATE_WINDOW_MS = 60_000;
+export const MAX_NOTES_PER_WINDOW = 100;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -104,6 +118,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
 
   const conflictRegistryPath = deps?.conflictRegistryPath;
   const pendingUpdatesRegistryPath = deps?.pendingUpdatesRegistryPath;
+  const pendingNotesRegistryPath = deps?.pendingNotesRegistryPath;
+  const sessionLogPath = deps?.sessionLogPath;
   const pendingAdmissionsRegistryPath = deps?.pendingAdmissionsRegistryPath;
   const outboundUpdatesRegistryPath = deps?.outboundUpdatesRegistryPath;
   const lockStatusRegistryPath = deps?.lockStatusRegistryPath;
@@ -125,6 +141,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     peerPromptRequests: new Map(),
     activeEditsTracker: null,
     pendingUpdatesWriter: null,
+    pendingNotesWriter: null,
+    sessionLog: null,
     outboundUpdatesReader: null,
     lockStatusWriter: null,
     observedGovernanceConfig: DEFAULT_GOVERNANCE_CONFIG,
@@ -211,6 +229,8 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     }
     state.activeEditsTracker?.handleUpdate(update);
     state.pendingUpdatesWriter?.handleUpdate(update);
+    state.pendingNotesWriter?.handleUpdate(update);
+    state.sessionLog?.append(update);
   }
 
   function syncPromptRequests(): void {
@@ -597,6 +617,11 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           result.peerId,
           pendingUpdatesRegistryPath,
         );
+        state.pendingNotesWriter = new PendingNotesWriter(
+          result.peerId,
+          pendingNotesRegistryPath,
+        );
+        state.sessionLog = new SessionLogAggregator(sessionLogPath);
         state.lockStatusWriter = new LockStatusWriter(
           result.peerId,
           lockStatusRegistryPath,
@@ -705,6 +730,11 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           result.localPeerId,
           pendingUpdatesRegistryPath,
         );
+        state.pendingNotesWriter = new PendingNotesWriter(
+          result.localPeerId,
+          pendingNotesRegistryPath,
+        );
+        state.sessionLog = new SessionLogAggregator(sessionLogPath);
         state.lockStatusWriter = new LockStatusWriter(
           result.localPeerId,
           lockStatusRegistryPath,
@@ -938,6 +968,110 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
           `Failed to send update: ${e instanceof Error ? e.message : String(e)}`,
         );
       }
+    },
+  );
+
+  // ── 8a. hoop_add_note ──────────────────────────────────────────
+  //
+  // F14: Per-peer rate limit (NOTES_PER_WINDOW notes / NOTES_RATE_WINDOW_MS).
+  // A buggy model or a runaway loop must not be able to fill the broadcast hub
+  // and the session log faster than humans can produce real notes.
+  const noteRequestTimestamps: number[] = [];
+
+  server.registerTool(
+    "hoop_add_note",
+    {
+      description:
+        "Broadcast a session note (free-form reasoning, decision, or alternative) to all peers. The note is appended to the in-session aggregated log so peers can replay or export it later.",
+      inputSchema: z.object({
+        text: z.string().min(1).max(4000)
+          .refine((s) => s.trim().length > 0, { message: "Note text must contain non-whitespace characters." }),
+      }),
+    },
+    async ({ text }) => {
+      if (state.role === null) {
+        return errorResult("No active session.");
+      }
+
+      const now = Date.now();
+      while (noteRequestTimestamps.length > 0 && noteRequestTimestamps[0] < now - NOTES_RATE_WINDOW_MS) {
+        noteRequestTimestamps.shift();
+      }
+      if (noteRequestTimestamps.length >= MAX_NOTES_PER_WINDOW) {
+        return errorResult(
+          `Note rate limit exceeded: ${MAX_NOTES_PER_WINDOW} notes per ${Math.floor(NOTES_RATE_WINDOW_MS / 1000)}s. Slow down.`,
+        );
+      }
+      noteRequestTimestamps.push(now);
+
+      try {
+        if (state.role === "host" && state.hostSession) {
+          const update: StateUpdate = {
+            type: "session-note",
+            peerId: state.hostSession.peerId,
+            text,
+            timestamp: now,
+          };
+          const seqNo = state.hostSession.publishUpdate(update);
+          return jsonResult({ accepted: true, seqNo });
+        }
+
+        if (state.role === "peer" && state.peerSession) {
+          const update: StateUpdate = {
+            type: "session-note",
+            peerId: state.peerSession.localPeerId,
+            text,
+            timestamp: now,
+          };
+          const response = await state.peerSession.sendUpdate(update);
+
+          // Session-notes are not gated by captain mode (only file-change is —
+          // see createSession.ts). The pending-review branch is defensive: if
+          // gating ever expands, callers see a sane response shape.
+          if (response.kind === "pending-review") {
+            return jsonResult({
+              accepted: false,
+              pendingReview: true,
+              reviewId: response.reviewId,
+            });
+          }
+
+          return jsonResult({
+            accepted: response.accepted,
+            ...(response.seqNo !== undefined ? { seqNo: response.seqNo } : {}),
+            ...(response.reason !== undefined ? { reason: response.reason } : {}),
+          });
+        }
+
+        return errorResult("Unexpected state.");
+      } catch (e) {
+        return errorResult(
+          `Failed to add note: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    },
+  );
+
+  // ── 8b. hoop_session_log ───────────────────────────────────────
+
+  server.registerTool(
+    "hoop_session_log",
+    {
+      description:
+        "Return the aggregated session log: every observed StateUpdate (file changes, lock events, notes, governance changes, admissions) since the session began. Optionally filter by peer or limit to the last N entries.",
+      inputSchema: z.object({
+        peerId: z.string().optional().describe("Filter to entries from this peer."),
+        limit: z.number().int().positive().optional().describe("Return only the last N entries after filtering."),
+      }),
+    },
+    async ({ peerId, limit }) => {
+      if (state.role === null) {
+        return errorResult("No active session.");
+      }
+      if (!state.sessionLog) {
+        return jsonResult({ entries: [] });
+      }
+      return jsonResult({ entries: state.sessionLog.query({ peerId, limit }) });
     },
   );
 
@@ -1480,6 +1614,17 @@ export function createHoopMcpServer(deps?: HoopMcpDeps) {
     state.activeEditsTracker = null;
     state.pendingUpdatesWriter?.clear();
     state.pendingUpdatesWriter = null;
+    state.pendingNotesWriter?.clear();
+    state.pendingNotesWriter = null;
+    // F13: append() queues both the in-memory mutation and the disk write
+    // inside the serialized chain, so any in-flight teardown-window deliveries
+    // land BEFORE reset's clear+unlink runs. No separate finalFlush needed.
+    state.sessionLog?.reset();
+    state.sessionLog = null;
+    // F14: clear the per-session note rate limit so leave/rejoin starts
+    // with a fresh counter. Mirrors how createSession's admission rate
+    // limit is fresh per session (the array is local to that closure).
+    noteRequestTimestamps.length = 0;
     state.lockStatusWriter?.clear();
     state.lockStatusWriter = null;
     state.pendingAdmissions.clear();

@@ -4,7 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { unlinkSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createHoopMcpServer, type HoopMcpDeps } from "../server.js";
+import { createHoopMcpServer, MAX_NOTES_PER_WINDOW, type HoopMcpDeps } from "../server.js";
 import { stubGitOps } from "../../session/createSession.js";
 import { stubJoinGitOps } from "../../session/joinSession.js";
 import { PendingUpdatesWriter } from "../../state/pendingUpdatesWriter.js";
@@ -79,7 +79,7 @@ describe("hoop MCP server", () => {
     try { unlinkSync(SESSION_STATUS_FILE); } catch { /* ignore */ }
   });
 
-  it("registers all 25 tools", async () => {
+  it("registers all 27 tools", async () => {
     ({ server, state, client } = await setup());
 
     const { tools } = await client!.listTools();
@@ -87,6 +87,7 @@ describe("hoop MCP server", () => {
 
     expect(names).toEqual([
       "hoop_acquire_lock",
+      "hoop_add_note",
       "hoop_admit_peer",
       "hoop_approve_patches",
       "hoop_approve_prompt_request",
@@ -110,6 +111,7 @@ describe("hoop MCP server", () => {
       "hoop_release_lock",
       "hoop_request_host_execution",
       "hoop_send_update",
+      "hoop_session_log",
       "hoop_set_settings",
     ]);
   });
@@ -363,6 +365,106 @@ describe("hoop MCP server", () => {
     expect(data.count).toBe(0);
     expect(data.updates).toEqual([]);
   }, 30_000);
+
+  it("hoop_add_note rejects whitespace-only text", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const result = await client!.callTool({
+      name: "hoop_add_note",
+      arguments: { text: "   \n\t  " },
+    });
+
+    expect(result.isError).toBe(true);
+  }, 30_000);
+
+  it("hoop_add_note broadcasts and lands in the session log", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    const accept = await client!.callTool({
+      name: "hoop_add_note",
+      arguments: { text: "trying the map() approach" },
+    });
+    const data = parseJson(accept) as { accepted: boolean };
+    expect(data.accepted).toBe(true);
+
+    const log = await client!.callTool({
+      name: "hoop_session_log",
+      arguments: {},
+    });
+    const logData = parseJson(log) as { entries: Array<{ type: string; payload: { text?: string } }> };
+    const noteEntries = logData.entries.filter((e) => e.type === "session-note");
+    expect(noteEntries).toHaveLength(1);
+    expect(noteEntries[0].payload.text).toBe("trying the map() approach");
+  }, 30_000);
+
+  it("hoop_add_note enforces the per-session rate limit", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    // Fill the rate-limit window. MAX_NOTES_PER_WINDOW (100) requests should
+    // succeed; the next must error with the rate-limit message.
+    for (let i = 0; i < MAX_NOTES_PER_WINDOW; i++) {
+      const r = await client!.callTool({
+        name: "hoop_add_note",
+        arguments: { text: `note ${i}` },
+      });
+      expect(r.isError).toBeFalsy();
+    }
+
+    const overLimit = await client!.callTool({
+      name: "hoop_add_note",
+      arguments: { text: "one too many" },
+    });
+    expect(overLimit.isError).toBe(true);
+    const text = (overLimit.content as Array<{ text: string }>)[0].text;
+    expect(text).toMatch(/rate limit/i);
+  }, 60_000);
+
+  it("hoop_add_note rate-limit counter resets across leave + create", async () => {
+    ({ server, state, client } = await setup());
+
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    // Burn 10 of the 100 allotments
+    for (let i = 0; i < 10; i++) {
+      await client!.callTool({
+        name: "hoop_add_note",
+        arguments: { text: `n${i}` },
+      });
+    }
+
+    await client!.callTool({ name: "hoop_leave_session", arguments: {} });
+    await client!.callTool({
+      name: "hoop_create_session",
+      arguments: { executionTarget: "host-only" },
+    });
+
+    // After leave + recreate, the full quota is available again.
+    for (let i = 0; i < MAX_NOTES_PER_WINDOW; i++) {
+      const r = await client!.callTool({
+        name: "hoop_add_note",
+        arguments: { text: `n${i}` },
+      });
+      expect(r.isError).toBeFalsy();
+    }
+  }, 60_000);
 
   it("hoop_check_admissions returns empty when no requests pending", async () => {
     ({ server, state, client } = await setup());

@@ -12,12 +12,37 @@ set -euo pipefail
 source "$(dirname "$0")/_format-peer-changes.sh"
 
 STATUS_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-session-status.json"
-ADMISSIONS_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-admissions.json"
-UPDATES_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-updates.json"
-PROMPT_REQUESTS_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-prompt-requests.json"
-PATCH_REVIEWS_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-patch-reviews.json"
+REG_DIR="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}"
+# Patch-reviews writer uses an unsuffixed default (same convention as
+# lock-status and outbound-updates), so the hook reads the unsuffixed path
+# directly — no PID resolution needed.
+PATCH_REVIEWS_FILE="$REG_DIR/hoop-pending-patch-reviews.json"
 MAX_PATCH_LINES=20
 MAX_FILES=5
+
+# Resolve the MCP server's PID-suffixed registry paths.
+#
+# The MCP server's writers default to `<base>-<PID>.json` (process.pid suffix
+# avoids collisions across concurrent hoop sessions on one machine). The hook
+# must read the SAME files. We derive PID from STATUS_FILE — the same source
+# the leave-routing path already uses.
+#
+# When PID is known we ALWAYS resolve to the suffixed path, even if the file
+# does not exist yet. Falling back to the unsuffixed name when the suffixed
+# variant is missing would let a stale `<base>.json` from a previous session
+# (or a fixture leftover) be misread as the current session's state.
+#
+# When PID is empty (no STATUS_FILE — i.e. fixture-driven hook tests), we use
+# the unsuffixed name so those tests can write to a fixed path.
+resolve_registry_path() {
+  local base="$1"
+  local pid="${2:-}"
+  if [ -n "$pid" ]; then
+    printf '%s' "$REG_DIR/${base}-${pid}.json"
+  else
+    printf '%s' "$REG_DIR/${base}.json"
+  fi
+}
 
 # Read the hook input JSON from stdin once. Claude Code provides it as
 # {"prompt": "...", "session_id": "...", ...}. We only need .prompt for
@@ -45,7 +70,16 @@ if [[ "$TRIMMED" == "/hoop:leave" ]]; then
   fi
   LEAVE_PID=$(jq -r '.pid // empty' "$STATUS_FILE" 2>/dev/null) || LEAVE_PID=""
   if [ -z "$LEAVE_PID" ] || ! kill -0 "$LEAVE_PID" 2>/dev/null; then
-    rm -f "$STATUS_FILE" "$ADMISSIONS_FILE" "$UPDATES_FILE" "$PROMPT_REQUESTS_FILE" "$PATCH_REVIEWS_FILE"
+    # Stale-state branch: scrub both suffixed (current writer convention)
+    # AND unsuffixed (legacy / fixture leftovers) variants for PID-suffixed
+    # registries; plus the unsuffixed-only patch-reviews registry. The whole
+    # point here is "the session that owned these files is gone; clean
+    # everything related to it so we start fresh."
+    for base in hoop-pending-admissions hoop-pending-updates hoop-pending-notes hoop-pending-prompt-requests; do
+      rm -f "$REG_DIR/${base}.json"
+      [ -n "$LEAVE_PID" ] && rm -f "$REG_DIR/${base}-${LEAVE_PID}.json"
+    done
+    rm -f "$PATCH_REVIEWS_FILE" "$STATUS_FILE"
     jq -n '{ continue: false, stopReason: "You are not currently in a Hoop session (stale state cleaned up)." }'
     exit 0
   fi
@@ -100,8 +134,18 @@ if [ ! -f "$STATUS_FILE" ]; then
 fi
 
 PID=$(jq -r '.pid // empty' "$STATUS_FILE" 2>/dev/null) || exit 0
+ADMISSIONS_FILE=$(resolve_registry_path hoop-pending-admissions "$PID")
+UPDATES_FILE=$(resolve_registry_path hoop-pending-updates "$PID")
+NOTES_FILE=$(resolve_registry_path hoop-pending-notes "$PID")
+PROMPT_REQUESTS_FILE=$(resolve_registry_path hoop-pending-prompt-requests "$PID")
+
 if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then
-  rm -f "$STATUS_FILE" "$ADMISSIONS_FILE" "$UPDATES_FILE" "$PROMPT_REQUESTS_FILE" "$PATCH_REVIEWS_FILE"
+  # Stale-state branch: scrub both suffixed and unsuffixed variants for the
+  # PID-suffixed registries; plus the unsuffixed-only patch-reviews registry.
+  for base in hoop-pending-admissions hoop-pending-updates hoop-pending-notes hoop-pending-prompt-requests; do
+    rm -f "$REG_DIR/${base}.json" "$REG_DIR/${base}-${PID}.json"
+  done
+  rm -f "$PATCH_REVIEWS_FILE" "$STATUS_FILE"
   exit 0
 fi
 
@@ -174,6 +218,12 @@ if [ -n "$UPDATES_CONTEXT" ]; then
   drain_peer_changes_registry "$UPDATES_FILE"
 fi
 
+NOTES_CONTEXT=$(format_peer_notes_context "$NOTES_FILE")
+
+if [ -n "$NOTES_CONTEXT" ]; then
+  drain_peer_notes_registry "$NOTES_FILE"
+fi
+
 CONTEXT=""
 if [ -n "$ADMISSIONS_CONTEXT" ]; then
   CONTEXT="$ADMISSIONS_CONTEXT"
@@ -198,6 +248,13 @@ if [ -n "$UPDATES_CONTEXT" ]; then
     CONTEXT+=$'\n\n'
   fi
   CONTEXT="$CONTEXT$UPDATES_CONTEXT"
+fi
+
+if [ -n "$NOTES_CONTEXT" ]; then
+  if [ -n "$CONTEXT" ]; then
+    CONTEXT+=$'\n\n'
+  fi
+  CONTEXT="$CONTEXT$NOTES_CONTEXT"
 fi
 
 if [ -z "$CONTEXT" ]; then

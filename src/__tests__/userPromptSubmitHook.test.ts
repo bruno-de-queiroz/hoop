@@ -25,6 +25,12 @@ function writeJson(filePath: string, data: unknown) {
   writeFileSync(filePath, JSON.stringify(data), "utf-8");
 }
 
+// Mirrors the writers' default `<base>-<PID>.json` convention. The hook
+// resolves to this same name when STATUS_FILE.pid is set.
+function regPath(tempDir: string, base: string): string {
+  return join(tempDir, `${base}-${process.pid}.json`);
+}
+
 function runHook(tempDir: string, env: Record<string, string> = {}) {
   const output = execFileSync(SCRIPT_PATH, {
     env: {
@@ -60,7 +66,7 @@ describe("user-prompt-submit hook", () => {
       pid: process.pid,
       startedAt: Date.now(),
     });
-    writeJson(join(tempDir, "hoop-pending-admissions.json"), {
+    writeJson(regPath(tempDir, "hoop-pending-admissions"), {
       requests: [
         {
           email: "alice@example.com",
@@ -70,7 +76,7 @@ describe("user-prompt-submit hook", () => {
       ],
       updatedAt: Date.now(),
     });
-    writeJson(join(tempDir, "hoop-pending-updates.json"), {
+    writeJson(regPath(tempDir, "hoop-pending-updates"), {
       updates: [
         {
           peerId: "peer-bob",
@@ -93,12 +99,12 @@ describe("user-prompt-submit hook", () => {
     );
 
     const updatesAfter = JSON.parse(
-      readFileSync(join(tempDir, "hoop-pending-updates.json"), "utf-8"),
+      readFileSync(regPath(tempDir, "hoop-pending-updates"), "utf-8"),
     ) as { updates: unknown[] };
     expect(updatesAfter.updates).toEqual([]);
 
     const admissionsAfter = JSON.parse(
-      readFileSync(join(tempDir, "hoop-pending-admissions.json"), "utf-8"),
+      readFileSync(regPath(tempDir, "hoop-pending-admissions"), "utf-8"),
     ) as { requests: unknown[] };
     expect(admissionsAfter.requests).toHaveLength(1);
   });
@@ -114,7 +120,7 @@ describe("user-prompt-submit hook", () => {
       pid: process.pid,
       startedAt: Date.now(),
     });
-    writeJson(join(tempDir, "hoop-pending-admissions.json"), {
+    writeJson(regPath(tempDir, "hoop-pending-admissions"), {
       requests: [
         {
           email: "alice@example.com",
@@ -124,7 +130,7 @@ describe("user-prompt-submit hook", () => {
       ],
       updatedAt: Date.now(),
     });
-    writeJson(join(tempDir, "hoop-pending-updates.json"), {
+    writeJson(regPath(tempDir, "hoop-pending-updates"), {
       updates: [
         {
           peerId: "peer-bob",

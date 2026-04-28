@@ -10,7 +10,23 @@ set -euo pipefail
 
 source "$(dirname "$0")/_format-peer-changes.sh"
 
-REGISTRY_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-pending-updates.json"
+# Resolve PID-suffixed path from STATUS_FILE (matches the MCP writer's
+# default <base>-<PID>.json convention). Falls back to the unsuffixed
+# variant for fixture-driven tests.
+REG_DIR="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}"
+STATUS_FILE="$REG_DIR/hoop-session-status.json"
+MCP_PID=""
+if [ -f "$STATUS_FILE" ]; then
+  MCP_PID=$(jq -r '.pid // empty' "$STATUS_FILE" 2>/dev/null) || MCP_PID=""
+fi
+if [ -n "$MCP_PID" ]; then
+  # PID known → always use the suffixed path so a stale unsuffixed file from
+  # a prior session can never be misread as the current session's state.
+  REGISTRY_FILE="$REG_DIR/hoop-pending-updates-${MCP_PID}.json"
+else
+  # No STATUS_FILE → fixture-driven test setup writes to the unsuffixed name.
+  REGISTRY_FILE="$REG_DIR/hoop-pending-updates.json"
+fi
 
 # No registry file means no active session or no peer changes
 if [ ! -f "$REGISTRY_FILE" ]; then

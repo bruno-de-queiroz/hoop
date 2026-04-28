@@ -46,7 +46,7 @@ fi
 # variant (current default) and the un-suffixed variant (legacy / explicit
 # HOOP_REGISTRY_DIR + fixed name configurations).
 REG_DIR="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}"
-for base in hoop-active-edits hoop-pending-admissions hoop-pending-updates hoop-pending-prompt-requests; do
+for base in hoop-active-edits hoop-pending-admissions hoop-pending-updates hoop-pending-notes hoop-pending-prompt-requests hoop-session-log; do
   rm -f "$REG_DIR/${base}.json" "$REG_DIR/${base}-${PID}.json"
   rm -f "$REG_DIR/${base}.json.tmp" "$REG_DIR/${base}-${PID}.json.tmp"
 done

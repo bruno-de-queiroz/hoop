@@ -10,7 +10,21 @@
 
 set -euo pipefail
 
-REGISTRY_FILE="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}/hoop-active-edits.json"
+# Resolve PID-suffixed path from STATUS_FILE — matches the writer's default
+# `<base>-<PID>.json` convention. When PID is known we never fall back to the
+# unsuffixed name: a stale `hoop-active-edits.json` from a previous session
+# could otherwise be misread as the current session's edit map.
+REG_DIR="${HOOP_REGISTRY_DIR:-${TMPDIR:-/tmp}}"
+STATUS_FILE="$REG_DIR/hoop-session-status.json"
+MCP_PID=""
+if [ -f "$STATUS_FILE" ]; then
+  MCP_PID=$(jq -r '.pid // empty' "$STATUS_FILE" 2>/dev/null) || MCP_PID=""
+fi
+if [ -n "$MCP_PID" ]; then
+  REGISTRY_FILE="$REG_DIR/hoop-active-edits-${MCP_PID}.json"
+else
+  REGISTRY_FILE="$REG_DIR/hoop-active-edits.json"
+fi
 
 # Read hook input from stdin
 INPUT=$(cat)

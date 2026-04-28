@@ -232,4 +232,72 @@ describe("isStateUpdate", () => {
       })
     ).toBe(false);
   });
+
+  it("accepts a valid session-note", () => {
+    expect(
+      isStateUpdate({
+        type: "session-note",
+        peerId: "peer-1",
+        text: "trying the map() approach",
+        timestamp: 1700000000000,
+      })
+    ).toBe(true);
+  });
+
+  it("accepts a session-note with optional author", () => {
+    expect(
+      isStateUpdate({
+        type: "session-note",
+        peerId: "peer-1",
+        author: "alice@example.com",
+        text: "lgtm",
+        timestamp: 1700000000000,
+      })
+    ).toBe(true);
+  });
+
+  it("rejects session-note with empty text", () => {
+    expect(
+      isStateUpdate({
+        type: "session-note",
+        peerId: "peer-1",
+        text: "",
+        timestamp: 1700000000000,
+      })
+    ).toBe(false);
+  });
+
+  it("rejects session-note with whitespace-only text", () => {
+    expect(
+      isStateUpdate({
+        type: "session-note",
+        peerId: "peer-1",
+        text: "   \n\t  ",
+        timestamp: 1700000000000,
+      })
+    ).toBe(false);
+  });
+
+  it("rejects session-note with text exceeding 4000 chars", () => {
+    expect(
+      isStateUpdate({
+        type: "session-note",
+        peerId: "peer-1",
+        text: "a".repeat(4001),
+        timestamp: 1700000000000,
+      })
+    ).toBe(false);
+  });
+
+  it("rejects session-note with author exceeding 256 chars", () => {
+    expect(
+      isStateUpdate({
+        type: "session-note",
+        peerId: "peer-1",
+        author: "a".repeat(257),
+        text: "valid text",
+        timestamp: 1700000000000,
+      })
+    ).toBe(false);
+  });
 });

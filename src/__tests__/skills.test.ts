@@ -90,6 +90,46 @@ describe("skill definitions", () => {
     expect(content).toContain("Lock force-released successfully");
   });
 
+  it("/hoop:note calls hoop_add_note with the user's text", () => {
+    const content = readSkill("skills", "note", "SKILL.md");
+
+    expect(content).toContain("hoop_add_note");
+    expect(content).toMatch(/Usage: \/hoop:note <text>/);
+    expect(content).toContain("Note broadcast to peers");
+    expect(content).not.toContain("import ");
+  });
+
+  it("/hoop:replay calls hoop_session_log with optional peerId / limit args", () => {
+    const content = readSkill("skills", "replay", "SKILL.md");
+
+    expect(content).toContain("hoop_session_log");
+    expect(content).toMatch(/peerId/);
+    expect(content).toMatch(/limit/);
+    expect(content).toMatch(/no entries in session log/);
+    expect(content).not.toContain("import ");
+  });
+
+  it("/hoop:export calls hoop_session_log and renders markdown", () => {
+    const content = readSkill("skills", "export", "SKILL.md");
+
+    expect(content).toContain("hoop_session_log");
+    expect(content).toMatch(/markdown/i);
+    expect(content).toContain("Timeline");
+    expect(content).not.toContain("import ");
+  });
+
+  it("/hoop:retrospective synthesizes the session log into a learning artifact", () => {
+    const content = readSkill("skills", "retrospective", "SKILL.md");
+
+    expect(content).toContain("hoop_session_log");
+    expect(content).toMatch(/What we set out to do/);
+    expect(content).toMatch(/What worked/);
+    expect(content).toMatch(/Alternatives considered/);
+    expect(content).toMatch(/Per-peer contribution/);
+    expect(content).toMatch(/Don't fabricate/);
+    expect(content).not.toContain("import ");
+  });
+
   it("/hoop:leave is documented as harness-routed with a fallback path through hoop_leave_session", () => {
     const content = readSkill("skills", "leave", "SKILL.md");
 

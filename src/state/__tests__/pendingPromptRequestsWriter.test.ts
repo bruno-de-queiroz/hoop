@@ -1,16 +1,23 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { PendingPromptRequestsWriter } from "../pendingPromptRequestsWriter.js";
 
-const TEST_REGISTRY = join(tmpdir(), "hoop-pending-prompt-requests-test.json");
+// Per-test path so parallel vitest workers can never collide on the same
+// fixture file.
+let TEST_REGISTRY: string;
 
 function makeWriter() {
   return new PendingPromptRequestsWriter(TEST_REGISTRY);
 }
 
 describe("PendingPromptRequestsWriter", () => {
+  beforeEach(() => {
+    TEST_REGISTRY = join(tmpdir(), `hoop-pending-prompt-requests-test-${randomUUID()}.json`);
+  });
+
   afterEach(() => {
     try { unlinkSync(TEST_REGISTRY); } catch { /* ignore */ }
   });

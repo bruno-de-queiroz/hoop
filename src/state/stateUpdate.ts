@@ -47,11 +47,20 @@ export interface LockReleaseUpdate {
   timestamp: number;
 }
 
+export interface SessionNoteUpdate {
+  type: "session-note";
+  peerId: string;
+  author?: string;
+  text: string;
+  timestamp: number;
+}
+
 export type NonLockStateUpdate =
   | CursorUpdate
   | BufferUpdate
   | MetadataUpdate
-  | FileChangeUpdate;
+  | FileChangeUpdate
+  | SessionNoteUpdate;
 
 export type StateUpdate =
   | NonLockStateUpdate
@@ -81,6 +90,14 @@ export function isStateUpdate(value: unknown): value is StateUpdate {
       );
     case "metadata-update":
       return typeof v["key"] === "string" && "value" in v;
+    case "session-note":
+      return (
+        typeof v["text"] === "string" &&
+        v["text"].trim().length > 0 &&
+        v["text"].length <= 4000 &&
+        (v["author"] === undefined ||
+          (typeof v["author"] === "string" && v["author"].length <= 256))
+      );
     case "file-change":
       return (
         typeof v["filePath"] === "string" &&

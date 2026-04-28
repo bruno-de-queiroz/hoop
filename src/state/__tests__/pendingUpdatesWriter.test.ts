@@ -2,10 +2,14 @@ import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { PendingUpdatesWriter } from "../pendingUpdatesWriter.js";
 import type { StateUpdate } from "../stateUpdate.js";
 
-const TEST_REGISTRY = join(tmpdir(), "hoop-pending-updates-test.json");
+// Per-test path so parallel vitest workers can never collide on the same
+// fixture file. The previously shared `hoop-pending-updates-test.json` was
+// a known flake source.
+let TEST_REGISTRY: string;
 const SELF_PEER = "self-peer";
 
 function makeWriter() {
@@ -26,7 +30,7 @@ function fileChange(peerId: string, filePath: string, patch: string): StateUpdat
 
 describe("PendingUpdatesWriter", () => {
   beforeEach(() => {
-    try { unlinkSync(TEST_REGISTRY); } catch { /* ignore */ }
+    TEST_REGISTRY = join(tmpdir(), `hoop-pending-updates-test-${randomUUID()}.json`);
   });
 
   afterEach(() => {
