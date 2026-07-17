@@ -1,0 +1,23 @@
+# Local Claude Code state
+.claude/settings.local.json
+.claude/cache/
+.claude/file-history/
+.claude/paste-cache/
+.claude/history.jsonl
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Build output
+node_modules/
+.next/
+dist/
+*.tsbuildinfo
+
+# Runtime / fixture state
+plugins/hoop/sandbox/dist/

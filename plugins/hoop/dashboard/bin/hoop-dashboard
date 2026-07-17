@@ -1,0 +1,490 @@
+#!/usr/bin/env bash
+# hoop-dashboard — launcher for the two-service runtime.
+#
+# Brings up `dashboard` (UI) + `agent-sandbox` (claude + state owner) via
+# docker compose. The host needs Docker; nothing else.
+#
+# Usage: hoop-dashboard {start|stop|restart|status|logs}
+#
+# Pre-reqs on the host:
+#   - Docker / Compose v2
+#   - $HOME/.claude/.credentials.json (run `claude login` if missing — this is
+#     seeded once into the sandbox profile and never touched again)
+
+set -u
+
+PORT="${HOOP_PORT:-7842}"
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+DASHBOARD_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+PLUGIN_ROOT=$(cd "$DASHBOARD_DIR/.." && pwd)
+# Layout on host (mirrors what the sandbox container sees at /home/agent/):
+#   $SANDBOX_PROFILE/
+#     .claude.json    ← claude top-level config (oauthAccount, mcpServers, projects)
+#     .claude/
+#       .credentials.json  ← OAuth refresh tokens
+#       plugins/, sessions/, projects/, hoop/, …
+# The mount source for agent-sandbox is $SANDBOX_PROFILE (compose binds it to
+# /home/agent so `.claude.json` and `.claude/` both land where claude expects.)
+SANDBOX_PROFILE_ROOT="$HOME/.claude/hoop/sandbox"
+SANDBOX_PROFILE="$SANDBOX_PROFILE_ROOT/profile"
+SANDBOX_CLAUDE_DIR="$SANDBOX_PROFILE/.claude"
+DASHBOARD_TOKEN_FILE="$HOME/.local/share/hoop/dashboard.token"
+PEER_SECRET_FILE="$HOME/.local/share/hoop/peer-signing.secret"
+# Opt-in overrides written by /hoop:setup (semantic-search embedding backend +
+# gh token). Sourced at start and forwarded into the sandbox via compose. Holds
+# secrets (OPENAI_API_KEY, GH_TOKEN) → keep 0600, never commit.
+HOOP_ENV_FILE="$HOME/.claude/hoop/dashboard.env"
+
+export HOOP_PLUGIN_ROOT="$PLUGIN_ROOT"
+export HOOP_PORT="$PORT"
+
+COMPOSE_FILE="$DASHBOARD_DIR/docker-compose.yml"
+COMPOSE=(docker compose -f "$COMPOSE_FILE")
+
+in_container() {
+  [ -f /.dockerenv ] || grep -qi docker /proc/1/cgroup 2>/dev/null
+}
+
+if in_container; then
+  echo "hoop-dashboard: refusing to launch from inside a container."
+  echo "  Run this command on your host shell."
+  exit 2
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "hoop-dashboard: docker not found on host." >&2
+  exit 1
+fi
+
+preflight() {
+  # Host-side prerequisite tools. jq is used for every JSON read/write in
+  # this launcher; awk for the macOS Keychain dump parse. Both ship on
+  # macOS Sonoma+ (jq at /usr/bin/jq since 14.x). On older macOS or fresh
+  # Linux hosts, point the user at the install command rather than failing
+  # with a cryptic "command not found" deep inside a helper.
+  for dep in jq awk curl docker; do
+    if ! command -v "$dep" >/dev/null 2>&1; then
+      echo "hoop-dashboard: \`$dep\` is required but not on PATH." >&2
+      case "$dep" in
+        jq)     echo "  Install: brew install jq" >&2 ;;
+        docker) echo "  Install Docker Desktop or your distro's docker package." >&2 ;;
+      esac
+      return 1
+    fi
+  done
+
+  # cloudflared powers pairing: it exposes the local dashboard over a public
+  # tunnel so a peer can join (`hoop` = pairing with an agent). The dashboard
+  # runs fine without it, so this is a warning, not a hard failure.
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    echo "hoop-dashboard: \`cloudflared\` not found — pairing/share links won't work until it's installed." >&2
+    echo "  Install: brew install cloudflared (macOS) · https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/ (other)" >&2
+  fi
+
+  # Create the host-side profile tree the container will bind-mount at
+  # /home/agent. Permissions: 0700 on both the root and .claude/ — these
+  # contain OAuth tokens.
+  mkdir -p "$SANDBOX_CLAUDE_DIR"
+  chmod 0700 "$SANDBOX_PROFILE" "$SANDBOX_CLAUDE_DIR" 2>/dev/null || true
+
+  # One-time migration: detect the legacy layout (state files directly under
+  # $SANDBOX_PROFILE_ROOT/ instead of $SANDBOX_PROFILE_ROOT/profile/.claude/)
+  # and shuffle the existing files into place. Idempotent: if profile/ is
+  # already populated we don't touch legacy state.
+  migrate_legacy_profile_layout
+
+  # Seed credentials. The sandbox claude refreshes its own oauth tokens
+  # while a session is running — but when the dashboard sits idle for
+  # >12h, no subprocess is alive to perform the refresh and the token
+  # expires. Detect that case and re-seed from the host's keychain (which
+  # the user's host claude DOES keep fresh via background refresh + /login).
+  # Three triggers re-seed:
+  #   - file absent (first-time install)
+  #   - file invalid JSON / missing accessToken
+  #   - file present but expiresAt is past or within REFRESH_GRACE_SEC
+  if needs_credential_refresh "$SANDBOX_CLAUDE_DIR/.credentials.json"; then
+    seed_credentials
+  fi
+
+  # Top-level .claude.json: seed with a minimal subset of the host's
+  # ~/.claude.json so the sandbox claude has an identity (oauthAccount, userID)
+  # and doesn't prompt for login on first run. The sandbox updates this file
+  # itself thereafter — we never re-overwrite once it has real content.
+  if [ ! -s "$SANDBOX_PROFILE/.claude.json" ] || [ "$(cat "$SANDBOX_PROFILE/.claude.json")" = "{}" ]; then
+    seed_claude_json
+  fi
+
+  # Enable the hoop plugin in the sandbox profile. `--plugin-dir
+  # /opt/hoop` makes the plugin DISCOVERABLE to claude
+  # subprocesses, but its hooks (PreToolUse, PostToolUse, UserPromptSubmit,
+  # Stop) only fire when the plugin is also listed in
+  # enabledPlugins. Without this step, a fresh sandbox spawns claude
+  # sessions that produce zero events — the dashboard's transcript stays
+  # empty even when the subprocess is alive and responding.
+  ensure_hoop_plugin_enabled
+
+  # Generate / load the dashboard auth token. The container reads it from
+  # HOOP_DASHBOARD_TOKEN (edge-safe path — no file IO in middleware).
+  mkdir -p "$(dirname "$DASHBOARD_TOKEN_FILE")"
+  if [ ! -s "$DASHBOARD_TOKEN_FILE" ]; then
+    # 64 hex chars = 32 random bytes.
+    if command -v openssl >/dev/null 2>&1; then
+      openssl rand -hex 32 > "$DASHBOARD_TOKEN_FILE"
+    else
+      head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$DASHBOARD_TOKEN_FILE"
+    fi
+    chmod 0600 "$DASHBOARD_TOKEN_FILE"
+  fi
+  export HOOP_DASHBOARD_TOKEN="$(cat "$DASHBOARD_TOKEN_FILE")"
+
+  # Generate / load the peer-token signing secret. The dashboard HMAC-signs
+  # ephemeral share tokens with this; edge middleware verifies them. Separate
+  # from the install token so a leaked share token can't be replayed as host
+  # auth and rotating one doesn't invalidate the other.
+  if [ ! -s "$PEER_SECRET_FILE" ]; then
+    if command -v openssl >/dev/null 2>&1; then
+      openssl rand -hex 32 > "$PEER_SECRET_FILE"
+    else
+      head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$PEER_SECRET_FILE"
+    fi
+    chmod 0600 "$PEER_SECRET_FILE"
+  fi
+  export HOOP_PEER_SIGNING_SECRET="$(cat "$PEER_SECRET_FILE")"
+}
+
+# Re-seed if the existing creds file is missing, malformed, or close to
+# expiry. Grace window (600s = 10m) gives the seed time to land before the
+# sandbox launches its first session. Exits 0 ⇒ needs re-seed, 1 ⇒ fine
+# as-is.
+#
+# Pure bash: we only need to extract one numeric field (expiresAt) and one
+# string-shape check (accessToken non-empty). The OAuth file is small and
+# its format is stable; grep+sed is safe here because the numeric value is
+# unquoted and the access token only contains alphanumerics and dashes.
+REFRESH_GRACE_SEC=600
+needs_credential_refresh() {
+  local FILE="$1"
+  [ -f "$FILE" ] || { echo "credentials missing — seeding"; return 0; }
+
+  # expiresAt is a JSON number → no quotes around it. Grab the first match
+  # to be defensive against future shape changes; the field appears once.
+  local EXP_MS
+  EXP_MS=$(grep -o '"expiresAt"[[:space:]]*:[[:space:]]*[0-9]*' "$FILE" \
+             | head -1 \
+             | grep -o '[0-9]*$')
+  if [ -z "$EXP_MS" ]; then
+    echo "credentials malformed (no expiresAt) — seeding"
+    return 0
+  fi
+
+  # accessToken sanity: must be quoted and >16 chars between quotes.
+  # Skip extracting the literal — the existence check is enough.
+  if ! grep -qE '"accessToken"[[:space:]]*:[[:space:]]*"[^"]{16,}"' "$FILE"; then
+    echo "credentials malformed (no usable accessToken) — seeding"
+    return 0
+  fi
+
+  local NOW_MS DELTA_SEC
+  NOW_MS=$(( $(date +%s) * 1000 ))
+  DELTA_SEC=$(( (EXP_MS - NOW_MS) / 1000 ))
+  if [ "$DELTA_SEC" -lt "$REFRESH_GRACE_SEC" ]; then
+    if [ "$DELTA_SEC" -lt 0 ]; then
+      echo "credentials expired $((-DELTA_SEC))s ago — re-seeding from host"
+    else
+      echo "credentials expire in ${DELTA_SEC}s (< ${REFRESH_GRACE_SEC}s grace) — re-seeding"
+    fi
+    return 0
+  fi
+  return 1
+}
+
+# Seed $SANDBOX_CLAUDE_DIR/.credentials.json from the host's claude install.
+# macOS: the credentials live in the login Keychain (service
+# "Claude Code-credentials") since claude 2.x. Linux/WSL: a flat file at
+# ~/.claude/.credentials.json. Fail closed with a clear hint if neither is
+# available — without this, the sandbox claude has no way to authenticate.
+seed_credentials() {
+  local OUT="$SANDBOX_CLAUDE_DIR/.credentials.json"
+  case "$(uname -s)" in
+    Darwin) _seed_credentials_macos "$OUT" ;;
+    *)      _seed_credentials_file  "$OUT" ;;
+  esac
+}
+
+_seed_credentials_file() {
+  local OUT="$1"
+  local SRC="$HOME/.claude/.credentials.json"
+  if [ ! -f "$SRC" ]; then
+    echo "hoop-dashboard: $SRC not found." >&2
+    echo "  Run \`claude login\` on this host first, then re-run." >&2
+    return 1
+  fi
+  cp "$SRC" "$OUT"
+  chmod 0600 "$OUT"
+  echo "seeded credentials into $OUT"
+}
+
+_seed_credentials_macos() {
+  local OUT="$1"
+  for dep in security jq awk; do
+    command -v "$dep" >/dev/null 2>&1 || {
+      echo "hoop-dashboard: \`$dep\` required but not on PATH." >&2
+      [ "$dep" = "jq" ] && echo "  Install with: brew install jq" >&2
+      return 1
+    }
+  done
+
+  # The Keychain often has multiple entries for svce="Claude Code-credentials"
+  # (one per login, including stale ones from older installs). `security
+  # find-generic-password -s ... -w` returns whichever it finds first — which
+  # may be expired. Dump and pick by mdat (last-modified) so the freshest
+  # entry wins. awk groups paragraphs separated by the `keychain:` header
+  # and tracks the highest mdat across blocks that match our service name.
+  local ACCT
+  ACCT=$(security dump-keychain 2>/dev/null | awk '
+    BEGIN { in_block=0; want=0; acct=""; mdat=""; best_mdat=""; best_acct="" }
+    function flush() {
+      if (want && acct != "" && mdat > best_mdat) { best_mdat=mdat; best_acct=acct }
+    }
+    /^keychain:/ { flush(); in_block=1; want=0; acct=""; mdat=""; next }
+    /"svce"<blob>="Claude Code-credentials"/ { want=1 }
+    /"acct"<blob>="/ {
+      line=$0
+      sub(/.*"acct"<blob>="/, "", line)
+      sub(/".*/, "", line)
+      acct=line
+    }
+    /"mdat"<timedate>=/ {
+      line=$0
+      sub(/.*"mdat"<timedate>=0x[0-9A-F]+[[:space:]]+"/, "", line)
+      sub(/".*/, "", line)
+      mdat=line
+    }
+    END { flush(); if (best_acct != "") print best_acct }
+  ')
+
+  if [ -z "$ACCT" ]; then
+    echo "hoop-dashboard: no Keychain entry 'Claude Code-credentials' found." >&2
+    echo "  Run \`claude login\` on this host first, then re-run." >&2
+    return 1
+  fi
+
+  local RAW
+  RAW=$(security find-generic-password -s "Claude Code-credentials" -a "$ACCT" -w 2>/dev/null)
+  if [ -z "$RAW" ]; then
+    echo "hoop-dashboard: Keychain entry for '$ACCT' is empty." >&2
+    return 1
+  fi
+
+  # The Keychain blob may be either:
+  #   - wrapped form    {"claudeAiOauth": {...}}
+  #   - unwrapped form  {"accessToken": "...", ...}
+  # Normalise to the wrapped form via jq so the sandbox claude sees what it
+  # expects. `if has(...) then . else {claudeAiOauth: .} end` round-trips
+  # an already-wrapped blob unchanged.
+  printf '%s' "$RAW" | jq 'if has("claudeAiOauth") then . else {claudeAiOauth: .} end' > "$OUT" \
+    || { echo "hoop-dashboard: failed to parse Keychain blob as JSON." >&2; return 1; }
+  chmod 0600 "$OUT"
+  echo "seeded credentials into $OUT (from macOS Keychain)"
+}
+
+# Synthesize a minimal $SANDBOX_PROFILE/.claude.json with oauthAccount + userID
+# pulled from the host's ~/.claude.json. The sandbox claude expects these
+# fields to be present on first run — without them it falls into the
+# unauthenticated branch and prompts for login.
+seed_claude_json() {
+  local OUT="$SANDBOX_PROFILE/.claude.json"
+  local SRC="$HOME/.claude.json"
+  if [ ! -f "$SRC" ] || ! command -v jq >/dev/null 2>&1; then
+    echo "{}" > "$OUT"
+    chmod 0600 "$OUT"
+    return 0
+  fi
+  # Select a fixed set of fields from host ~/.claude.json. `// empty` drops
+  # missing keys cleanly so the output stays compact; the nested oauthAccount
+  # object round-trips as-is.
+  jq '{
+    oauthAccount, userID, anonymousId,
+    firstStartTime, hasCompletedOnboarding,
+    numStartups, migrationVersion, installMethod
+  } | with_entries(select(.value != null))' "$SRC" > "$OUT" \
+    || { echo "hoop-dashboard: failed to read $SRC as JSON" >&2; return 1; }
+  if ! jq -e 'has("oauthAccount")' "$OUT" >/dev/null; then
+    echo "WARNING: oauthAccount missing from $SRC — sandbox claude may prompt for login." >&2
+  fi
+  chmod 0600 "$OUT"
+  echo "seeded $OUT from host ~/.claude.json"
+}
+
+# Register and enable the hoop plugin in the sandbox profile so its
+# hooks load when claude subprocesses spawn. Two-part bootstrap:
+#   1. installed_plugins.json — claim the workspace mount as a plugin source.
+#      claude's plugin loader matches `enabledPlugins` entries against the
+#      keys here, so the plugin has to exist here even if --plugin-dir also
+#      points at the same location.
+#   2. settings.json:enabledPlugins — flip the bit. Without this, plugin
+#      discoverable but hooks dormant.
+# Idempotent: if both entries are already in place we leave them alone.
+ensure_hoop_plugin_enabled() {
+  local installed="$SANDBOX_CLAUDE_DIR/plugins/installed_plugins.json"
+  local settings="$SANDBOX_CLAUDE_DIR/settings.json"
+  local KEY="hoop@workspace"
+  local INSTALL_PATH="/opt/hoop"
+  local tmp
+  mkdir -p "$(dirname "$installed")"
+
+  # 1) installed_plugins.json — ensure {version:2, plugins:{<KEY>:[{...}]}}.
+  # `//= [...]` is jq's destructuring assignment: keep the existing array
+  # if present, otherwise install the seed. Bracket notation handles the
+  # @ in the key.
+  tmp="$(mktemp)"
+  if [ -f "$installed" ]; then
+    jq --arg key "$KEY" --arg path "$INSTALL_PATH" '
+      .version = (.version // 2)
+      | .plugins //= {}
+      | .plugins[$key] //= [{ scope: "user", installPath: $path, version: "0.1.0" }]
+    ' "$installed" > "$tmp" && mv "$tmp" "$installed" || { rm -f "$tmp"; return 1; }
+  else
+    jq -n --arg key "$KEY" --arg path "$INSTALL_PATH" '
+      { version: 2, plugins: { ($key): [{ scope: "user", installPath: $path, version: "0.1.0" }] } }
+    ' > "$installed"
+  fi
+
+  # 2) settings.json — flip enabledPlugins.<KEY> on. Same conditional-add
+  # pattern; leaves siblings and the file's other top-level keys untouched.
+  tmp="$(mktemp)"
+  if [ -f "$settings" ]; then
+    jq --arg key "$KEY" '
+      .enabledPlugins //= {}
+      | .enabledPlugins[$key] = true
+    ' "$settings" > "$tmp" && mv "$tmp" "$settings" || { rm -f "$tmp"; return 1; }
+  else
+    jq -n --arg key "$KEY" '{ enabledPlugins: { ($key): true } }' > "$settings"
+  fi
+
+  # 3) settings.json:hooks — seed the SANDBOX-ONLY hook wiring (permission
+  # gate + event emitters). Declared here, not in the plugin manifest, so the
+  # host (which also loads the hoop plugin) never runs them. Absolute
+  # container paths: the plugin tree is bind-mounted read-only at /opt/hoop.
+  tmp="$(mktemp)"
+  jq '.hooks = {
+    "PreToolUse": [ { "hooks": [
+      { "type":"command", "command":"/opt/hoop/hooks/scripts/permission-gate.sh", "timeout":130 },
+      { "type":"command", "command":"/opt/hoop/hooks/scripts/emit-event.sh PreToolUse", "timeout":5 }
+    ] } ],
+    "PostToolUse": [ { "hooks": [ { "type":"command", "command":"/opt/hoop/hooks/scripts/emit-event.sh PostToolUse", "timeout":5 } ] } ],
+    "SessionStart": [ { "hooks": [ { "type":"command", "command":"/opt/hoop/hooks/scripts/emit-event.sh SessionStart", "timeout":5 } ] } ],
+    "Stop": [ { "hooks": [ { "type":"command", "command":"/opt/hoop/hooks/scripts/emit-event.sh Stop", "timeout":5 } ] } ],
+    "UserPromptSubmit": [ { "hooks": [ { "type":"command", "command":"/opt/hoop/hooks/scripts/emit-event.sh UserPromptSubmit", "timeout":5 } ] } ]
+  }' "$settings" > "$tmp" && mv "$tmp" "$settings" || { rm -f "$tmp"; return 1; }
+}
+
+# Move files from the pre-restructure flat layout into the profile/ + .claude/
+# layout that the new mount expects. Skipped if profile/ is already populated.
+# Conservative on every step: only move what we recognise, leave the rest.
+migrate_legacy_profile_layout() {
+  # If profile/ already has either .claude.json or .credentials.json, the
+  # migration has run before (or this is a fresh install). Bail.
+  if [ -f "$SANDBOX_PROFILE/.claude.json" ] || [ -f "$SANDBOX_CLAUDE_DIR/.credentials.json" ]; then
+    return 0
+  fi
+
+  # Nothing to migrate if the legacy paths are absent.
+  local legacy_creds="$SANDBOX_PROFILE_ROOT/.credentials.json"
+  local legacy_config="$SANDBOX_PROFILE_ROOT/.claude.json"
+  local legacy_agentic="$SANDBOX_PROFILE_ROOT/hoop"
+  if [ ! -e "$legacy_creds" ] && [ ! -e "$legacy_config" ] && [ ! -e "$legacy_agentic" ]; then
+    return 0
+  fi
+
+  echo "migrating legacy sandbox profile layout -> $SANDBOX_PROFILE/"
+  [ -f "$legacy_creds" ]  && mv "$legacy_creds"  "$SANDBOX_CLAUDE_DIR/.credentials.json"
+  [ -f "$legacy_config" ] && mv "$legacy_config" "$SANDBOX_PROFILE/.claude.json"
+  if [ -d "$legacy_agentic" ]; then
+    mv "$legacy_agentic" "$SANDBOX_CLAUDE_DIR/hoop"
+  fi
+}
+
+cmd_status() {
+  "${COMPOSE[@]}" ps --status running --quiet dashboard 2>/dev/null | grep -q . \
+    && echo "running on http://localhost:$PORT/" \
+    || { echo "not running"; return 1; }
+}
+
+cmd_logs() {
+  exec "${COMPOSE[@]}" logs -f
+}
+
+cmd_stop() {
+  "${COMPOSE[@]}" down --remove-orphans
+}
+
+load_env_file() {
+  # Source the opt-in overrides /hoop:setup writes (OPENAI_API_KEY,
+  # EMBEDDING_BASE_URL / EMBEDDING_MODEL, GH_TOKEN). `set -a` exports every
+  # assignment so compose's ${VAR:-} interpolation picks them up.
+  [ -f "$HOOP_ENV_FILE" ] || return 0
+  echo "loading overrides from $HOOP_ENV_FILE"
+  set -a; . "$HOOP_ENV_FILE"; set +a
+  # Forward the gh token for the account chosen in setup, if the file named one.
+  if [ -n "${HOOP_GH_ACCOUNT:-}" ] && command -v gh >/dev/null 2>&1; then
+    GH_TOKEN="$(gh auth token --user "$HOOP_GH_ACCOUNT" 2>/dev/null || true)"
+    export GH_TOKEN
+  fi
+}
+
+detect_dmr() {
+  # Sets EMBEDDING_BASE_URL / EMBEDDING_MODEL if Docker Model Runner is up.
+  # Embeddings are sandbox-owned now, so DMR env is forwarded into the
+  # agent-sandbox service (not dashboard). An explicit endpoint from the env
+  # file (OpenAI key or custom base URL) wins — don't clobber it.
+  if [ -n "${EMBEDDING_BASE_URL:-}" ] || [ -n "${OPENAI_API_KEY:-}" ]; then
+    echo "embedding backend configured via $HOOP_ENV_FILE -> semantic search enabled"
+    return 0
+  fi
+  local dmr_url="http://localhost:12434/engines/llama.cpp/v1"
+  if curl -fsS --connect-timeout 1 "$dmr_url/models" >/dev/null 2>&1; then
+    export EMBEDDING_BASE_URL="http://host.docker.internal:12434/engines/llama.cpp/v1"
+    export EMBEDDING_MODEL="${EMBEDDING_MODEL:-ai/nomic-embed-text-v1.5}"
+    echo "DMR detected at localhost:12434 -> semantic search enabled"
+  else
+    echo "No embedding backend -> BM25-only search."
+    echo "  Enable semantic search via /hoop:setup — portable option is Ollama:"
+    echo "    ollama pull nomic-embed-text  (then set EMBEDDING_BASE_URL/MODEL in $HOOP_ENV_FILE)"
+    echo "  or Docker Model Runner on :12434 (Docker Desktop 4.42+, or 'docker model' on Docker CE)."
+  fi
+}
+
+cmd_start() {
+  preflight
+  load_env_file
+  detect_dmr
+
+  echo "hoop-dashboard: building images if needed (first launch ~2-3 min)..."
+  "${COMPOSE[@]}" up -d --build || { echo "compose up failed"; return 1; }
+
+  echo "waiting for http://localhost:$PORT/api/health ..."
+  for _ in $(seq 1 60); do
+    if curl -fsS "http://localhost:$PORT/api/health" >/dev/null 2>&1; then
+      # No auto-open: the user opens the URL when they're ready. Auto-open
+      # interferes with focus, can spawn a duplicate tab that opens an
+      # extra SSE stream, and is generally noisier than helpful.
+      echo "ready at http://localhost:$PORT/"
+      return 0
+    fi
+    sleep 0.5
+  done
+
+  echo "WARNING: dashboard didn't respond within ~30s. Recent logs:"
+  "${COMPOSE[@]}" logs --tail 40
+  return 1
+}
+
+case "${1:-start}" in
+  start)   cmd_start ;;
+  stop)    cmd_stop ;;
+  restart) cmd_stop; cmd_start ;;
+  status)  cmd_status ;;
+  logs)    cmd_logs ;;
+  *) echo "usage: $0 {start|stop|restart|status|logs}"; exit 2 ;;
+esac

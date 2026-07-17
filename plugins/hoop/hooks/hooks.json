@@ -1,0 +1,27 @@
+{
+  "description": "hoop host-side hook: keep the sandbox's bind-mounted credentials in sync with the host Keychain on SessionStart/Stop. Sandbox-only hooks (permission gate + event emitters) are intentionally NOT declared here; the dashboard launcher seeds them into the sandbox profile settings.json so the host never runs them.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/refresh-sandbox-creds.sh --force",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/refresh-sandbox-creds.sh",
+            "timeout": 8
+          }
+        ]
+      }
+    ]
+  }
+}

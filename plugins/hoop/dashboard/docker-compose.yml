@@ -1,0 +1,126 @@
+name: hoop
+
+# Two-service runtime (sandboxed-agent model).
+#
+#   dashboard       — slim Next.js UI. No claude. No host-claude mounts. Talks
+#                     to agent-sandbox over a shared Unix domain socket.
+#   agent-sandbox   — owns the claude binary, the sandbox HTTP server, and the
+#                     bind-mounted Claude profile at ~/.claude/hoop/sandbox.
+#
+# The two services share a named volume that holds /var/run/hoop/
+# (the socket and the dashboard-readable sandbox.token).
+#
+# Launcher: plugins/hoop/dashboard/bin/hoop-dashboard.
+
+services:
+  agent-sandbox:
+    image: hoop-sandbox
+    build:
+      # Parent context so the Dockerfile can COPY shared/ alongside sandbox/.
+      context: ..
+      dockerfile: sandbox/Dockerfile
+
+    volumes:
+      # Sandbox-only Claude profile. Mounted at /home/agent so both
+      # ~/.claude.json (top-level config: oauthAccount, mcpServers, projects)
+      # and ~/.claude/ (state dir: credentials, plugins, sessions, hoop)
+      # land at the paths the claude CLI expects.
+      - type: bind
+        source: ${HOME}/.claude/hoop/sandbox/profile
+        target: /home/agent
+
+      # Shared UDS + token file. Dashboard reads sandbox.token from here.
+      - type: volume
+        source: hoop-run
+        target: /var/run/hoop
+
+      # Plugin source (read-only) so the sandbox can enumerate installed
+      # plugins for `--plugin-dir` resolution. Mounted under /opt where only
+      # root has access — the model running as `agent` cannot reach it,
+      # cannot tamper with hook scripts, and cannot confuse the read-only
+      # plugin tree with its own writable workdir.
+      - type: bind
+        source: ${HOOP_PLUGIN_ROOT:-..}
+        target: /opt/hoop
+        read_only: true
+
+    environment:
+      HOOP_PLUGIN_ROOT: /opt/hoop
+      EMBED_DIM: "768"
+      # Telemetry isolation (opt-in, configured by /hoop:setup → dashboard.env,
+      # forwarded by the launcher). Empty by default so this OPEN-SOURCE repo
+      # carries no org-specific endpoints or surprising outbound suppression.
+      #   HOOP_DISABLE_TELEMETRY=1 → master switch. The entrypoint (a) exports the
+      #     full set of Claude Code opt-outs (CLAUDE_CODE_DISABLE_NONESSENTIAL_
+      #     TRAFFIC + granular + DO_NOT_TRACK + claude-mem's toggle) so everything
+      #     that CHOOSES to phone home stops at the source, and (b) blackholes in
+      #     /etc/hosts the hosts that ignore those flags: the org OTEL collector
+      #     (auto-discovered from the mounted Claude settings + this env) plus a
+      #     curated Statsig/GrowthBook denylist. Fails open (connection-refused).
+      #   HOOP_OTEL_COLLECTOR_URL  → optional explicit host(s) to blackhole too
+      #     (first-boot before remote-settings populate, or per-tool telemetry
+      #     endpoints /hoop:setup discovers that lack an opt-out flag).
+      HOOP_DISABLE_TELEMETRY: ${HOOP_DISABLE_TELEMETRY:-}
+      HOOP_OTEL_COLLECTOR_URL: ${HOOP_OTEL_COLLECTOR_URL:-}
+      # Semantic-search embedding backend. Forwarded by the launcher from either
+      # Docker Model Runner auto-detection or ~/.claude/hoop/dashboard.env
+      # (OPENAI_API_KEY / EMBEDDING_BASE_URL / EMBEDDING_MODEL), configured by
+      # /hoop:setup. Absent → BM25-only search.
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      HOOP_EMBED_HOSTED_CONSENT: ${HOOP_EMBED_HOSTED_CONSENT:-}
+      # GitHub CLI auth for the sandbox agent — the launcher forwards the token
+      # for the host gh account chosen in /hoop:setup. Absent → gh unauthenticated.
+      GH_TOKEN: ${GH_TOKEN:-}
+
+    restart: unless-stopped
+
+  dashboard:
+    image: hoop-dashboard
+    build:
+      # Parent context so the Dockerfile can COPY shared/ alongside dashboard/.
+      context: ..
+      dockerfile: dashboard/Dockerfile
+
+    depends_on:
+      agent-sandbox:
+        condition: service_healthy
+
+    # Bind to host loopback only — single-user assumption.
+    ports:
+      - "127.0.0.1:${HOOP_PORT:-7842}:7842"
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # Share the UDS volume so the dashboard can connect to /var/run/hoop/sandbox.sock.
+    # group_add: 1100 lets `node` join the `hoop` group that owns the socket / token.
+    volumes:
+      - type: volume
+        source: hoop-run
+        target: /var/run/hoop
+      - type: volume
+        source: hoop-dashboard-state
+        target: /var/lib/hoop/dashboard
+
+    group_add:
+      - "1100"
+
+    environment:
+      HOOP_SANDBOX_SOCKET: /var/run/hoop/sandbox.sock
+      HOOP_SANDBOX_TOKEN_FILE: /var/run/hoop/sandbox.token
+      HOOP_DASHBOARD_TOKEN_FILE: /var/lib/hoop/dashboard/dashboard.token
+      # Forwarded by bin/hoop-dashboard from ~/.local/share/hoop/dashboard.token.
+      # The middleware (edge runtime) only reads this env; no file IO in the
+      # request hot path.
+      HOOP_DASHBOARD_TOKEN: ${HOOP_DASHBOARD_TOKEN:-}
+      # HMAC secret for signing/verifying ephemeral peer share tokens. Enables
+      # session sharing; absent → sharing is disabled (peer auth refuses).
+      HOOP_PEER_SIGNING_SECRET: ${HOOP_PEER_SIGNING_SECRET:-}
+
+    restart: unless-stopped
+
+volumes:
+  hoop-run:
+  hoop-dashboard-state:
