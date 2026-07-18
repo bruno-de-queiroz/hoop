@@ -22,6 +22,60 @@ import hljs from "highlight.js/lib/common";
  */
 const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
 
+// A file mention at a word boundary: "@" + a path-shaped token (also matches
+// dotfiles like "@.gitignore" and nested paths like "@src/index.ts"). The
+// lookbehind keeps it from firing mid-word, so emails (user@host) and
+// scoped-package refs preceded by a letter are left alone; it must start with a
+// word char or "." so a bare "@" or "@@" isn't matched.
+const FILE_MENTION = /(?<=^|\s)@[\w.][\w./-]*/g;
+
+interface HastNode {
+  type: string;
+  tagName?: string;
+  value?: string;
+  children?: HastNode[];
+  properties?: Record<string, unknown>;
+}
+
+function splitFileMentions(value: string): HastNode[] {
+  const out: HastNode[] = [];
+  let last = 0;
+  for (const m of value.matchAll(FILE_MENTION)) {
+    const start = m.index ?? 0;
+    if (start > last) out.push({ type: "text", value: value.slice(last, start) });
+    out.push({
+      type: "element",
+      tagName: "span",
+      properties: { className: ["hoop-file-chip"] },
+      children: [{ type: "text", value: m[0] }],
+    });
+    last = start + m[0].length;
+  }
+  if (last < value.length) out.push({ type: "text", value: value.slice(last) });
+  return out;
+}
+
+// rehype plugin: wrap `@file` mentions in text nodes as chip spans. Skips code /
+// pre subtrees, where "@" is literal source, not a mention.
+function rehypeFileChips() {
+  const walk = (node: HastNode) => {
+    if (!node.children || node.tagName === "code" || node.tagName === "pre") return;
+    const next: HastNode[] = [];
+    for (const child of node.children) {
+      if (child.type === "text" && typeof child.value === "string" && child.value.includes("@")) {
+        next.push(...splitFileMentions(child.value));
+      } else {
+        walk(child);
+        next.push(child);
+      }
+    }
+    node.children = next;
+  };
+  return (tree: HastNode) => walk(tree);
+}
+
+const REHYPE_FILE_CHIPS = [rehypeFileChips];
+
 const COMPONENTS: Components = {
   p: ({ children }) => <p className="my-1 break-words [overflow-wrap:anywhere]">{children}</p>,
   h1: ({ children }) => <div className="text-[15px] font-semibold text-ink mt-2 mb-1">{children}</div>,
@@ -98,11 +152,31 @@ const COMPONENTS: Components = {
       <code className="px-1 py-0.5 rounded bg-sunken text-ink font-mono text-[11px]">{children}</code>
     );
   },
+  // Only ever present when the file-chip rehype plugin is active (see below):
+  // an `@file` mention rendered as a compact inline chip instead of plain text.
+  span: ({ className, children }) => {
+    const cls = Array.isArray(className) ? className.join(" ") : className ?? "";
+    if (cls.includes("hoop-file-chip")) {
+      return (
+        <span className="mx-px inline-flex items-center rounded bg-sdk/15 px-1 font-mono text-[11px] text-sdk align-baseline">
+          {children}
+        </span>
+      );
+    }
+    return <span className={cls || undefined}>{children}</span>;
+  },
 };
 
-export function Markdown({ source }: { source: string }) {
+// `fileChips` opts into `@file` mention chips — enabled for user/peer messages
+// (the composer's autocomplete inserts these), left off for assistant/plan
+// content where a stray "@token" shouldn't be reinterpreted as a file.
+export function Markdown({ source, fileChips = false }: { source: string; fileChips?: boolean }) {
   return (
-    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={COMPONENTS}>
+    <ReactMarkdown
+      remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={fileChips ? REHYPE_FILE_CHIPS : undefined}
+      components={COMPONENTS}
+    >
       {source}
     </ReactMarkdown>
   );

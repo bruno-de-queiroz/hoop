@@ -110,7 +110,7 @@ const HostBubble = memo(function HostBubble({
       >
         {text && (
           <div className="break-words">
-            <Markdown source={text} />
+            <Markdown source={text} fileChips />
           </div>
         )}
         {images.length > 0 && (
