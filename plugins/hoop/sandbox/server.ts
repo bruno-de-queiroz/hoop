@@ -1014,16 +1014,24 @@ add("POST", "/ingest", async (req, res) => {
   let line = trimmed;
   if (event.hook === "UserPromptSubmit" && event.ctx && typeof event.ctx.session_id === "string") {
     if (event.ctx.author == null) {
-      const { author, thumbnails, kind } = popPendingAuthor(event.ctx.session_id);
+      const { author, thumbnails, kind, promptOverride } = popPendingAuthor(event.ctx.session_id);
       if (author != null) event.ctx.author = author;
       // Persist ≤512 image thumbnails onto the turn's event so the transcript
       // (host + peers) can show what was attached. Kept small on purpose — the
       // full image goes only to the model, never into the broadcast event.
       if (thumbnails && thumbnails.length) event.ctx.images = thumbnails;
-      // A lifecycle marker (e.g. "plan-approval") queued by writeUserTurn, so
-      // the transcript can re-style this turn rather than show it as plain chat.
+      // A lifecycle marker (e.g. "plan-approval", "command") queued by
+      // writeUserTurn, so the transcript can re-style this turn rather than show
+      // it as plain chat.
       if (kind != null) event.ctx.kind = kind;
-      if (author != null || (thumbnails && thumbnails.length) || kind != null) line = JSON.stringify(event);
+      // Restore the original typed command text (e.g. "/plan add caching"). The
+      // sandbox forwards a `/plan` turn's stripped task to the model, so claude
+      // records the prompt WITHOUT the "/plan" prefix; overriding it here keeps
+      // the transcript honest and lets the optimistic row reconcile (no dupe).
+      if (promptOverride != null) event.ctx.prompt = promptOverride;
+      if (author != null || (thumbnails && thumbnails.length) || kind != null || promptOverride != null) {
+        line = JSON.stringify(event);
+      }
     }
   }
   // Turn over → drop the "model is thinking" flag so every viewer's indicator

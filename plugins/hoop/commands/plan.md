@@ -20,9 +20,13 @@ sandbox enforces this mechanically rather than by asking the model nicely:
   - **Reject** (with feedback) → the session stays read-only and the agent
     revises the plan against your comments.
 
-The brief injected for a plan turn lives in `prompts/plan.md` in this plugin and
-can be edited without rebuilding the sandbox. Enforcement lives in the sandbox
-permission policy + the PreToolUse gate (`hooks/scripts/permission-gate.sh`), so
-it holds regardless of whether the model "cooperates."
+The task is forwarded to the model verbatim (just the `/plan` prefix stripped).
+Steering to finish via `submit_plan` rather than prose lives in the session's
+appended system prompt (`PLAN_SYSTEM_PROMPT` in `sandbox/lib/active-sessions.ts`,
+passed via `--append-system-prompt`) — a standing rule that never appears in the
+transcript and is inert outside plan mode. Enforcement is separate and does not
+depend on the model cooperating: it lives in the sandbox permission policy + the
+PreToolUse gate (`hooks/scripts/permission-gate.sh`), which holds the session
+read-only and captures the plan deterministically.
 
 Usage: `/plan add rate limiting to the login endpoint`

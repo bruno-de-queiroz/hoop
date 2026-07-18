@@ -174,6 +174,50 @@ const PlanDecisionNotice = memo(function PlanDecisionNotice({
   );
 });
 
+// A slash-command turn (`/plan`, `/cost`, a plugin command, …). It IS a host
+// action, so it stays right-aligned with the host label — but it's an
+// instruction to the tooling, not conversational prose, so it renders as a
+// compact accent-tinted monospace command line (slash glyph + command text)
+// rather than an ordinary chat bubble. The sandbox tags these `kind="command"` and
+// restores the original typed text (see writeUserTurn), so `/plan add caching`
+// shows verbatim here even though the model only received "add caching".
+const CommandCard = memo(function CommandCard({
+  row,
+  tone,
+}: {
+  row: EventRow;
+  tone: "host" | "peer";
+}) {
+  const text = userPromptText(row);
+  // Split the command token (`/plan`) from its arguments so the token sits in
+  // the accent badge and the args read as ordinary text beside it.
+  const match = /^(\/\S+)\s*([\s\S]*)$/.exec(text.trim());
+  const command = match ? match[1] : text.trim();
+  const args = match ? match[2].trim() : "";
+  const author = tone === "peer" ? `${row.author ?? "peer"} · peer` : "host";
+  return (
+    <div className="flex flex-col items-end gap-1" data-testid="command-turn">
+      <div className="flex items-center gap-1.5 pr-1">
+        <span
+          className={cn(
+            "text-[10px] uppercase tracking-wide",
+            tone === "peer" ? "text-sdk" : "text-ink-faint",
+          )}
+        >
+          {author}
+        </span>
+        <span className="font-mono text-[10px] text-ink-faint">{clockTime(row.ts)}</span>
+      </div>
+      <div className="flex items-center gap-2 rounded-xl px-3 py-2 font-mono text-[12px] ring-1 ring-inset ring-accent/30 bg-accent/[0.08] text-ink max-w-full">
+        <span className="flex h-5 p-1 shrink-0 items-center justify-center rounded-md bg-accent/15 text-accent font-semibold leading-none">
+          {command}
+        </span>
+        {args && <span className="break-all text-ink">{args}</span>}
+      </div>
+    </div>
+  );
+});
+
 const AssistantBubble = memo(function AssistantBubble({ row }: { row: EventRow }) {
   const text = assistantText(row);
   return (
@@ -398,6 +442,8 @@ export const ShellTranscript = memo(function ShellTranscript({
             key: `u-${e.id}`,
             node: <PlanDecisionNotice row={e} variant={e.kind === "plan-approval" ? "approval" : "rejection"} />,
           });
+        } else if (e.kind === "command") {
+          items.push({ key: `u-${e.id}`, node: <CommandCard row={e} tone={authorTone(e)} /> });
         } else {
           items.push({ key: `u-${e.id}`, node: <HostBubble row={e} tone={authorTone(e)} /> });
         }

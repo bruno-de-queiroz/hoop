@@ -137,6 +137,12 @@ describe("startNewConversation", () => {
     expect(args[i + 1]).toBe(sessionId);
     // A fresh spawn is NOT a resume.
     expect(args).not.toContain("--resume");
+    // Plan-mode steering rides on the session's appended system prompt (invisible
+    // to the transcript), not on per-turn text injection.
+    const sp = args.indexOf("--append-system-prompt");
+    expect(sp).toBeGreaterThanOrEqual(0);
+    expect(args[sp + 1]).toMatch(/submit_plan/);
+    expect(args[sp + 1]).toMatch(/plan mode/i);
   });
 });
 
@@ -455,11 +461,15 @@ describe("/plan turn (plan-mode trigger)", () => {
     expect(control?.request?.mode).toBe("plan");
     const user = fs.find((f) => f.type === "user");
     // The task is forwarded VERBATIM with the /plan prefix stripped — no
-    // hoop-authored planning brief. Plan mode is engaged purely via the
-    // set_permission_mode control flip; the model drives the plan MCP tools.
+    // per-turn planning brief lands in the conversation. Plan mode is engaged
+    // via the set_permission_mode flip; the model is steered to submit_plan by
+    // the session's appended system prompt (asserted in the spawn test), not by
+    // text injected into this turn.
     expect(user?.message?.content?.[0]?.text).toBe("implement the widget");
     expect(user?.message?.content?.[0]?.text).not.toContain("/plan");
     expect(user?.message?.content?.[0]?.text).not.toMatch(/ExitPlanMode/);
+    // The steering must never leak into the visible turn text.
+    expect(user?.message?.content?.[0]?.text).not.toMatch(/submit_plan/);
     const joined = writes.join("");
     expect(joined.indexOf("set_permission_mode")).toBeLessThan(joined.indexOf("implement the widget"));
   });
@@ -471,9 +481,10 @@ describe("/plan turn (plan-mode trigger)", () => {
     expect(fs.find((f) => f.type === "control_request")?.request?.mode).toBe("plan");
     const text = fs.find((f) => f.type === "user")?.message?.content?.[0]?.text;
     // Bare `/plan` can't forward an empty turn, so it gets a minimal neutral
-    // nudge — still no planning brief / ExitPlanMode instructions.
+    // nudge — still no planning brief / ExitPlanMode instructions in the turn.
     expect(text).toMatch(/task we've been discussing/i);
     expect(text).not.toMatch(/ExitPlanMode/);
+    expect(text).not.toMatch(/submit_plan/);
   });
 
   it("leaves a normal turn untouched (no mode change, verbatim text)", async () => {
@@ -481,6 +492,32 @@ describe("/plan turn (plan-mode trigger)", () => {
     await mod.writeUserTurn("sid-normal", "just do the thing");
     expect(writes.join("")).not.toContain("set_permission_mode");
     expect(frames(writes).find((f) => f.type === "user")?.message?.content?.[0]?.text).toBe("just do the thing");
+  });
+
+  it("tags a /plan turn kind=command and preserves the original typed text for the transcript", async () => {
+    await primeSession("sid-plan-attr");
+    await mod.writeUserTurn("sid-plan-attr", "/plan implement the widget");
+    // The model got the stripped task (asserted above), but the transcript must
+    // reconcile with the optimistic "/plan …" row and show what was typed.
+    const meta = mod.popPendingAuthor("sid-plan-attr");
+    expect(meta.kind).toBe("command");
+    expect(meta.promptOverride).toBe("/plan implement the widget");
+  });
+
+  it("does not tag or override a plain-text turn", async () => {
+    await primeSession("sid-plain-attr");
+    await mod.writeUserTurn("sid-plain-attr", "just do the thing");
+    const meta = mod.popPendingAuthor("sid-plain-attr");
+    expect(meta.kind).toBeNull();
+    expect(meta.promptOverride).toBeNull();
+  });
+
+  it("does not tag a message that merely starts with a slash but isn't a command", async () => {
+    await primeSession("sid-slashy");
+    await mod.writeUserTurn("sid-slashy", "/etc/hosts got clobbered, please check");
+    const meta = mod.popPendingAuthor("sid-slashy");
+    expect(meta.kind).toBeNull();
+    expect(meta.promptOverride).toBeNull();
   });
 
   it("attaches image blocks (image first, then text) to a turn", async () => {
@@ -501,6 +538,50 @@ describe("/plan turn (plan-mode trigger)", () => {
     const content = frames(writes).find((f) => f.type === "user")?.message?.content;
     expect(content).toHaveLength(1);
     expect(content[0].type).toBe("image");
+  });
+});
+
+describe("control commands (/model, /stop) echo once as kind=command", () => {
+  async function prime(sid: string) {
+    await mod.startNewConversation({ cwd: "/x" });
+    const child = shared.children[shared.children.length - 1];
+    (child.stdout as any).pushLine({ type: "system", session_id: sid });
+    await flush();
+    return child;
+  }
+  const ingested = () => ingestEventLineMock.mock.calls.map((c) => JSON.parse(c[0] as string));
+  const commandEvents = () =>
+    ingested().filter((e) => e.hook === "UserPromptSubmit" && e.ctx?.kind === "command");
+  const stopEvents = () => ingested().filter((e) => e.hook === "Stop");
+
+  it("setSessionModel echoes `/model <alias>` once, then a Stop confirmation", async () => {
+    await prime("sid-model");
+    mod.setSessionModel("sid-model", "opus", "host");
+    const cmds = commandEvents();
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0].ctx.prompt).toBe("/model opus");
+    expect(cmds[0].ctx.author).toBe("host");
+    // The switch confirmation follows as the result — never a message to the model.
+    expect(stopEvents().some((e) => /Model set to opus/.test(e.ctx.last_assistant_message))).toBe(true);
+  });
+
+  it("interruptSession echoes `/stop` once, then a Stop confirmation", async () => {
+    await prime("sid-stop");
+    await mod.interruptSession("sid-stop", "host");
+    const cmds = commandEvents();
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0].ctx.prompt).toBe("/stop");
+    expect(cmds[0].ctx.author).toBe("host");
+    expect(stopEvents().some((e) => /Turn stopped/.test(e.ctx.last_assistant_message))).toBe(true);
+  });
+
+  it("interruptSession is a silent no-op when nothing is running (no echo)", async () => {
+    await prime("sid-idle");
+    // Kill the child so there's nothing to interrupt.
+    const slotChild = shared.children[shared.children.length - 1];
+    slotChild.killed = true;
+    await mod.interruptSession("sid-idle", "host");
+    expect(commandEvents()).toHaveLength(0);
   });
 });
 
@@ -686,6 +767,52 @@ describe("plan-mode enforcement (permission policy)", () => {
     const joined = writes.join("");
     expect(joined).toContain("Go with X");
     expect(joined.toLowerCase()).toContain("answer to the question");
+  });
+
+  it("surfaces an AskUserQuestion DURING a /plan turn instead of hard-denying it", async () => {
+    await prime("sid-ask-plan");
+    await mod.writeUserTurn("sid-ask-plan", "/plan build the widget");
+    const input = { questions: [{ question: "Which source?", options: [{ label: "A" }, { label: "B" }] }] };
+    const { requestId } = mod.createPermissionRequest({
+      sessionId: "sid-ask-plan", toolName: MCP_ASK, input, toolUseId: "qp1",
+    });
+    // A clarifying question is read-only, so it surfaces as a pending card
+    // rather than getting the plan-mode hard-deny that mutating tools receive.
+    const q = mod.getPendingRequests("sid-ask-plan").find((p) => p.requestId === requestId);
+    expect(q).toBeDefined();
+    expect(q!.toolName).toBe("AskUserQuestion");
+    expect(q!.planMode).toBe(true);
+    expect((await mod.awaitPermissionDecision(requestId, 200)).decision).toBe("timeout");
+    // A mutating tool in the same plan turn is still hard-denied — the carve-out
+    // is scoped to AskUserQuestion only.
+    const w = mod.createPermissionRequest({
+      sessionId: "sid-ask-plan", toolName: "Write", input: { file_path: "/x" }, toolUseId: "wp1",
+    });
+    const wr = await mod.awaitPermissionDecision(w.requestId, 500);
+    expect(wr.decision).toBe("deny");
+    expect(wr.reason).toMatch(/read-only|plan/i);
+  });
+
+  it("stays in plan mode after answering a question asked during planning", async () => {
+    await prime("sid-ask-plan2");
+    await mod.writeUserTurn("sid-ask-plan2", "/plan build X");
+    const { requestId } = mod.createPermissionRequest({
+      sessionId: "sid-ask-plan2", toolName: MCP_ASK,
+      input: { questions: [{ question: "Which?", options: [{ label: "X" }, { label: "Y" }] }] }, toolUseId: "qp2",
+    });
+    // Operator answers (deny + answer text = the native ask relay path).
+    await mod.respondToPermission("sid-ask-plan2", requestId, "deny", "Go with X");
+    await flush();
+    // Regression guard: the answer turn must NOT silently drop plan enforcement.
+    // A mutation is still hard-denied (no dashboard card), so the model keeps
+    // planning until it submits a plan for approval.
+    const w = mod.createPermissionRequest({
+      sessionId: "sid-ask-plan2", toolName: "Write", input: { file_path: "/x" }, toolUseId: "wp2",
+    });
+    const wr = await mod.awaitPermissionDecision(w.requestId, 500);
+    expect(wr.decision).toBe("deny");
+    expect(wr.reason).toMatch(/read-only|plan/i);
+    expect(mod.getPendingRequests("sid-ask-plan2").some((p) => p.toolUseId === "wp2")).toBe(false);
   });
 });
 

@@ -18,9 +18,34 @@ import { cn } from "../ui/cn";
 // image attach + round accent send) and hint bar, wired to the provider: plain
 // text → send, `!cmd` → runBash, `>msg` → participant chat, and image
 // attachments (button or paste) that ride along on send/chat. Typing broadcasts
-// via presence. A spectate peer gets the read-only note. The slash / @file
-// affordances (the complex, still-moving features) stay deferred — noted in the
-// hint, not stubbed as dead buttons.
+// via presence. A spectate peer gets the read-only note.
+
+// Where a composed line goes. Plain text → the model (`send`); `!cmd` → bash;
+// `>msg` → participant chat; and the two client-intercepted control commands,
+// `/stop` (abort the in-flight turn) and `/model <alias>` (switch the session
+// model). The control commands act on the session directly and are NEVER
+// forwarded to the model — claude's built-in /model and /stop are TUI-only, so
+// leaving them in the message path just echoes them to the agent as plain text
+// and never actually stops/switches. Pure so the routing is unit-testable
+// without standing up the whole composer + providers.
+export type ComposerRoute =
+  | { kind: "bash"; command: string }
+  | { kind: "chat"; text: string }
+  | { kind: "stop" }
+  | { kind: "model"; model: string }
+  | { kind: "send"; text: string };
+
+export function classifyComposerInput(raw: string, hasImages: boolean): ComposerRoute {
+  // Bash is text-only; an attachment forces the send/chat path.
+  if (raw.startsWith("!") && !hasImages) return { kind: "bash", command: raw.slice(1).trim() };
+  if (raw.startsWith(">")) return { kind: "chat", text: raw.slice(1).trim() };
+  if (!hasImages) {
+    if (/^\/stop$/.test(raw)) return { kind: "stop" };
+    const model = /^\/model\s+(\S[\s\S]*)$/.exec(raw);
+    if (model) return { kind: "model", model: model[1].trim() };
+  }
+  return { kind: "send", text: raw };
+}
 
 function initials(s: string): string {
   const parts = s.trim().split(/\s+/).filter(Boolean);
@@ -96,9 +121,7 @@ export const ShellComposer = memo(function ShellComposer({
     const attached = images;
     const hasImages = attached.length > 0;
     if ((!raw && !hasImages) || busy) return;
-    // Bash is text-only; images force the send/chat path.
-    const bash = raw.startsWith("!") && !hasImages;
-    const chat = !bash && raw.startsWith(">");
+    const route = classifyComposerInput(raw, hasImages);
     setBusy(true);
     setTyping(false);
     histIdxRef.current = -1;
@@ -109,12 +132,22 @@ export const ShellComposer = memo(function ShellComposer({
     setImages([]);
     if (taRef.current) taRef.current.style.height = "auto";
     try {
-      if (bash) {
-        await active.runBash(raw.slice(1).trim());
-      } else if (chat) {
-        await active.chat(raw.slice(1).trim(), hasImages ? toChatImages(attached) : undefined);
-      } else {
-        await active.send(raw, hasImages ? toSendImages(attached) : undefined);
+      switch (route.kind) {
+        case "bash":
+          await active.runBash(route.command);
+          break;
+        case "chat":
+          await active.chat(route.text, hasImages ? toChatImages(attached) : undefined);
+          break;
+        case "stop":
+          await active.stop();
+          break;
+        case "model":
+          await active.setModel(route.model);
+          break;
+        case "send":
+          await active.send(route.text, hasImages ? toSendImages(attached) : undefined);
+          break;
       }
     } catch {
       setText(raw);

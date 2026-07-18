@@ -22,6 +22,7 @@ import { discoverInstalledPluginDirs } from "./plugin-paths";
 import { isCwdAllowed } from "./cwd-policy";
 import { isGitPush } from "./peer-policy";
 import { randomSessionName } from "./random-name";
+import { listSlashCommands } from "./commands";
 import { log } from "@shared/logger";
 
 /**
@@ -138,6 +139,11 @@ export interface PendingPermissionRequest {
    * and stop). No hook waits on it — approve/reject dispatch a follow-up turn
    * rather than resolving a permission gate. */
   synthetic?: boolean;
+  /** True when this ask was raised while the session was in a `/plan` turn
+   * (slot.planTurnActive). AskUserQuestion is allowed to surface during plan
+   * mode (clarifying questions are read-only); this flag lets the answer relay
+   * keep the session in plan mode instead of silently dropping enforcement. */
+  planMode?: boolean;
 }
 
 interface LiveSlot {
@@ -154,7 +160,7 @@ interface LiveSlot {
   // transcript can attribute "who sent this" in a shared session. Best-effort:
   // popped null (→ system/replay) when empty; bounded by max length + child
   // close so a crash can't mis-attribute a later turn.
-  pendingAuthors: Array<{ author: string | null; shareId: string | null; at: number; thumbnails?: TurnImage[]; kind?: string | null }>;
+  pendingAuthors: Array<{ author: string | null; shareId: string | null; at: number; thumbnails?: TurnImage[]; kind?: string | null; promptOverride?: string }>;
   // Who drove the turn currently executing (set when its UserPromptSubmit is
   // attributed, valid until the next turn). Lets a PreToolUse permission ask
   // — which fires later in the same turn — know which peer triggered it.
@@ -595,6 +601,24 @@ const PLAN_READONLY_TOOLS = new Set([
   "Read", "Glob", "Grep", "ToolSearch", "WebFetch", "WebSearch", "NotebookRead", "TodoWrite",
 ]);
 
+// Appended to the session's system prompt at spawn (`--append-system-prompt`,
+// see the arg builder). This is a STANDING behavior rule, not a per-turn
+// message: it never appears in the transcript, and it's phrased conditionally so
+// it's inert on ordinary turns and only takes effect once the session is in plan
+// mode. Its one job is to stop the model from ending a plan turn with the plan
+// written as prose instead of submitted via the tool — the only action that
+// actually surfaces a review. It names `submit_plan` unqualified (the model
+// resolves it to the namespaced MCP tool) and deliberately omits enter_plan_mode:
+// `/plan` engages plan mode via the set_permission_mode flip, so telling the
+// model to re-enter it only invites confusion.
+const PLAN_SYSTEM_PROMPT =
+  "When this session is in plan mode (read-only: edits, shell commands, and " +
+  "subagents are blocked), you MUST finish the turn by calling the `submit_plan` " +
+  "tool with your full plan — a concise numbered list of steps, the files/areas " +
+  "you'd touch, and how you'd verify it. Describing the plan as an ordinary " +
+  "message does NOT submit it: a plan is captured for human review only when you " +
+  "call `submit_plan`. Investigate first with Read/Grep/Glob, then submit.";
+
 // The interactive tools headless mode lacks come from the bundled hoop MCP
 // server (see plugins/hoop/.mcp.json + mcp/tools-server.mjs). Claude namespaces
 // plugin MCP tools as `mcp__plugin_hoop_tools__<tool>`; we match tolerantly
@@ -659,18 +683,39 @@ export async function writeUserTurn(
   // internal caller (plan approve/reject) set the mode explicitly.
   const planMatch = /^\/plan\b[ \t]*([\s\S]*)$/.exec(text.trimStart());
   const mode = opts?.mode ?? (planMatch ? "plan" : undefined);
-  // Forward the user's task VERBATIM — no hoop-authored planning brief. The
-  // mechanism is entirely mechanical: the set_permission_mode flip (below) makes
-  // the session read-only, the bundled plan MCP server exposes enter_plan_mode/
-  // submit_plan, and the gate enforces read-only + captures the plan. A capable
-  // model in plan mode discovers and drives those tools on its own (verified
-  // live: it goes read-only, ToolSearches for the submit tool, and calls it — no
-  // brief needed). A bare `/plan` with no task can't forward an empty turn, so it
-  // gets a minimal neutral nudge rather than injected planning instructions.
+  // Forward the user's task VERBATIM (just the `/plan` prefix stripped). We do
+  // NOT prepend a planning brief to the turn: that would land in the model's
+  // real conversation and read like a system prompt bolted onto the user's
+  // message. The steering that makes the model finish via submit_plan instead
+  // of describing the plan in prose lives in the session's appended system
+  // prompt (PLAN_SYSTEM_PROMPT, passed at spawn) — invisible to the transcript
+  // and inert outside plan mode. Enforcement is separate and mechanical: the
+  // set_permission_mode flip (below) makes the session read-only and the gate
+  // captures the plan on submit_plan/ExitPlanMode. A bare `/plan` with no task
+  // can't forward an empty turn, so it gets a minimal neutral nudge.
   const planTask = planMatch ? planMatch[1].trim() : "";
   const turnText = planMatch
     ? planTask || "Propose a plan for the task we've been discussing."
     : text;
+
+  // Slash-command turns get tagged `kind: "command"` so the transcript can
+  // render them distinctly (a command card, not an ordinary chat bubble). We
+  // also carry the ORIGINAL typed text as `promptOverride`: for `/plan` the
+  // sandbox forwards only the stripped task to the model, so claude's
+  // UserPromptSubmit hook records the task WITHOUT the `/plan` prefix. Without
+  // the override the transcript's optimistic row (which holds "/plan …") never
+  // reconciles with the real event (which holds "…"), and the message shows up
+  // twice. Restoring the typed text here fixes the dupe at the source and keeps
+  // the history/peers correct too. Command detection is authoritative: the
+  // leading token must match a known slash command (or the `/plan` intercept),
+  // so a normal message that merely starts with "/" (e.g. a path) isn't tagged.
+  const commandName = /^\/([a-zA-Z][\w:-]*)/.exec(text.trimStart())?.[1] ?? null;
+  const isCommandTurn =
+    !opts?.kind &&
+    commandName != null &&
+    (commandName === "plan" || listSlashCommands(slot.meta.cwd).some((c) => c.name === commandName));
+  const turnKind = opts?.kind ?? (isCommandTurn ? "command" : null);
+  const promptOverride = isCommandTurn ? text.trim() : undefined;
 
   // Per-turn plan tracking. In plan mode the gate holds the session read-only
   // until the model calls submit_plan/ExitPlanMode — that call is what surfaces
@@ -686,7 +731,7 @@ export async function writeUserTurn(
   // ordinary turn clears it, so the window is exactly this one turn.
   slot.autoAllowPlanRun = opts?.autoAllowRun === true;
 
-  slot.pendingAuthors.push({ author, shareId, at: Date.now(), thumbnails: opts?.thumbnails, kind: opts?.kind });
+  slot.pendingAuthors.push({ author, shareId, at: Date.now(), thumbnails: opts?.thumbnails, kind: turnKind, promptOverride });
   if (slot.pendingAuthors.length > MAX_PENDING_AUTHORS) slot.pendingAuthors.shift();
   // Deliver the turn. The mode flip is ordered on the same stdin pipe so it
   // lands before the turn. Kept as a closure because we may have to replay the
@@ -718,7 +763,7 @@ export async function writeUserTurn(
       slot.planTurnActive = mode === "plan";
       slot.autoAllowPlanRun = opts?.autoAllowRun === true;
       slot.lastAssistantText = undefined;
-      slot.pendingAuthors.push({ author, shareId, at: Date.now(), thumbnails: opts?.thumbnails, kind: opts?.kind });
+      slot.pendingAuthors.push({ author, shareId, at: Date.now(), thumbnails: opts?.thumbnails, kind: turnKind, promptOverride });
       if (slot.pendingAuthors.length > MAX_PENDING_AUTHORS) slot.pendingAuthors.shift();
       activeSessionsBus.emit("change", { sessionId: freshId, status: slot.meta.status });
       slot.writeQueue = slot.writeQueue.then(sendTurn(freshId));
@@ -753,6 +798,17 @@ export async function interruptSession(sessionId: string, byAuthor: string | nul
   const child = slot.child;
   if (!child || child.killed) return; // nothing running to stop
   const canonicalSid = slot.meta.sessionId;
+  // Echo the `/stop` command once in the transcript (kind:"command") so the
+  // host action is visible and reads like any other command — the request. The
+  // synthesized Stop below is its result. This is what the composer's client-
+  // side interception routes here (the command never reaches the model).
+  try {
+    ingestEventLine(JSON.stringify({
+      ts: new Date().toISOString(),
+      hook: "UserPromptSubmit",
+      ctx: { session_id: canonicalSid, prompt: "/stop", author: byAuthor ?? "host", kind: "command" },
+    }));
+  } catch { /* best-effort */ }
   // Intentional kill — don't let the close handler flip the session to dormant.
   slot.suppressDormantOnce = true;
   try { child.kill("SIGTERM"); } catch { /* already gone */ }
@@ -798,6 +854,22 @@ export function setSessionModel(
     slot.suppressDormantOnce = true;
     try { child.kill("SIGTERM"); } catch { /* already gone */ }
   }
+  // Echo the `/model` command once in the transcript (kind:"command") so the
+  // switch reads as the host action it is — the request; the synthesized Stop
+  // below is its result. This is what the composer's client-side interception
+  // routes here (the command never reaches the model).
+  try {
+    ingestEventLine(JSON.stringify({
+      ts: new Date().toISOString(),
+      hook: "UserPromptSubmit",
+      ctx: {
+        session_id: canonicalSid,
+        prompt: next ? `/model ${next}` : "/model",
+        author: byAuthor ?? "host",
+        kind: "command",
+      },
+    }));
+  } catch { /* best-effort */ }
   // Synthesize a Stop so the "thinking" indicator clears (as with /stop) and
   // the transcript records the switch. Skipped when there's no child to stop
   // and thus no indicator to clear would still be harmless, so we always emit.
@@ -844,13 +916,15 @@ const PENDING_AUTHOR_TTL_MS = 5 * 60_000;
  * Pop the queued metadata for the next-to-be-ingested UserPromptSubmit: the
  * author (attribution), any image thumbnails (persisted into the event so the
  * transcript — host and peers — can show what was sent), and an optional `kind`
- * marker (e.g. "plan-approval") that lets the transcript re-style lifecycle
- * turns instead of rendering them as ordinary chat. Returns nulls when the queue
- * is empty (replay/compaction/synthetic).
+ * marker (e.g. "plan-approval", "command") that lets the transcript re-style
+ * lifecycle/command turns instead of rendering them as ordinary chat, and a
+ * `promptOverride` (the original typed text for a command turn, e.g. "/plan …"
+ * whose stripped task is what the model actually received). Returns nulls when
+ * the queue is empty (replay/compaction/synthetic).
  */
-export function popPendingAuthor(sessionId: string): { author: string | null; thumbnails: TurnImage[] | null; kind: string | null } {
+export function popPendingAuthor(sessionId: string): { author: string | null; thumbnails: TurnImage[] | null; kind: string | null; promptOverride: string | null } {
   const slot = getSlot(sessionId);
-  if (!slot) return { author: null, thumbnails: null, kind: null };
+  if (!slot) return { author: null, thumbnails: null, kind: null, promptOverride: null };
   const now = Date.now();
   while (slot.pendingAuthors.length > 0 && now - slot.pendingAuthors[0].at > PENDING_AUTHOR_TTL_MS) {
     slot.pendingAuthors.shift();
@@ -862,7 +936,12 @@ export function popPendingAuthor(sessionId: string): { author: string | null; th
   // that's fine — it's only consulted to attribute peer-driven asks, and a
   // synthetic prompt won't trigger one.
   if (next) slot.currentTurn = { author: next.author, shareId: next.shareId };
-  return { author: next ? next.author : null, thumbnails: next?.thumbnails ?? null, kind: next?.kind ?? null };
+  return {
+    author: next ? next.author : null,
+    thumbnails: next?.thumbnails ?? null,
+    kind: next?.kind ?? null,
+    promptOverride: next?.promptOverride ?? null,
+  };
 }
 
 /** Grant session-scoped "allow all" to a peer share. Subsequent PreToolUse
@@ -1272,6 +1351,12 @@ async function spawnControllable(opts: SpawnOpts): Promise<{ sessionId: string; 
   // unreachable or times out, the gate defaults to DENY (not pass-through),
   // so the agent can never bypass the dashboard without explicit approval.
   args.push("--permission-mode", "bypassPermissions");
+  // Standing plan-mode steering (invisible to the transcript, inert outside plan
+  // mode). Headless drops the native ExitPlanMode the built-in plan prompt tells
+  // the model to use, so without this the model often ends a plan turn by writing
+  // the plan as prose and never calls the MCP submit_plan — nothing is captured
+  // and no plan panel appears. See PLAN_SYSTEM_PROMPT.
+  args.push("--append-system-prompt", PLAN_SYSTEM_PROMPT);
   if (opts.model) args.push("--model", opts.model);
   // A dashboard session's id is OURS, chosen here and stable for its whole life.
   // For a fresh session we mint a UUID and force claude to adopt it via
@@ -2205,6 +2290,7 @@ export function createPermissionRequest(opts: {
     receivedAt: Date.now(),
     author: turn?.author ?? "host",
     shareId: turn?.shareId ?? null,
+    planMode: slot?.planTurnActive === true,
   };
 
   // Answer the hook immediately (its /permission-wait consumes this) without a
@@ -2248,7 +2334,13 @@ export function createPermissionRequest(opts: {
   // While a `/plan` turn is active (slot.planTurnActive), the gate routes every
   // non-read tool here and we answer immediately, so the agent CANNOT mutate
   // until the plan is approved — enforcement is mechanical, not a prompt.
-  if (slot?.planTurnActive) {
+  // AskUserQuestion is carved out: clarifying questions don't mutate anything
+  // (the answer is relayed back as a follow-up user turn), and they're most
+  // useful DURING planning — to resolve a design decision before submitting the
+  // plan. Let it fall through to the normal ask handling below, which surfaces
+  // the dashboard question card. The answer relay (respondToPermission) reads
+  // `pending.planMode` to keep the session in plan mode afterwards.
+  if (slot?.planTurnActive && !isAskUserQuestionTool(opts.toolName)) {
     if (!PLAN_READONLY_TOOLS.has(opts.toolName)) {
       return decideNow(
         "deny",
@@ -2507,11 +2599,17 @@ export async function respondToPermission(
   // is unblocked, so it queues as the next turn on the same stdin pipe.
   if (isAskAnswer) {
     const answer = (reason ?? "").trim() || "(the operator did not provide a specific answer)";
+    // If the question was asked during a /plan turn, keep the session in plan
+    // mode for the answer turn. Without this, writeUserTurn (mode undefined)
+    // would set slot.planTurnActive = false and silently drop plan-mode
+    // enforcement — letting the model mutate before its plan is approved.
+    const relayOpts = pending.planMode ? { mode: "plan" as const } : undefined;
     void writeUserTurn(
       canonicalSid,
       `${answer}\n\nThat is my answer to the question you just asked — please continue with the task using it.`,
       answerAuthor,
       null,
+      relayOpts,
     ).catch((e) => log.warn("active-sessions", "askquestion follow-up turn failed", { err: String((e as any)?.message ?? e) }));
   }
 

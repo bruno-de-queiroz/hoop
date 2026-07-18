@@ -117,6 +117,25 @@ describe("ShellTranscript author attribution", () => {
     expect(screen.queryByText(/The plan was rejected/)).toBeNull();
   });
 
+  it("renders a slash-command turn as a distinct command card, not a chat bubble", () => {
+    renderTranscript([
+      ev({
+        id: 12,
+        hook_type: "UserPromptSubmit",
+        author: "host",
+        kind: "command",
+        text: "[UserPromptSubmit] | prompt=/plan add caching | kind=command",
+      }),
+    ]);
+    // Distinct command styling — a "command" chip, the command shown verbatim,
+    // and NOT an ordinary host chat bubble.
+    expect(screen.getByTestId("command-turn")).toBeInTheDocument();
+    expect(screen.getByText("command")).toBeInTheDocument();
+    expect(screen.getByText("plan add caching")).toBeInTheDocument();
+    expect(document.querySelector(".bubble-host")).toBeNull();
+    expect(screen.queryByTestId("user-prompt")).toBeNull();
+  });
+
   function bashEvent(
     id: number,
     o: { runId?: string; status?: "running" | "done"; exitCode?: number | null; stdout?: string; command?: string },
