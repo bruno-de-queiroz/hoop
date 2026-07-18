@@ -59,6 +59,11 @@ export function ShellSessionHeader({
   const [draft, setDraft] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+  // The ⋯ menu lives in the right-side actions cluster, OUTSIDE wrapRef, so it
+  // needs its own ref: without it a `mousedown` on a menu item counts as an
+  // "outside" click and tears the menu down before the item's `click` fires —
+  // i.e. Delete session silently no-ops for real (mousedown-first) clicks.
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const label = session ? sessionDisplayLabel(session) : "session";
   const lc = meta.lifecycle ?? session?.lifecycle ?? null;
@@ -70,7 +75,10 @@ export function ShellSessionHeader({
   useEffect(() => {
     if (!switcherOpen && !menuOpen) return;
     const onDoc = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const inWrap = wrapRef.current?.contains(target);
+      const inMenu = menuRef.current?.contains(target);
+      if (!inWrap && !inMenu) {
         setSwitcherOpen(false);
         setMenuOpen(false);
       }
@@ -99,6 +107,7 @@ export function ShellSessionHeader({
         {renaming ? (
           <input
             autoFocus
+            aria-label="Rename session"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={commitRename}
@@ -245,7 +254,7 @@ export function ShellSessionHeader({
           {fullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
         </button>
         {isHost && session && (
-          <div className="relative">
+          <div ref={menuRef} className="relative">
             <button className="icon-btn w-8 h-8" title="More" onClick={() => setMenuOpen((v) => !v)}>
               <MoreHorizontal className="w-4 h-4" />
             </button>
