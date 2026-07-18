@@ -9,14 +9,16 @@
 # is wasteful when the token has hours of life left.
 #
 # TTL-aligned design:
-#   1. Read the sandbox file's `expiresAt` (it's already in the JSON we
-#      wrote on the previous reseed). If now < expiresAt - SAFETY_WINDOW,
-#      the current token is still fresh enough that the host claude won't
-#      have refreshed it yet — skip the Keychain dump entirely.
+#   1. Read the sandbox file's .claudeAiOauth.expiresAt. If now < expiresAt -
+#      SAFETY_WINDOW, the current token is still fresh enough that the host
+#      claude won't have refreshed it yet — skip the Keychain dump entirely.
 #   2. Only when we cross into the safety window (default 10 min before
 #      expiry) do we actually read the Keychain to look for a rotation.
 #   3. The --force flag bypasses (1) so SessionStart can detect a /login
 #      that happened in another claude window while we weren't watching.
+#   4. The reconcile itself (in creds-lib.sh) is CONTENT-based: it compares the
+#      actual .claudeAiOauth token, reseeds only .claudeAiOauth (never the
+#      sandbox-owned .mcpOAuth.*), and only when the host token is newer.
 #
 # Other invariants:
 #   - silent when there's nothing to do: claude hook output is noisy enough
@@ -59,9 +61,17 @@ SANDBOX_CRED="$HOME/.claude/hoop/sandbox/profile/.claude/.credentials.json"
 #         its expiresAt, so we don't lose access by deferring the check
 #     so the Keychain dump is wasted IO. Skip unless --force.
 if [ "$FORCE" -eq 0 ] && [ -f "$SANDBOX_CRED" ]; then
-  EXP_MS=$(grep -o '"expiresAt"[[:space:]]*:[[:space:]]*[0-9]*' "$SANDBOX_CRED" \
-             | head -1 \
-             | grep -o '[0-9]*$')
+  # Key off .claudeAiOauth.expiresAt specifically. The file is a multi-token
+  # document (claudeAiOauth + per-MCP mcpOAuth.*, each with its own expiresAt);
+  # a naive first-match grep can read an MCP token's expiry and mis-decide the
+  # fast path — e.g. skip a needed Keychain refresh because some MCP token
+  # still has TTL while the claude token is about to expire. Prefer jq; if jq
+  # is unavailable, skip the fast path and fall through to the drift check
+  # rather than risk reading the wrong token.
+  EXP_MS=""
+  if command -v jq >/dev/null 2>&1; then
+    EXP_MS=$(jq -r '.claudeAiOauth.expiresAt // empty' "$SANDBOX_CRED" 2>/dev/null)
+  fi
   if [ -n "$EXP_MS" ]; then
     NOW_MS=$(( $(date +%s) * 1000 ))
     SAFETY_MS=$(( SAFETY_WINDOW_SEC * 1000 ))
@@ -69,67 +79,40 @@ if [ "$FORCE" -eq 0 ] && [ -f "$SANDBOX_CRED" ]; then
       exit 0  # plenty of TTL left, no need to consult Keychain
     fi
   fi
-  # If we got here: expiresAt is missing, malformed, or within the safety
-  # window. Fall through to the Keychain check.
+  # If we got here: claudeAiOauth.expiresAt is missing/malformed, jq is
+  # unavailable, or the token is within the safety window. Fall through to the
+  # Keychain check.
 fi
 
-# 3. Pick the freshest Keychain account name for service "Claude Code-credentials".
-#    Matches the launcher's selection logic exactly.
-ACCT=$(security dump-keychain 2>/dev/null | awk '
-  BEGIN { in_block=0; want=0; acct=""; mdat=""; best_mdat=""; best_acct="" }
-  function flush() {
-    if (want && acct != "" && mdat > best_mdat) { best_mdat=mdat; best_acct=acct }
-  }
-  /^keychain:/ { flush(); in_block=1; want=0; acct=""; mdat=""; next }
-  /"svce"<blob>="Claude Code-credentials"/ { want=1 }
-  /"acct"<blob>="/ {
-    line=$0
-    sub(/.*"acct"<blob>="/, "", line)
-    sub(/".*/, "", line)
-    acct=line
-  }
-  /"mdat"<timedate>=/ {
-    line=$0
-    sub(/.*"mdat"<timedate>=0x[0-9A-F]+[[:space:]]+"/, "", line)
-    sub(/".*/, "", line)
-    mdat=line
-  }
-  END { flush(); if (best_acct != "") print best_acct ":" best_mdat }
-')
-[ -n "$ACCT" ] || exit 0  # no Keychain entry — nothing to do
+# 3. Content-based reconcile via the shared lib. We compare the ACTUAL
+#    .claudeAiOauth token in the Keychain against the one in the sandbox file
+#    (not filesystem mtimes — those are fooled when the file is re-touched with
+#    an older token, and they can't tell an MCP-only write apart from a claude
+#    token rotation). The lib reseeds SURGICALLY (only .claudeAiOauth; the
+#    sandbox-owned .mcpOAuth.* is preserved) and only when the host token is
+#    strictly newer, so we never downgrade a sandbox that self-refreshed.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./creds-lib.sh
+. "$SCRIPT_DIR/creds-lib.sh"
 
-KC_ACCT="${ACCT%%:*}"
-KC_MDAT="${ACCT#*:}"  # YYYYMMDDhhmmssZ\0
+HOST_BLOB=$(hoop_creds_host_blob)
+[ -n "$HOST_BLOB" ] || exit 0  # no Keychain entry / host creds — nothing to do
 
-# 4. Drift check. Compare Keychain mdat (its last-modified) to the sandbox
-#    file's mtime, both normalised to a fixed-width digit string for
-#    lexicographic comparison. The Keychain reports mdat as
-#    "20260518094213Z\000" — the leading 14 chars are the timestamp in UTC
-#    YYYYMMDDhhmmss; everything after is the SQLite-blob terminator. A
-#    naive `tr -d 'Z\\0'` would also delete every "0" digit, so explicitly
-#    keep only the leading 14 digits.
-KC_TS=$(printf '%s' "$KC_MDAT" | head -c 14)
-if [ -f "$SANDBOX_CRED" ]; then
-  FILE_TS=$(date -u -r "$SANDBOX_CRED" +%Y%m%d%H%M%S 2>/dev/null || echo "00000000000000")
-else
-  FILE_TS="00000000000000"
-fi
+RESULT=$(hoop_creds_reconcile "$SANDBOX_CRED" "$HOST_BLOB")
 
-# Compare lex-style — the format is fixed-width so string compare = chrono.
-if [ "$KC_TS" \> "$FILE_TS" ]; then
-  # 5. Drift detected → reseed. Pull the freshest blob; normalise to the
-  #    wrapped form the sandbox expects; write atomically; chmod 0600.
-  RAW=$(security find-generic-password -s "Claude Code-credentials" -a "$KC_ACCT" -w 2>/dev/null) || exit 0
-  [ -n "$RAW" ] || exit 0
-
-  TMP="${SANDBOX_CRED}.tmp.$$"
-  printf '%s' "$RAW" | jq 'if has("claudeAiOauth") then . else {claudeAiOauth: .} end' > "$TMP" 2>/dev/null \
-    || { rm -f "$TMP"; exit 0; }
-  mv "$TMP" "$SANDBOX_CRED" 2>/dev/null
-  chmod 0600 "$SANDBOX_CRED" 2>/dev/null
-  # Single audit line. Avoids the timestamp-only "did the hook fire?" question
-  # when the user reports a 401, without spamming on the common no-drift path.
-  echo "[hoop] sandbox credentials refreshed from Keychain (acct=$KC_ACCT, mdat=$KC_TS)" >&2
-fi
+# Single audit line on any actual reseed — answers "did the hook fire?" when a
+# user reports a 401, without spamming the common no-drift (insync) path.
+case "$RESULT" in
+  reseeded:host-newer)
+    echo "[hoop] sandbox .claudeAiOauth refreshed from host Keychain (host token newer)" >&2 ;;
+  reseeded:first)
+    echo "[hoop] sandbox credentials seeded from host Keychain" >&2 ;;
+  reseeded:added)
+    echo "[hoop] sandbox .claudeAiOauth added from host Keychain" >&2 ;;
+  skip:sandbox-newer)
+    # Sandbox self-refreshed more recently than the host; the host's copy is the
+    # stale one. Don't downgrade. Quiet on the Stop hot path.
+    : ;;
+esac
 
 exit 0

@@ -93,18 +93,14 @@ preflight() {
   # already populated we don't touch legacy state.
   migrate_legacy_profile_layout
 
-  # Seed credentials. The sandbox claude refreshes its own oauth tokens
-  # while a session is running — but when the dashboard sits idle for
-  # >12h, no subprocess is alive to perform the refresh and the token
-  # expires. Detect that case and re-seed from the host's keychain (which
-  # the user's host claude DOES keep fresh via background refresh + /login).
-  # Three triggers re-seed:
-  #   - file absent (first-time install)
-  #   - file invalid JSON / missing accessToken
-  #   - file present but expiresAt is past or within REFRESH_GRACE_SEC
-  if needs_credential_refresh "$SANDBOX_CLAUDE_DIR/.credentials.json"; then
-    seed_credentials
-  fi
+  # Sync the sandbox's .claudeAiOauth with the host. The sandbox claude
+  # refreshes its own oauth while a session runs, but an idle dashboard has no
+  # subprocess alive to do it, and a host `/login` rotates the token out from
+  # under a still-valid sandbox copy. reconcile_credentials pushes the host's
+  # token in when the host's is NEWER, surgically (only .claudeAiOauth; the
+  # sandbox-owned .mcpOAuth.* per-server tokens are preserved). See
+  # hooks/scripts/creds-lib.sh for the full reconcile rules.
+  reconcile_credentials "$SANDBOX_CLAUDE_DIR/.credentials.json"
 
   # Top-level .claude.json: seed with a minimal subset of the host's
   # ~/.claude.json so the sandbox claude has an identity (oauthAccount, userID)
@@ -152,140 +148,39 @@ preflight() {
   export HOOP_PEER_SIGNING_SECRET="$(cat "$PEER_SECRET_FILE")"
 }
 
-# Re-seed if the existing creds file is missing, malformed, or close to
-# expiry. Grace window (600s = 10m) gives the seed time to land before the
-# sandbox launches its first session. Exits 0 ⇒ needs re-seed, 1 ⇒ fine
-# as-is.
-#
-# Pure bash: we only need to extract one numeric field (expiresAt) and one
-# string-shape check (accessToken non-empty). The OAuth file is small and
-# its format is stable; grep+sed is safe here because the numeric value is
-# unquoted and the access token only contains alphanumerics and dashes.
-REFRESH_GRACE_SEC=600
-needs_credential_refresh() {
+# Reconcile the sandbox's .claudeAiOauth with the host, delegating the drift
+# rules to the shared lib (hooks/scripts/creds-lib.sh) so the launcher and the
+# SessionStart/Stop hook can't diverge. The lib:
+#   - reads the host's freshest credential (macOS Keychain / Linux file),
+#   - bootstraps a missing/corrupt sandbox file with the whole host blob,
+#   - otherwise reseeds ONLY .claudeAiOauth, and only when the host token is
+#     strictly newer (never downgrading a sandbox that self-refreshed),
+#   - preserves the sandbox-owned .mcpOAuth.* per-server tokens on every reseed.
+reconcile_credentials() {
   local FILE="$1"
-  [ -f "$FILE" ] || { echo "credentials missing — seeding"; return 0; }
+  # shellcheck source=../../hooks/scripts/creds-lib.sh
+  . "$PLUGIN_ROOT/hooks/scripts/creds-lib.sh"
 
-  # expiresAt is a JSON number → no quotes around it. Grab the first match
-  # to be defensive against future shape changes; the field appears once.
-  local EXP_MS
-  EXP_MS=$(grep -o '"expiresAt"[[:space:]]*:[[:space:]]*[0-9]*' "$FILE" \
-             | head -1 \
-             | grep -o '[0-9]*$')
-  if [ -z "$EXP_MS" ]; then
-    echo "credentials malformed (no expiresAt) — seeding"
-    return 0
-  fi
-
-  # accessToken sanity: must be quoted and >16 chars between quotes.
-  # Skip extracting the literal — the existence check is enough.
-  if ! grep -qE '"accessToken"[[:space:]]*:[[:space:]]*"[^"]{16,}"' "$FILE"; then
-    echo "credentials malformed (no usable accessToken) — seeding"
-    return 0
-  fi
-
-  local NOW_MS DELTA_SEC
-  NOW_MS=$(( $(date +%s) * 1000 ))
-  DELTA_SEC=$(( (EXP_MS - NOW_MS) / 1000 ))
-  if [ "$DELTA_SEC" -lt "$REFRESH_GRACE_SEC" ]; then
-    if [ "$DELTA_SEC" -lt 0 ]; then
-      echo "credentials expired $((-DELTA_SEC))s ago — re-seeding from host"
-    else
-      echo "credentials expire in ${DELTA_SEC}s (< ${REFRESH_GRACE_SEC}s grace) — re-seeding"
+  local HOST RESULT
+  HOST=$(hoop_creds_host_blob)
+  if [ -z "$HOST" ]; then
+    # No host credentials at all. Only worth a hint on a genuine first install
+    # (no sandbox file yet); an existing sandbox file keeps working regardless.
+    if [ ! -f "$FILE" ]; then
+      echo "hoop-dashboard: no host Claude credentials found (macOS Keychain 'Claude Code-credentials' or ~/.claude/.credentials.json)." >&2
+      echo "  Run \`claude login\` on this host first, then re-run." >&2
     fi
     return 0
   fi
-  return 1
-}
 
-# Seed $SANDBOX_CLAUDE_DIR/.credentials.json from the host's claude install.
-# macOS: the credentials live in the login Keychain (service
-# "Claude Code-credentials") since claude 2.x. Linux/WSL: a flat file at
-# ~/.claude/.credentials.json. Fail closed with a clear hint if neither is
-# available — without this, the sandbox claude has no way to authenticate.
-seed_credentials() {
-  local OUT="$SANDBOX_CLAUDE_DIR/.credentials.json"
-  case "$(uname -s)" in
-    Darwin) _seed_credentials_macos "$OUT" ;;
-    *)      _seed_credentials_file  "$OUT" ;;
+  RESULT=$(hoop_creds_reconcile "$FILE" "$HOST")
+  case "$RESULT" in
+    reseeded:first)      echo "seeded sandbox credentials from host" ;;
+    reseeded:host-newer) echo "sandbox credentials: refreshed .claudeAiOauth from host (host token newer)" ;;
+    reseeded:added)      echo "sandbox credentials: added .claudeAiOauth from host" ;;
+    skip:sandbox-newer)  echo "sandbox credentials: sandbox token newer than host — left as-is" ;;
+    insync|no-host|*)    : ;;  # silent on the common no-op paths
   esac
-}
-
-_seed_credentials_file() {
-  local OUT="$1"
-  local SRC="$HOME/.claude/.credentials.json"
-  if [ ! -f "$SRC" ]; then
-    echo "hoop-dashboard: $SRC not found." >&2
-    echo "  Run \`claude login\` on this host first, then re-run." >&2
-    return 1
-  fi
-  cp "$SRC" "$OUT"
-  chmod 0600 "$OUT"
-  echo "seeded credentials into $OUT"
-}
-
-_seed_credentials_macos() {
-  local OUT="$1"
-  for dep in security jq awk; do
-    command -v "$dep" >/dev/null 2>&1 || {
-      echo "hoop-dashboard: \`$dep\` required but not on PATH." >&2
-      [ "$dep" = "jq" ] && echo "  Install with: brew install jq" >&2
-      return 1
-    }
-  done
-
-  # The Keychain often has multiple entries for svce="Claude Code-credentials"
-  # (one per login, including stale ones from older installs). `security
-  # find-generic-password -s ... -w` returns whichever it finds first — which
-  # may be expired. Dump and pick by mdat (last-modified) so the freshest
-  # entry wins. awk groups paragraphs separated by the `keychain:` header
-  # and tracks the highest mdat across blocks that match our service name.
-  local ACCT
-  ACCT=$(security dump-keychain 2>/dev/null | awk '
-    BEGIN { in_block=0; want=0; acct=""; mdat=""; best_mdat=""; best_acct="" }
-    function flush() {
-      if (want && acct != "" && mdat > best_mdat) { best_mdat=mdat; best_acct=acct }
-    }
-    /^keychain:/ { flush(); in_block=1; want=0; acct=""; mdat=""; next }
-    /"svce"<blob>="Claude Code-credentials"/ { want=1 }
-    /"acct"<blob>="/ {
-      line=$0
-      sub(/.*"acct"<blob>="/, "", line)
-      sub(/".*/, "", line)
-      acct=line
-    }
-    /"mdat"<timedate>=/ {
-      line=$0
-      sub(/.*"mdat"<timedate>=0x[0-9A-F]+[[:space:]]+"/, "", line)
-      sub(/".*/, "", line)
-      mdat=line
-    }
-    END { flush(); if (best_acct != "") print best_acct }
-  ')
-
-  if [ -z "$ACCT" ]; then
-    echo "hoop-dashboard: no Keychain entry 'Claude Code-credentials' found." >&2
-    echo "  Run \`claude login\` on this host first, then re-run." >&2
-    return 1
-  fi
-
-  local RAW
-  RAW=$(security find-generic-password -s "Claude Code-credentials" -a "$ACCT" -w 2>/dev/null)
-  if [ -z "$RAW" ]; then
-    echo "hoop-dashboard: Keychain entry for '$ACCT' is empty." >&2
-    return 1
-  fi
-
-  # The Keychain blob may be either:
-  #   - wrapped form    {"claudeAiOauth": {...}}
-  #   - unwrapped form  {"accessToken": "...", ...}
-  # Normalise to the wrapped form via jq so the sandbox claude sees what it
-  # expects. `if has(...) then . else {claudeAiOauth: .} end` round-trips
-  # an already-wrapped blob unchanged.
-  printf '%s' "$RAW" | jq 'if has("claudeAiOauth") then . else {claudeAiOauth: .} end' > "$OUT" \
-    || { echo "hoop-dashboard: failed to parse Keychain blob as JSON." >&2; return 1; }
-  chmod 0600 "$OUT"
-  echo "seeded credentials into $OUT (from macOS Keychain)"
 }
 
 # Synthesize a minimal $SANDBOX_PROFILE/.claude.json with oauthAccount + userID
