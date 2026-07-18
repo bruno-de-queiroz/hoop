@@ -74,6 +74,14 @@ services:
       # for the host gh account chosen in /hoop:setup. Absent → gh unauthenticated.
       GH_TOKEN: ${GH_TOKEN:-}
 
+    # Lets the sandbox reach a Playwright run-server on the host (dev-only
+    # browser-automation bridge — the sandbox image has no root/apt access to
+    # install the system libs a real browser needs, so the browser process
+    # runs on the host and this container drives it remotely over WS/CDP via
+    # playwright-core, which needs no local browser binary).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
     restart: unless-stopped
 
   dashboard:

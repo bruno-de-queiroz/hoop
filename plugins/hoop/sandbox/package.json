@@ -6,7 +6,7 @@
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
-    "build": "esbuild server.ts --bundle --platform=node --target=node20 --format=esm --outfile=dist/server.mjs --external:better-sqlite3 --external:sqlite-vec --external:openai --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
+    "build": "esbuild server.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/server.mjs --external:better-sqlite3 --external:sqlite-vec --external:openai --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
     "start": "node dist/server.mjs",
     "start:dev": "node --import tsx ./server.ts",
     "test": "vitest run",
@@ -19,13 +19,14 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
-    "@types/node": "^20.0.0",
+    "@types/node": "^24.0.0",
     "esbuild": "^0.23.0",
+    "playwright-core": "^1.61.1",
     "tsx": "^4.19.0",
     "typescript": "^5.4.0",
     "vitest": "^4.1.6"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

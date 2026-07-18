@@ -27,6 +27,85 @@
 #@flag -p|--profile OPEN_PROFILE "" dir ~ claude profile to mount (default: ~/.claude/hoop/sandbox/profile)
 #@flag -y|--yolo OPEN_YOLO "false" boolean ~ pass --dangerously-skip-permissions to claude
 #@flag -T|--telemetry OPEN_TELEMETRY "false" boolean ~ allow bundled-tool telemetry (default: fully isolated)
+#@flag -b|--playwright-bridge OPEN_PLAYWRIGHT_BRIDGE "true" boolean ~ auto-start a host-side Playwright server so the sandbox can drive a real browser
+#@flag -P|--playwright-port OPEN_PLAYWRIGHT_PORT "3355" number ~ port for the Playwright browser-automation bridge
+
+# The sandbox has no root/apt access to install the system libs a real
+# browser needs, so headed/headless Chromium runs on the host instead:
+# `playwright run-server` exposes it over ws://, and playwright-core inside
+# the sandbox connects to it via host.docker.internal. Idempotent — if
+# something is already listening on the port (e.g. a previous `open`, or one
+# started by hand), it's reused rather than starting a second server.
+OPEN_PLAYWRIGHT_LOG="${HOME}/.claude/hoop/playwright-server.log"
+
+function _port_listening() {
+  (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null || return 1
+  exec 3<&- 3>&-
+}
+
+# 32 hex chars of randomness for the run-server endpoint path. openssl ships on
+# macOS and the sandbox hosts we target; fall back to /dev/urandom otherwise.
+function _rand_hex() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 16
+  else
+    head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n'
+  fi
+}
+
+# Prints the ws:// endpoint the sandbox should connect to, read from the
+# server's log line and rewritten to reach the host from inside the container
+# (host.docker.internal). The URL carries the secret path (see
+# _ensure_playwright_bridge) which is the de-facto bearer token, so we NEVER
+# synthesise a tokenless fallback: if the log can't be read, fail closed and let
+# the caller disable the bridge for this run.
+function _playwright_ws_endpoint() {
+  local ws
+  ws="$(grep -oE 'ws://[^[:space:]]+' "$OPEN_PLAYWRIGHT_LOG" 2>/dev/null | tail -1)"
+  if [[ -z "$ws" ]]; then
+    _error "could not read the playwright ws endpoint from ${OPEN_PLAYWRIGHT_LOG} — browser bridge disabled for this run"
+    return 1
+  fi
+  ws="${ws/0.0.0.0/host.docker.internal}"
+  echo "${ws/127.0.0.1/host.docker.internal}"
+}
+
+function _ensure_playwright_bridge() {
+  if _port_listening "$OPEN_PLAYWRIGHT_PORT"; then
+    _info "playwright bridge already running on :${OPEN_PLAYWRIGHT_PORT}"
+    return 0
+  fi
+
+  if ! command -v npx >/dev/null 2>&1; then
+    _error "npx not found on host — skipping playwright browser bridge (browser automation from inside the sandbox won't work)"
+    return 0
+  fi
+
+  _info "installing chromium for playwright (no-op if already cached)..."
+  npx --yes playwright install chromium >/dev/null 2>&1 \
+    || _error "chromium install failed — browser bridge may not work, see 'npx playwright install chromium'"
+
+  mkdir -p "$(dirname "$OPEN_PLAYWRIGHT_LOG")"
+  # Bind 0.0.0.0, NOT 127.0.0.1: the sandbox container reaches the host over the
+  # docker bridge (host.docker.internal → host-gateway, see docker-compose.yml),
+  # which arrives on a non-loopback host interface — a loopback-only bind would
+  # refuse it and the bridge would be unreachable. 0.0.0.0 also exposes the port
+  # on the LAN, so gate access with a random secret endpoint path: run-server's
+  # default path is "/" (tokenless), which would let anyone who can reach the
+  # port drive a real browser in the host's user context.
+  local ws_path="/$(_rand_hex)"
+  _info "starting playwright bridge on :${OPEN_PLAYWRIGHT_PORT}..."
+  nohup npx --yes playwright run-server --port "$OPEN_PLAYWRIGHT_PORT" --host 0.0.0.0 --path "$ws_path" \
+    >"$OPEN_PLAYWRIGHT_LOG" 2>&1 &
+  disown
+
+  local waited=0
+  until _port_listening "$OPEN_PLAYWRIGHT_PORT" || (( waited >= 20 )); do
+    sleep 0.25; ((waited++))
+  done
+  _port_listening "$OPEN_PLAYWRIGHT_PORT" \
+    || _error "playwright bridge did not come up in time — see ${OPEN_PLAYWRIGHT_LOG}"
+}
 
 #@protected ~ default entrypoint: run claude in an isolated sandbox over $PWD
 function _launch() {
@@ -54,6 +133,15 @@ function _launch() {
   # blackholes discovered OTEL endpoints + a curated intake denylist in /etc/hosts.
   local iso_env=(-e "HOOP_DISABLE_TELEMETRY=1")
   [[ "$OPEN_TELEMETRY" == true ]] && iso_env=()
+
+  local playwright_env=()
+  if [[ "$OPEN_PLAYWRIGHT_BRIDGE" == true ]]; then
+    _ensure_playwright_bridge
+    local ws_ep
+    if ws_ep="$(_playwright_ws_endpoint)"; then
+      playwright_env=(-e "HOOP_PLAYWRIGHT_WS=${ws_ep}")
+    fi
+  fi
 
   # Strip the dashboard-only hooks + the hoop plugin from a throwaway copy of the
   # profile's settings.json, then overlay it read-only over just that one file.
@@ -89,6 +177,7 @@ function _launch() {
   # args (a prompt, --model, etc.). Not exec'd so we can clean up the overlay.
   docker run --rm -it \
     ${iso_env[@]+"${iso_env[@]}"} \
+    ${playwright_env[@]+"${playwright_env[@]}"} \
     ${settings_overlay[@]+"${settings_overlay[@]}"} \
     -v "${PWD}:${workspace}" \
     -v "${OPEN_PROFILE}:/home/agent" \
