@@ -8,8 +8,7 @@
     "build": "next build --webpack",
     "start": "next start -p ${HOOP_PORT:-7842}",
     "lint": "eslint .",
-    "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test": "vitest run"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -27,7 +26,6 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.61.1",
     "@testing-library/dom": "^10.0.0",
     "@testing-library/jest-dom": "^6.4.0",
     "@testing-library/react": "^16.0.0",
