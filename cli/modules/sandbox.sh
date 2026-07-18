@@ -60,5 +60,20 @@ function rebuild() {
   _compose up -d --force-recreate "$HOOP_SANDBOX_SERVICE"
 }
 
+#@public ~ pin the claude-code CLI baked into the sandbox image to a version and rebuild just that layer forward
+#@flag -c|--claude-version SANDBOX_CLAUDE_VERSION "" ~ version to pin (default: resolve latest from npm)
+function update() {
+  _preflight
+  _requires npm
+  local version="$SANDBOX_CLAUDE_VERSION"
+  if [[ -z "$version" ]]; then
+    version="$(npm view @anthropic-ai/claude-code version 2>/dev/null)"
+    [[ -n "$version" ]] || _die "could not resolve latest @anthropic-ai/claude-code version from npm"
+  fi
+  _info "pinning claude-code ${version} into the sandbox image"
+  _compose build --build-arg "CLAUDE_CODE_VERSION=${version}" "$HOOP_SANDBOX_SERVICE"
+  _compose up -d --force-recreate "$HOOP_SANDBOX_SERVICE"
+}
+
 # Bootstraps the parser
 main $0 "$@"
