@@ -127,11 +127,11 @@ describe("ShellTranscript author attribution", () => {
         text: "[UserPromptSubmit] | prompt=/plan add caching | kind=command",
       }),
     ]);
-    // Distinct command styling — a "command" chip, the command shown verbatim,
-    // and NOT an ordinary host chat bubble.
+    // Distinct command styling — the slash token in its own accent badge, the
+    // arguments beside it, and NOT an ordinary host chat bubble.
     expect(screen.getByTestId("command-turn")).toBeInTheDocument();
-    expect(screen.getByText("command")).toBeInTheDocument();
-    expect(screen.getByText("plan add caching")).toBeInTheDocument();
+    expect(screen.getByText("/plan")).toBeInTheDocument();
+    expect(screen.getByText("add caching")).toBeInTheDocument();
     expect(document.querySelector(".bubble-host")).toBeNull();
     expect(screen.queryByTestId("user-prompt")).toBeNull();
   });
