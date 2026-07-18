@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   dashboardTokenFromEnv,
   tokenMatchesExpected,
+  constantTimeEqualsJs,
   readTokenFromCookieHeader,
   isSameOrigin,
   isAllowedHost,
@@ -63,7 +64,7 @@ function passthrough(req: NextRequest, rid: string, participant: string, peerSes
   return res;
 }
 
-export async function middleware(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const rid = ensureRequestId(req);
 
@@ -187,8 +188,10 @@ async function authorizeApi(req: NextRequest, rid: string): Promise<NextResponse
     if (!rate.ok) return rateLimited(rid, rate.resetSec);
     // Double-submit: the mutation header must equal the peer cookie (an
     // attacker can't read the HttpOnly cookie nor forge the HMAC signature).
+    // Constant-time compare, matching the host path — the cookie is a signed
+    // secret, so avoid leaking it byte-by-byte via a short-circuiting `!==`.
     const headerToken = req.headers.get(TOKEN_HEADER);
-    if (!headerToken || headerToken !== peerCookie) {
+    if (!headerToken || !constantTimeEqualsJs(headerToken, peerCookie)) {
       return jsonError(401, "mutating requests require " + TOKEN_HEADER + " header", rid);
     }
   }

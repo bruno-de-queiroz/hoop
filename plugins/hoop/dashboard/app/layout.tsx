@@ -39,7 +39,7 @@ export const viewport: Viewport = {
 // launcher writes it into the container env after the build is baked.
 export const dynamic = "force-dynamic";
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
   // Mirror the per-participant synchronizer token into a meta tag the client
   // bundle reads to set x-dashboard-token on mutating requests (the HttpOnly
   // cookie is invisible to JS by design).
@@ -50,23 +50,24 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   //   - "peer:<id>" → emit the peer's OWN signed token (their cookie value),
   //                   never the install token.
   //   - anything else → emit nothing.
-  const participant = headers().get("x-hoop-participant") ?? "none";
+  const hdrs = await headers();
+  const participant = hdrs.get("x-hoop-participant") ?? "none";
   let token = "";
   if (participant === "host") {
     token = process.env.HOOP_DASHBOARD_TOKEN ?? "";
   } else if (participant.startsWith("peer:")) {
-    token = cookies().get(PEER_COOKIE)?.value ?? "";
+    token = (await cookies()).get(PEER_COOKIE)?.value ?? "";
   }
   // Non-secret: lets the client tailor UI (host sees Share; peer shows as a
   // guest in presence). "host" | "peer" | "none".
   const participantKind = participant.startsWith("peer:") ? "peer" : participant;
   // For a peer, the session they're locked to — lets the client pin selection
   // and hide session-switching. Trusted (injected by middleware).
-  const peerSession = participantKind === "peer" ? headers().get("x-hoop-peer-session") ?? "" : "";
+  const peerSession = participantKind === "peer" ? hdrs.get("x-hoop-peer-session") ?? "" : "";
   // The peer's share capability (full | drive | spectate). Non-secret; lets the
   // plan-review UI show Approve/Reject only to a peer whose share permits
   // decisions. The sandbox re-validates on every action, so this is UX-only.
-  const peerCapability = participantKind === "peer" ? headers().get("x-hoop-peer-capability") ?? "" : "";
+  const peerCapability = participantKind === "peer" ? hdrs.get("x-hoop-peer-capability") ?? "" : "";
   return (
     <html
       lang="en"

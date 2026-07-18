@@ -36,7 +36,7 @@ export async function POST(req: Request) {
   if (error) return error;
   if (!body.token || !body.ticketId) return errorResponse("invalid request", 400);
 
-  const pendingSecret = cookies().get(PEER_PENDING_COOKIE)?.value;
+  const pendingSecret = (await cookies()).get(PEER_PENDING_COOKIE)?.value;
   if (!pendingSecret) return errorResponse("no pending join", 401);
 
   const payload = await verifyPeerToken(body.token, secret);

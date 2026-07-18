@@ -16,7 +16,7 @@
 # Build context: `plugins/hoop/` (the parent of `dashboard/`). This lets
 # us COPY both the dashboard source and the shared/ package into the image.
 
-FROM node:20-bookworm-slim AS builder
+FROM node:24-bookworm-slim AS builder
 
 # Install deps BEFORE copying source so the (large) npm install layer is cached
 # and a source-only edit doesn't trigger a full reinstall. `shared/` is a path
@@ -43,7 +43,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN --mount=type=cache,target=/build/dashboard/.next/cache npm run build
 
 # ---- runtime ----
-FROM node:20-bookworm-slim AS runtime
+FROM node:24-bookworm-slim AS runtime
 
 # System deps:
 #   - curl: launcher healthcheck probes.

@@ -14,14 +14,15 @@ export const dynamic = "force-dynamic";
  * fields from the stored ShareRecord yields the identical, still-valid token.
  * Only works for a live share — a revoked/expired one 404s.
  */
-export async function GET(req: Request, { params }: { params: { id: string } }) {
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   if (!isHost(req)) return errorResponse("forbidden", 403);
   const secret = peerSigningSecret();
   if (!secret) return errorResponse("sharing is not configured", 503);
+  const { id } = await params;
 
   let record;
   try {
-    record = await client.validateShare(params.id, {});
+    record = await client.validateShare(id, {});
   } catch {
     record = null;
   }
