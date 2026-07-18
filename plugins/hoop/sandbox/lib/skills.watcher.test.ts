@@ -7,7 +7,7 @@ import { join } from "node:path";
 /**
  * Exercises the skills fs.watch → skillsBus pipeline. These run on macOS in
  * dev/CI where recursive fs.watch is native; the production container is Linux
- * node:20 (20.19+), where recursive landed in 20.13. The key assertion is the
+ * node:24, where recursive fs.watch (landed in 20.13) is available. The key assertion is the
  * NESTED case: a SKILL.md written inside a freshly-created `<name>/` dir must
  * still fire — that's the gotcha a non-recursive watch would miss.
  *

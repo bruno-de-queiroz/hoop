@@ -247,7 +247,7 @@ export function syncProjectSkillWatchers(cwds: Iterable<string>): void {
  * non-recursive watch on the root would see the `<name>/` dir appear but miss
  * the SKILL.md write inside it (and a fresh skill wouldn't list until some
  * later refetch). Node's recursive fs.watch on Linux landed in 20.13; the
- * sandbox image is node:20 (20.19+), so it's available here. If a watch throws
+ * sandbox image is node:24, so it's available here. If a watch throws
  * (recursive unsupported, transient error), we skip that root — the list still
  * refreshes on the existing fetch triggers (session/cwd change, page reload).
  *
