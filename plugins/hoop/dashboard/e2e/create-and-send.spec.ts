@@ -30,10 +30,12 @@ test.describe("create + send", () => {
     const cwdInput = page.getByPlaceholder("/home/agent/workspace").first();
     await expect(cwdInput).toBeVisible({ timeout: 10_000 });
     await expect(cwdInput).toHaveValue("/home/agent/workspace");
-    await page.getByRole("button", { name: /^create$/i }).click();
+    await page.getByRole("button", { name: /create session/i }).click();
 
-    // Header should populate with a haiku-shaped displayName.
-    const headerName = page.getByRole("button", { name: "Rename session" });
+    // Header should populate with a haiku-shaped displayName. The name is a
+    // text button carrying `title="Rename"` (click it to rename); its
+    // accessible name IS the session label, so target it by the title attr.
+    const headerName = page.locator('button[title="Rename"]');
     await expect(headerName).toBeVisible({ timeout: 10_000 });
     const name = (await headerName.textContent())?.trim() ?? "";
     expect(name).toMatch(/^[a-z]+-[a-z]+-[a-z]+$/);
@@ -53,7 +55,7 @@ test.describe("create + send", () => {
     // Optimistic echo lands inside the transcript (not "anywhere on
     // the page" — important: the sidebar or events panel could surface
     // matching strings and create false positives).
-    const transcript = page.getByTestId("transcript");
+    const transcript = page.getByTestId("shell-transcript");
     await expect(
       transcript.getByText(/reply with the single word OK/i).first(),
     ).toBeVisible({ timeout: 5_000 });
@@ -71,12 +73,12 @@ test.describe("create + send", () => {
     // false-positive when the rendered value is e.g. "100 in / 0 out"
     // (substring overlap on the first "0"); a regex with explicit
     // groups gates that.
-    const statsLine = page.getByText(/tokens:/);
+    const statsLine = page.getByText(/tokens\s+\d/);
     await expect(statsLine).toBeVisible({ timeout: 10_000 });
     await expect(async () => {
       const t = (await statsLine.textContent()) ?? "";
-      // Match "tokens: <in> in / <out> out" with k/m suffix support.
-      const m = t.match(/tokens:\s*(\d+(?:\.\d+)?)([km])?\s+in\s*\/\s*(\d+(?:\.\d+)?)([km])?\s+out/);
+      // Match "tokens <in> in / <out> out" with k/m suffix support.
+      const m = t.match(/tokens\s+(\d+(?:\.\d+)?)([km])?\s+in\s*\/\s*(\d+(?:\.\d+)?)([km])?\s+out/);
       expect(m, `stats line didn't match expected shape: "${t}"`).not.toBeNull();
       const inCount = parseFloat(m![1]) * suffix(m![2]);
       const outCount = parseFloat(m![3]) * suffix(m![4]);

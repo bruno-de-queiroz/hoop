@@ -5,9 +5,11 @@ import { waitForSandboxReady, wipeSessions } from "./helpers";
  * Rename flow + delete flow exercised against the live stack.
  *
  * Pins:
- *   - Click the header name (aria-labelled "Rename session") → input
- *     → type new value → Enter saves via PATCH and the sidebar updates.
- *   - Click ⋯ → "delete session" → confirm dialog → DELETE fires; the
+ *   - Click the header name (a `title="Rename"` button) → input (aria-labelled
+ *     "Rename session") → type new value → Enter saves via PATCH and the
+ *     sidebar updates.
+ *   - Click ⋯ (title="More") → "Delete session" → confirm dialog → DELETE
+ *     fires; the
  *     URL clears (?session is dropped) and the sidebar drops the row.
  */
 test.describe("rename + delete", () => {
@@ -20,9 +22,9 @@ test.describe("rename + delete", () => {
     await page.goto("/");
 
     // Create a session via the empty-state large form.
-    await page.getByRole("button", { name: /^create$/i }).click();
+    await page.getByRole("button", { name: /create session/i }).click();
 
-    const headerName = page.getByRole("button", { name: "Rename session" });
+    const headerName = page.locator('button[title="Rename"]');
     await expect(headerName).toBeVisible({ timeout: 10_000 });
 
     // Capture the original haiku name so the assertions can prove the
@@ -46,8 +48,8 @@ test.describe("rename + delete", () => {
 
     // Now delete via the ⋯ header menu. confirm() is auto-accepted.
     page.once("dialog", (d) => void d.accept());
-    await page.getByLabel("Session menu").click();
-    await page.getByRole("menuitem", { name: /delete session/i }).click();
+    await page.getByRole("button", { name: "More" }).click();
+    await page.getByRole("button", { name: /delete session/i }).click();
 
     // The frame returns to the empty state — the new-session form heading
     // is present, and the textarea isn't.

@@ -81,7 +81,7 @@ const HostBubble = memo(function HostBubble({
   const images = Array.isArray(row.images) ? row.images : [];
   const author = tone === "peer" ? `${row.author ?? "peer"} · peer` : "host";
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="flex flex-col items-end gap-1" data-testid={chat ? undefined : "user-prompt"}>
       <div className="flex items-center gap-1.5 pr-1">
         {chat && (
           <MessageCircle
@@ -314,7 +314,7 @@ const BashCard = memo(function BashCard({ row }: { row: EventRow }) {
 
 function Waiting() {
   return (
-    <div className="flex items-end gap-2.5">
+    <div className="flex items-end gap-2.5" data-testid="waiting-indicator">
       <AssistantAvatar />
       <div className="bubble bubble-assistant px-4 py-3 flex items-center gap-1.5">
         <span className="w-1.5 h-1.5 rounded-full bg-live motion-safe:animate-pulse" />

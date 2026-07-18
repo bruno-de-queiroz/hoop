@@ -9,7 +9,7 @@ import { waitForSandboxReady, wipeSessions } from "./helpers";
  * optimistic and the real UserPromptSubmit in place would render two
  * "ALPHA" rows, and the test would catch it.
  *
- * Asserts scoped to the transcript container (data-testid="transcript")
+ * Asserts scoped to the transcript container (data-testid="shell-transcript")
  * so matching text in the sidebar / events panel can't cause a false
  * positive.
  *
@@ -28,11 +28,11 @@ test.describe("two-turn continuity", () => {
     await page.goto("/");
 
     // Create + first turn.
-    await page.getByRole("button", { name: /^create$/i }).click();
+    await page.getByRole("button", { name: /create session/i }).click();
     const composer = page.getByPlaceholder(/type a message/i);
     await expect(composer).toBeEnabled({ timeout: 10_000 });
 
-    const transcript = page.getByTestId("transcript");
+    const transcript = page.getByTestId("shell-transcript");
     const waiting = page.getByTestId("waiting-indicator");
 
     await composer.fill("reply with the single word ALPHA");

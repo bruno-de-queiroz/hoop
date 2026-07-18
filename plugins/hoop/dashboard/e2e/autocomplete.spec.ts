@@ -10,8 +10,15 @@ import { waitForSandboxReady, wipeSessions } from "./helpers";
  * Active-row anchor is `data-testid="autocomplete-item-active"`
  * (set on the highlighted `<button>`); no coupling to internal
  * Tailwind classes.
+ *
+ * SKIPPED: the slash / @file composer autocomplete is a deferred feature —
+ * ShellComposer intentionally ships without it ("stay deferred — noted in the
+ * hint, not stubbed as dead buttons"). There is no popover / active-item to
+ * drive yet. Re-enable (drop `.skip`) once the composer grows the affordance
+ * and re-introduces the `autocomplete-popover` / `autocomplete-item-active`
+ * hooks this spec targets.
  */
-test.describe("autocomplete", () => {
+test.describe.skip("autocomplete", () => {
   test.beforeEach(async ({ request, page }) => {
     await waitForSandboxReady(request);
     await wipeSessions(page);
