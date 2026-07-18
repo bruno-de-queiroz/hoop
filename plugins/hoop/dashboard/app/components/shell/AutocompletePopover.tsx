@@ -1,3 +1,5 @@
+"use client";
+import { useEffect, useRef } from "react";
 import type { AutocompleteEntry } from "@/app/context/CommandsProvider";
 import { Chip, type ChipProps } from "../ui/Chip";
 import { cn } from "../ui/cn";
@@ -21,6 +23,14 @@ export function AutocompletePopover({
   onHover: (i: number) => void;
   onSelect: (entry: AutocompleteEntry) => void;
 }) {
+  // Keyboard nav moves activeIndex but the browser only auto-scrolls to elements
+  // it focuses — and we keep focus in the textarea — so the highlighted row can
+  // slide out of the scroll viewport. Nudge it back into view on every change.
+  const activeRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
+
   if (entries.length === 0) return null;
 
   return (
@@ -34,6 +44,7 @@ export function AutocompletePopover({
           <button
             key={entry.insert}
             type="button"
+            ref={active ? activeRef : undefined}
             data-testid={active ? "autocomplete-item-active" : undefined}
             onMouseDown={(e) => {
               // Fires before the textarea's blur, unlike onClick — keeps
