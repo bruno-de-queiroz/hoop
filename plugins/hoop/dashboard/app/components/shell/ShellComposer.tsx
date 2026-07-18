@@ -13,12 +13,15 @@ import {
   type AttachedImage,
 } from "../lib/imageAttach";
 import { cn } from "../ui/cn";
+import { useComposerAutocomplete } from "./useComposerAutocomplete";
+import { AutocompletePopover } from "./AutocompletePopover";
 
 // Center-pane composer (Phase 3). Matches the mockup's field (avatar + input +
 // image attach + round accent send) and hint bar, wired to the provider: plain
 // text → send, `!cmd` → runBash, `>msg` → participant chat, and image
 // attachments (button or paste) that ride along on send/chat. Typing broadcasts
-// via presence. A spectate peer gets the read-only note.
+// via presence. A spectate peer gets the read-only note. `/` (start of message)
+// and `@` (anywhere) open the autocomplete popover via useComposerAutocomplete.
 
 // Where a composed line goes. Plain text → the model (`send`); `!cmd` → bash;
 // `>msg` → participant chat; and the two client-intercepted control commands,
@@ -74,6 +77,7 @@ export const ShellComposer = memo(function ShellComposer({
   // draftRef stashes the in-progress text so ArrowDown past the newest restores it.
   const histIdxRef = useRef(-1);
   const draftRef = useRef("");
+  const autocomplete = useComposerAutocomplete();
 
   // Browser-only identity (meta tag / sessionStorage) — gate on mount so the
   // first client render matches the server's, which always sees "host"/"Host".
@@ -101,10 +105,10 @@ export const ShellComposer = memo(function ShellComposer({
     return out;
   }, [active.events]);
 
-  // Set the recalled value, resize the textarea, and drop the caret at the end.
-  // Sets el.value directly (in sync with setText) so height + caret are correct
-  // this frame; a programmatic value set does not fire onChange.
-  function applyValue(t: string) {
+  // Set the value, resize the textarea, and drop the caret at `caret` (default
+  // end). Sets el.value directly (in sync with setText) so height + caret are
+  // correct this frame; a programmatic value set does not fire onChange.
+  function applyValue(t: string, caret: number = t.length) {
     setText(t);
     setTyping(t.trim().length > 0);
     const el = taRef.current;
@@ -112,7 +116,7 @@ export const ShellComposer = memo(function ShellComposer({
       el.value = t;
       el.style.height = "auto";
       el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-      el.selectionStart = el.selectionEnd = t.length;
+      el.selectionStart = el.selectionEnd = caret;
     }
   }
 
@@ -176,6 +180,22 @@ export const ShellComposer = memo(function ShellComposer({
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // The autocomplete popover gets first crack at every key while a `/` or
+    // `@` trigger is active — otherwise ArrowUp/ArrowDown would fall through
+    // to prompt-history recall below, and Enter would submit instead of
+    // inserting the highlighted entry.
+    const action = autocomplete.onKeyDown(e);
+    if (action) {
+      e.preventDefault();
+      if (action === "select") {
+        const el = taRef.current;
+        const cursor = el?.selectionStart ?? text.length;
+        const result = autocomplete.select(text, cursor);
+        if (result) applyValue(result.text, result.cursor);
+      }
+      return;
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void submit();
@@ -225,6 +245,7 @@ export const ShellComposer = memo(function ShellComposer({
     const el = e.target;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    autocomplete.onTextChange(el.value, el.selectionStart ?? el.value.length);
   }
 
   if (spectator) {
@@ -254,11 +275,24 @@ export const ShellComposer = memo(function ShellComposer({
 
       <div
         className={cn(
-          "field flex flex-col gap-2 px-2 py-2",
+          "field relative flex flex-col gap-2 px-2 py-2",
           mode === "chat" && "is-chat",
           mode === "bash" && "is-bash",
         )}
       >
+        {autocomplete.open && (
+          <AutocompletePopover
+            entries={autocomplete.entries}
+            activeIndex={autocomplete.activeIndex}
+            onHover={autocomplete.setActiveIndex}
+            onSelect={(entry) => {
+              const el = taRef.current;
+              const cursor = el?.selectionStart ?? text.length;
+              const result = autocomplete.select(text, cursor, entry);
+              if (result) applyValue(result.text, result.cursor);
+            }}
+          />
+        )}
         {/* Attached thumbnails live inside the field, above the input row. */}
         {hasImages && (
           <div className="flex flex-wrap gap-2 px-1 pt-0.5">
@@ -310,7 +344,10 @@ export const ShellComposer = memo(function ShellComposer({
             onChange={onChange}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
-            onBlur={() => setTyping(false)}
+            onBlur={() => {
+              setTyping(false);
+              autocomplete.close();
+            }}
             placeholder={
               mode === "bash" ? "bash command…" : mode === "chat" ? "message to participants…" : "type a message…"
             }
@@ -360,7 +397,8 @@ export const ShellComposer = memo(function ShellComposer({
       <p className="font-mono text-[10px] text-ink-faint mt-2 px-1 text-center lg:text-left">
         enter to send · shift+enter for newline · ↑↓ history ·{" "}
         <span className={cn(mode === "bash" && "text-fail font-semibold")}>! bash</span> ·{" "}
-        <span className={cn(mode === "chat" && "text-wrap font-semibold")}>&gt; chat</span>
+        <span className={cn(mode === "chat" && "text-wrap font-semibold")}>&gt; chat</span> ·{" "}
+        <span className={cn(autocomplete.open && "text-accent font-semibold")}>/ commands · @ files</span>
       </p>
     </div>
   );

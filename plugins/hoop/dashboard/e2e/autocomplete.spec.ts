@@ -10,15 +10,8 @@ import { waitForSandboxReady, wipeSessions } from "./helpers";
  * Active-row anchor is `data-testid="autocomplete-item-active"`
  * (set on the highlighted `<button>`); no coupling to internal
  * Tailwind classes.
- *
- * SKIPPED: the slash / @file composer autocomplete is a deferred feature —
- * ShellComposer intentionally ships without it ("stay deferred — noted in the
- * hint, not stubbed as dead buttons"). There is no popover / active-item to
- * drive yet. Re-enable (drop `.skip`) once the composer grows the affordance
- * and re-introduces the `autocomplete-popover` / `autocomplete-item-active`
- * hooks this spec targets.
  */
-test.describe.skip("autocomplete", () => {
+test.describe("autocomplete", () => {
   test.beforeEach(async ({ request, page }) => {
     await waitForSandboxReady(request);
     await wipeSessions(page);
@@ -28,7 +21,7 @@ test.describe.skip("autocomplete", () => {
     await page.goto("/");
 
     // Create a session anchored at /workspace via the empty-state large form.
-    await page.getByRole("button", { name: /^create$/i }).click();
+    await page.getByRole("button", { name: /create session/i }).click();
     const composer = page.getByPlaceholder(/type a message/i);
     await expect(composer).toBeEnabled({ timeout: 10_000 });
 
@@ -51,7 +44,8 @@ test.describe.skip("autocomplete", () => {
     await composer.fill(afterSlashInsert + "@");
     // Poll instead of waitForTimeout: the useFiles hook debounces 120ms
     // and then fires the fetch; we wait for the active item to be
-    // populated with a name that matches a filesystem-shaped string.
+    // populated. The popover renders the full insert token, so a file/dir
+    // entry reads as "@<name>" (mirroring the "/<cmd>" slash entries above).
     await expect
       .poll(
         async () => {
@@ -64,9 +58,9 @@ test.describe.skip("autocomplete", () => {
         },
         { timeout: 5_000, message: "file popover didn't surface any item" },
       )
-      .toMatch(/^[A-Za-z0-9_.][\w./-]*$/);
+      .toMatch(/^@[\w./-]+$/);
 
-    const filePick = (
+    const fileInsert = (
       (await popover
         .getByTestId("autocomplete-item-active")
         .locator("span.truncate")
@@ -76,7 +70,7 @@ test.describe.skip("autocomplete", () => {
 
     await composer.press("Enter");
     const finalValue = (await composer.inputValue()) ?? "";
-    expect(finalValue.endsWith(`@${filePick} `)).toBe(true);
+    expect(finalValue.endsWith(`${fileInsert} `)).toBe(true);
     // Slash insertion survives — the original slash prefix is still there.
     expect(finalValue.startsWith(firstInsert + " ")).toBe(true);
   });

@@ -1,19 +1,18 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { Skill, SlashCommand } from "@/lib/sandbox-client";
-import { useSelectedSession } from "./SelectedSessionProvider";
-import { useSessions } from "./SessionsProvider";
+import { useSelectedCwd } from "./useSelectedCwd";
 import { useSSE } from "@/app/components/useSSE";
 
 export interface AutocompleteEntry {
-  /** Visible insertion text, including leading "/". e.g. "/hoop:setup". */
+  /** Visible insertion text, including leading "/" or "@". e.g. "/hoop:setup", "@src/index.ts". */
   insert: string;
-  /** Short label for the popover; usually identical to insert minus the slash. */
+  /** Short label for the popover; usually identical to insert minus the prefix. */
   label: string;
   /** One-line subtext. */
   description: string | null;
-  /** "command" or "skill" — used to colour the chip in the popover. */
-  kind: "command" | "skill" | "builtin";
+  /** Used to colour the chip in the popover. */
+  kind: "command" | "skill" | "builtin" | "file" | "dir";
   /** Source plugin/owner for the row, when meaningful. */
   source?: string | null;
 }
@@ -24,6 +23,19 @@ export interface CommandsValue {
 }
 
 const CommandsContext = createContext<CommandsValue | null>(null);
+
+// Builtins first, then plugin/project commands, then skills — alphabetical
+// within each group. Without this, the handful of built-ins (`/plan`,
+// `/model`, `/stop`, ...) can get sorted past a large plugin's namespace
+// (e.g. many `claude-mem:*` commands) and fall off the composer's
+// top-N slice for a bare "/", making them effectively invisible.
+const KIND_RANK: Record<AutocompleteEntry["kind"], number> = {
+  builtin: 0,
+  command: 1,
+  skill: 2,
+  file: 3,
+  dir: 3,
+};
 
 /**
  * Loads `/api/commands` and `/api/skills` once at mount and merges them
@@ -36,15 +48,11 @@ const CommandsContext = createContext<CommandsValue | null>(null);
  * both endpoints for the canonical corpus.
  */
 export function CommandsProvider({ children }: { children: React.ReactNode }) {
-  const { selectedId } = useSelectedSession();
-  const { sessions } = useSessions();
   // Per Claude Code's discovery rule, skills + commands come from either
   // `~/.claude` (global) or `<cwd>/.claude` (project). Scope this corpus to
   // the active session's cwd so a project's bundled commands show up in
   // autocomplete when that session is selected.
-  const selectedCwd = selectedId
-    ? sessions.find((s) => s.sessionId === selectedId)?.cwd ?? null
-    : null;
+  const selectedCwd = useSelectedCwd();
 
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
@@ -99,9 +107,10 @@ export function CommandsProvider({ children }: { children: React.ReactNode }) {
       }))
       .filter((e) => !seenInsert.has(e.insert));
 
-    return [...cmdEntries, ...skillEntries].sort((a, b) =>
-      a.label.localeCompare(b.label),
-    );
+    return [...cmdEntries, ...skillEntries].sort((a, b) => {
+      const rankDiff = KIND_RANK[a.kind] - KIND_RANK[b.kind];
+      return rankDiff !== 0 ? rankDiff : a.label.localeCompare(b.label);
+    });
   }, [commands, skills]);
 
   const value = useMemo<CommandsValue>(() => ({ entries, loading }), [entries, loading]);
