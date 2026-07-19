@@ -48,9 +48,38 @@ function fts5Phrase(q: string): string {
   return `"${q.replace(/"/g, '""')}"`;
 }
 
-export async function search(q: string, type: SearchType, limit: number): Promise<SearchResponse> {
+/**
+ * A session-scope restriction shared by both tiers. `ids` is deduped; `sql` is
+ * a ready-to-AND fragment referencing the events table alias `e` (both tier
+ * queries alias it as `e`). Callers bind `ids` as the trailing params.
+ */
+interface SessionScope {
+  sql: string;
+  ids: string[];
+}
+
+function scopeClause(sessions: string[]): SessionScope {
+  const ids = [...new Set(sessions.filter((s) => typeof s === "string" && s.length > 0))];
+  return { sql: `e.session_id IN (${ids.map(() => "?").join(", ")})`, ids };
+}
+
+export async function search(
+  q: string,
+  type: SearchType,
+  limit: number,
+  sessions?: string[],
+): Promise<SearchResponse> {
   const trimmed = q.trim();
   if (!trimmed) {
+    return { results: [], type, total: 0, meta: { bm25_used: false, semantic_used: false } };
+  }
+
+  // Optional session scope: a caller (the dashboard, for a peer) may restrict
+  // results to a fixed set of session ids. An empty array means "no session
+  // matches this scope" — return nothing rather than falling through to an
+  // unscoped search, which would leak other sessions' events.
+  const scope = sessions ? scopeClause(sessions) : null;
+  if (scope && scope.ids.length === 0) {
     return { results: [], type, total: 0, meta: { bm25_used: false, semantic_used: false } };
   }
 
@@ -62,17 +91,17 @@ export async function search(q: string, type: SearchType, limit: number): Promis
   let semanticUnavailable: string | undefined;
 
   if (wantBM25) {
-    bm25Results = bm25SearchUnion(trimmed, limit * 2);
+    bm25Results = bm25SearchUnion(trimmed, limit * 2, scope);
   }
 
   if (wantSemantic) {
     if (!isEmbeddingConfigured()) {
       semanticUnavailable =
-        "Semantic search not configured. Set EMBEDDING_BASE_URL (e.g. http://localhost:11434/v1 for Ollama) or OPENAI_API_KEY in ~/.claude/hoop/dashboard.env. BM25 works without config.";
+        "Semantic search not configured. Set EMBEDDING_BASE_URL (e.g. http://localhost:11434/v1 for Ollama) or OPENAI_API_KEY in ~/.claude/hoop/hoop.env. BM25 works without config.";
     } else if (!hasVecExtension()) {
       semanticUnavailable = "sqlite-vec extension not loaded; semantic search disabled.";
     } else {
-      semanticResults = await semanticSearchUnion(trimmed, limit * 2);
+      semanticResults = await semanticSearchUnion(trimmed, limit * 2, scope);
     }
   }
 
@@ -98,9 +127,9 @@ export async function search(q: string, type: SearchType, limit: number): Promis
  * cap and the results are merged client-side, then re-sorted by raw bm25 score.
  * Tier-tagged so the caller can show provenance.
  */
-function bm25SearchUnion(q: string, limit: number): SearchResult[] {
-  const hot = bm25SearchTier(q, limit, "hot");
-  const arch = bm25SearchTier(q, limit, "arch");
+function bm25SearchUnion(q: string, limit: number, scope: SessionScope | null): SearchResult[] {
+  const hot = bm25SearchTier(q, limit, "hot", scope);
+  const arch = bm25SearchTier(q, limit, "arch", scope);
   const merged = dedupePreferHot([...hot, ...arch]);
   // bm25 returns a NEGATIVE score; lower (more negative) is better. Re-sort
   // the merged list and re-rank so RRF below sees a consistent order.
@@ -108,7 +137,12 @@ function bm25SearchUnion(q: string, limit: number): SearchResult[] {
   return merged.slice(0, limit).map((r, i) => ({ ...r, score: -(r.bm25_rank ?? 0), rank: i }));
 }
 
-function bm25SearchTier(q: string, limit: number, tier: "hot" | "arch"): SearchResult[] {
+function bm25SearchTier(
+  q: string,
+  limit: number,
+  tier: "hot" | "arch",
+  scope: SessionScope | null,
+): SearchResult[] {
   const db = getDb();
   const tableEvents = tier === "hot" ? "events" : "arch.events";
   const tableFts = tier === "hot" ? "events_fts" : "arch.events_fts";
@@ -130,11 +164,11 @@ function bm25SearchTier(q: string, limit: number, tier: "hot" | "arch"): SearchR
                 bm25(events_fts) AS bm25_rank
          FROM ${tableFts}
          JOIN ${tableEvents} e ON e.id = ${tableFts}.rowid
-         WHERE events_fts MATCH ?
+         WHERE events_fts MATCH ?${scope ? ` AND ${scope.sql}` : ""}
          ORDER BY bm25_rank
          LIMIT ?`
       )
-      .all(fts5Phrase(q), limit) as Array<{
+      .all(fts5Phrase(q), ...(scope ? scope.ids : []), limit) as Array<{
         id: number; ts: string; session_id: string | null; hook_type: string | null;
         tool_name: string | null; text: string | null; content_hash: string | null;
         bm25_rank: number;
@@ -158,23 +192,39 @@ function bm25SearchTier(q: string, limit: number, tier: "hot" | "arch"): SearchR
   }
 }
 
-async function semanticSearchUnion(q: string, limit: number): Promise<SearchResult[]> {
+async function semanticSearchUnion(
+  q: string,
+  limit: number,
+  scope: SessionScope | null,
+): Promise<SearchResult[]> {
   const vectors = await embed([q]);
   if (!vectors || vectors.length === 0) return [];
   const queryVec = JSON.stringify(vectors[0]);
-  const hot = semanticSearchTier(queryVec, limit, "hot");
-  const arch = semanticSearchTier(queryVec, limit, "arch");
+  const hot = semanticSearchTier(queryVec, limit, "hot", scope);
+  const arch = semanticSearchTier(queryVec, limit, "arch", scope);
   const merged = dedupePreferHot([...hot, ...arch]);
   // Smaller distance = better (cosine / euclidean per vec0 setup); re-sort.
   merged.sort((a, b) => (a.vec_distance ?? 0) - (b.vec_distance ?? 0));
   return merged.slice(0, limit).map((r, i) => ({ ...r, score: -(r.vec_distance ?? 0), rank: i }));
 }
 
-function semanticSearchTier(queryVec: string, limit: number, tier: "hot" | "arch"): SearchResult[] {
+function semanticSearchTier(
+  queryVec: string,
+  limit: number,
+  tier: "hot" | "arch",
+  scope: SessionScope | null,
+): SearchResult[] {
   const db = getDb();
   const tableEvents = tier === "hot" ? "events" : "arch.events";
   const tableVec = tier === "hot" ? "events_vec" : "arch.events_vec";
   try {
+    // sqlite-vec KNN picks the `k` nearest rows *before* any joined-table
+    // constraint is applied, so the session filter runs as a post-filter. When
+    // scoping to a session, widen `k` so enough in-session rows survive the
+    // filter instead of being crowded out by nearer rows from other sessions
+    // (bounded to keep the KNN scan cheap). The IN clause still guarantees no
+    // out-of-scope row is ever returned.
+    const k = scope ? Math.min(limit * 10, 500) : limit;
     const rows = db
       .prepare(
         `SELECT e.id, e.ts, e.session_id, e.hook_type, e.tool_name, e.text, e.content_hash,
@@ -182,10 +232,11 @@ function semanticSearchTier(queryVec: string, limit: number, tier: "hot" | "arch
          FROM ${tableVec} AS v
          JOIN ${tableEvents} e ON e.id = v.rowid
          WHERE v.embedding MATCH ?
-           AND k = ?
-         ORDER BY v.distance`
+           AND k = ?${scope ? ` AND ${scope.sql}` : ""}
+         ORDER BY v.distance
+         LIMIT ?`
       )
-      .all(queryVec, limit) as Array<{
+      .all(queryVec, k, ...(scope ? scope.ids : []), limit) as Array<{
         id: number; ts: string; session_id: string | null; hook_type: string | null;
         tool_name: string | null; text: string | null; content_hash: string | null;
         vec_distance: number;

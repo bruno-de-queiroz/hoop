@@ -133,7 +133,7 @@ export interface SandboxClient {
   getSessionSummary(sessionId: string): Promise<{ summary: SessionSummary | null }>;
 
   listEvents(query: EventsQuery): Promise<import("@/lib/sandbox-types").EventRow[]>;
-  getEvent(id: number): Promise<EventRowFull | null>;
+  getEvent(id: number, opts?: { session?: string }): Promise<EventRowFull | null>;
 
   listFiles(query: FilesQuery): Promise<FileEntry[]>;
 
@@ -151,7 +151,7 @@ export interface SandboxClient {
   listAgentRuns(limit?: number): Promise<AgentRun[]>;
   getAgentDetail(id: number): Promise<AgentRun | null>;
 
-  search(q: string, type: SearchType, limit: number): Promise<SearchResponse>;
+  search(q: string, type: SearchType, limit: number, session?: string): Promise<SearchResponse>;
 
   // ── Session sharing (peer co-drive) ──────────────────────────────────────
   /** Register a share grant. The sandbox stores metadata only; the dashboard
@@ -476,9 +476,12 @@ export function createHttpClient(socketPath: string): SandboxClient {
     listEvents: (q) => request("GET", encode("/events", {
       limit: q.limit, before: q.before, hook: q.hook, tool: q.tool, session: q.session,
     })),
-    getEvent: async (id) => {
+    getEvent: async (id, opts) => {
+      const path = opts?.session
+        ? `/events/${id}?session=${encodeURIComponent(opts.session)}`
+        : `/events/${id}`;
       try {
-        return await request<EventRowFull>("GET", `/events/${id}`);
+        return await request<EventRowFull>("GET", path);
       } catch (e: any) {
         if (e?.status === 404) return null;
         throw e;
@@ -531,8 +534,8 @@ export function createHttpClient(socketPath: string): SandboxClient {
       }
     },
 
-    search: (q, type, limit) =>
-      request("POST", "/search", { q, type, limit }),
+    search: (q, type, limit, session) =>
+      request("POST", "/search", { q, type, limit, ...(session ? { session } : {}) }),
 
     createShare: (opts) => request("POST", "/shares", opts),
     revokeShare: (shareId) =>

@@ -19,14 +19,20 @@ export async function GET(request: Request) {
   const tool = url.searchParams.get("tool");
   let session = url.searchParams.get("session");
 
-  // A peer may only read events for the session they were shared into — pin the
-  // query to their bound session regardless of the requested `session`.
+  // A peer may only read events for the session they were shared into. The
+  // unscoped feed (no `session`) is the host-only global event history — a peer
+  // requesting it would be reaching for other sessions' activity, so refuse it
+  // outright rather than silently narrowing. Any explicit `session` must match
+  // their bound session. The transcript always passes `session`, so this only
+  // blocks the host-only Events panel/drawer, never a legitimate peer read.
   const peerSes = peerSessionId(request);
   if (peerSes) {
-    if (session && session !== peerSes) {
+    if (!session) {
+      return errorResponse("forbidden: event history is host-only", 403);
+    }
+    if (session !== peerSes) {
       return errorResponse("forbidden: out of session scope", 403);
     }
-    session = peerSes;
   }
 
   return proxy(() =>

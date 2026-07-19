@@ -1,10 +1,13 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
 
 const listEventsMock = vi.fn();
+const validateShareMock = vi.fn();
 
 vi.mock("@/lib/sandbox-client", () => ({
   client: {
     listEvents: (opts: unknown) => listEventsMock(opts),
+    // peerShareGuard consults this for peer requests; default to a live share.
+    validateShare: (...a: unknown[]) => validateShareMock(...a),
   },
 }));
 
@@ -14,11 +17,23 @@ beforeEach(async () => {
   vi.resetModules();
   listEventsMock.mockReset();
   listEventsMock.mockResolvedValue([]);
+  validateShareMock.mockReset();
+  validateShareMock.mockResolvedValue({ shareId: "share1", sessionId: "s1" });
   mod = await import("./route");
 });
 
 function makeReq(search: string): Request {
   return new Request(`http://localhost/api/events${search}`);
+}
+
+/** A peer request: middleware would have injected these trusted headers. */
+function makePeerReq(search: string, session = "s1"): Request {
+  return new Request(`http://localhost/api/events${search}`, {
+    headers: {
+      "x-hoop-participant": "peer:share1",
+      "x-hoop-peer-session": session,
+    },
+  });
 }
 
 describe("GET /api/events — limit clamping", () => {
@@ -76,5 +91,34 @@ describe("GET /api/events — limit clamping", () => {
     expect(listEventsMock).toHaveBeenCalledWith(
       expect.objectContaining({ limit: 10, hook: "PreToolUse", session: "s1" })
     );
+  });
+});
+
+describe("GET /api/events — peer session scoping (event history is host-only)", () => {
+  it("rejects an unscoped peer request (the global Events panel feed) with 403", async () => {
+    const res = await mod.GET(makePeerReq("?limit=200"));
+    expect(res.status).toBe(403);
+    expect(listEventsMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a peer request for a different session with 403", async () => {
+    const res = await mod.GET(makePeerReq("?session=other", "s1"));
+    expect(res.status).toBe(403);
+    expect(listEventsMock).not.toHaveBeenCalled();
+  });
+
+  it("allows a peer to read their own bound session (the transcript path)", async () => {
+    const res = await mod.GET(makePeerReq("?session=s1&limit=50", "s1"));
+    expect(res.status).toBe(200);
+    expect(listEventsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ session: "s1", limit: 50 })
+    );
+  });
+
+  it("blocks a revoked peer (share gone) with 403 before touching events", async () => {
+    validateShareMock.mockResolvedValue(null); // 404 = revoked/expired
+    const res = await mod.GET(makePeerReq("?session=s1", "s1"));
+    expect(res.status).toBe(403);
+    expect(listEventsMock).not.toHaveBeenCalled();
   });
 });

@@ -166,18 +166,28 @@ export function DesktopShell({ isPeer, port }: { isPeer: boolean; port: string }
             </Rail>
           </div>
 
-          <div
-            className={cn(
-              "shrink-0 overflow-hidden motion-safe:transition-[height] motion-safe:duration-200 motion-safe:ease-smooth",
-              // Hidden on phones — reclaim the row for the transcript/composer.
-              "max-lg:hidden",
-              fullscreen ? "h-0" : "h-8",
-            )}
-          >
-            <EventStatusBar port={port} onOpen={() => setEventsOpen(true)} />
-          </div>
+          {/* The global Events feed (status bar + drawer) is a cross-session
+            * event history — host-only. A peer is scoped to one shared session,
+            * so surfacing the all-sessions event log to them would leak other
+            * sessions' activity. The server enforces this too (see
+            * /api/events, /api/events/:id, /api/stream); hiding it here is the
+            * client half of the same rule. */}
+          {!isPeer && (
+            <>
+              <div
+                className={cn(
+                  "shrink-0 overflow-hidden motion-safe:transition-[height] motion-safe:duration-200 motion-safe:ease-smooth",
+                  // Hidden on phones — reclaim the row for the transcript/composer.
+                  "max-lg:hidden",
+                  fullscreen ? "h-0" : "h-8",
+                )}
+              >
+                <EventStatusBar port={port} onOpen={() => setEventsOpen(true)} />
+              </div>
 
-          <ShellEventsDrawer open={eventsOpen} onClose={() => setEventsOpen(false)} />
+              <ShellEventsDrawer open={eventsOpen} onClose={() => setEventsOpen(false)} />
+            </>
+          )}
 
           <SettingsSheet
             open={settingsOpen}

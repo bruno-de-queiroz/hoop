@@ -53,6 +53,7 @@ import {
   type TurnImage,
   shutdownActiveSessions,
   listActiveSessions,
+  expandSessionIds,
 } from "./lib/active-sessions";
 import {
   listSessions,
@@ -942,11 +943,20 @@ add("GET", "/events/stream", async (_req, res) => {
   res.on("close", cleanup);
 });
 
-add("GET", "/events/:id", (_req, res, params) => {
+add("GET", "/events/:id", (_req, res, params, url) => {
   const id = parseInt(params.id, 10);
   if (!Number.isFinite(id)) return err(res, 400, "invalid id");
   const row = getEvent(id);
   if (!row) return err(res, 404, "not found");
+  // Optional session scope (the dashboard sends it for a peer): the event must
+  // belong to the caller's session (alias-expanded), else it's treated as
+  // absent — a peer must not read event bodies from other sessions. 404 (not
+  // 403) so scope stays opaque and can't be used to probe event ids.
+  const scope = url.searchParams.get("session");
+  if (scope) {
+    const allowed = new Set(expandSessionIds(scope));
+    if (!row.session_id || !allowed.has(row.session_id)) return err(res, 404, "not found");
+  }
   json(res, 200, row);
 });
 
@@ -1293,13 +1303,19 @@ add("GET", "/agents/:id", (_req, res, params) => {
 });
 
 add("POST", "/search", async (req, res) => {
-  let body: { q?: unknown; type?: unknown; limit?: unknown };
+  let body: { q?: unknown; type?: unknown; limit?: unknown; session?: unknown };
   try { body = await readJson(req, MAX_BYTES_DEFAULT); } catch (e: any) { return err(res, e.status ?? 400, e.message); }
   const q = typeof body.q === "string" ? body.q : "";
   const rawType = body.type;
   const type: SearchType = rawType === "semantic" || rawType === "hybrid" ? rawType : "bm25";
   const limit = clampInt(body.limit ?? 50, { min: 1, max: 200, fallback: 50 });
-  json(res, 200, await search(q, type, limit));
+  // Optional session scope (the dashboard sends it for a peer). Expand to the
+  // full alias set so a peer sees every hit in their conversation across
+  // `claude --resume` id swaps, and nothing outside it.
+  const sessions = typeof body.session === "string" && body.session.length > 0
+    ? expandSessionIds(body.session)
+    : undefined;
+  json(res, 200, await search(q, type, limit, sessions));
 });
 
 // ---------- JSON: skill run ----------

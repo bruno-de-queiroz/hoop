@@ -2,6 +2,8 @@ import { client } from "@/lib/sandbox-client";
 import type { SearchType } from "@/lib/sandbox-types";
 import { parseJsonBody, errorResponse } from "@/lib/api-helpers";
 import { clampInt } from "@shared/clamp";
+import { peerSessionId } from "@/lib/peer-auth";
+import { peerShareGuard } from "@/lib/peer-live";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +18,9 @@ function normalizeType(v: unknown): SearchType {
 }
 
 export async function POST(request: Request) {
+  const revoked = await peerShareGuard(request);
+  if (revoked) return revoked;
+
   const { body, error } = await parseJsonBody<{
     q?: unknown;
     type?: unknown;
@@ -34,6 +39,12 @@ export async function POST(request: Request) {
   const type = normalizeType(body.type ?? body.mode);
   const limit = clampInt(body.limit, { min: 1, max: 200, fallback: 20 });
 
-  const result = await client.search(body.q, type, limit);
+  // Search spans every session's events, so an unscoped query would let a peer
+  // surface activity from sessions they were never shared into. Pin a peer's
+  // search to their bound session (the sandbox expands aliases and filters in
+  // SQL, so ranking/limit apply within their session). Host: unscoped.
+  const session = peerSessionId(request) ?? undefined;
+
+  const result = await client.search(body.q, type, limit, session);
   return Response.json(result);
 }

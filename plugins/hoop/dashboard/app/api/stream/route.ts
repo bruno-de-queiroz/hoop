@@ -1,5 +1,7 @@
 import { client } from "@/lib/sandbox-client";
 import { presenceBus, listPresence } from "@/lib/presence";
+import { isHost } from "@/lib/peer-auth";
+import { errorResponse } from "@/lib/api-helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -8,8 +10,17 @@ export const dynamic = "force-dynamic";
  * Server-Sent Events live stream. Pure proxy of the sandbox's event channel:
  * subscribes to the long-lived buses populated by sandbox-client's SSE
  * connection to /events/stream and forwards them to the browser.
+ *
+ * Host-only. This is an unfiltered firehose of every session's events; the
+ * only legitimate consumer is the front process's WebSocket bridge (server.mjs),
+ * which connects as the host over loopback and re-broadcasts per-peer-scoped
+ * frames on /api/ws. A peer must never read this directly — that would leak
+ * other sessions' activity — so refuse anyone who isn't the host.
  */
-export async function GET() {
+export async function GET(request: Request) {
+  if (!isHost(request)) {
+    return errorResponse("forbidden: live event stream is host-only", 403);
+  }
   // instrumentation-node.ts is supposed to call client.boot() at server
   // startup, but Next 14 standalone bundles instrumentation in a separate
   // module graph from route handlers — the client singleton it boots there
