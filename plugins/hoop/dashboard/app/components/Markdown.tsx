@@ -155,15 +155,19 @@ const COMPONENTS: Components = {
   // Only ever present when the file-chip rehype plugin is active (see below):
   // an `@file` mention rendered as a compact inline chip instead of plain text.
   // Only ever rendered inside a colored chat bubble (host/peer). A solid
-  // `direct` (purple) fill with white text reads clearly against both the
-  // green host and blue peer bubbles — a tinted bg + same-hue text (like the
-  // old `sdk` version) doesn't have enough contrast against a saturated
-  // bubble color underneath.
+  // fill with white text reads clearly against both the green host and blue
+  // peer bubbles — a tinted bg + same-hue text (like the old `sdk` version)
+  // doesn't have enough contrast against a saturated bubble color
+  // underneath. `direct` (purple) on its own read too bright/neon, so it's
+  // darkened toward black (see ErrorNotice for the same color-mix pattern).
   span: ({ className, children }) => {
     const cls = Array.isArray(className) ? className.join(" ") : className ?? "";
     if (cls.includes("hoop-file-chip")) {
       return (
-        <span className="mx-px inline-flex items-center rounded bg-direct px-1.5 font-mono text-[11px] font-semibold text-white align-baseline">
+        <span
+          className="mx-px inline-flex items-center rounded px-1.5 font-mono text-[11px] font-semibold text-white align-baseline"
+          style={{ background: "color-mix(in oklab, rgb(var(--direct)) 55%, black)" }}
+        >
           {children}
         </span>
       );
