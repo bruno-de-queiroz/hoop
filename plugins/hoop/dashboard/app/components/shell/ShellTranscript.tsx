@@ -1,6 +1,6 @@
 "use client";
 import { memo, useEffect, useRef, useState } from "react";
-import { Sparkles, Terminal, ArrowUp, MessageCircle, CheckCircle2, PencilLine, AlertTriangle } from "lucide-react";
+import { Sparkles, Terminal, ArrowUp, MessageCircle, CheckCircle2, PencilLine, AlertTriangle, Copy, Check } from "lucide-react";
 import type { EventRow } from "@/lib/sandbox-client";
 import {
   userPromptText,
@@ -24,6 +24,31 @@ function clockTime(ts: string): string {
   const d = new Date(ts);
   if (isNaN(d.getTime())) return "";
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+// Sits beside the timestamp on assistant bubbles — icon-only and faint by
+// default so it doesn't compete with the response, brightening only on hover.
+function CopyResponseButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* Clipboard API unavailable (older browser / insecure context) — no fallback. */
+    }
+  };
+  return (
+    <button
+      onClick={copy}
+      title={copied ? "Copied!" : "Copy response"}
+      aria-label="Copy response"
+      className="rounded p-0.5 text-ink-faint hover:text-ink-soft hover:bg-elevated transition-colors"
+    >
+      {copied ? <Check className="w-2.5 h-2.5" /> : <Copy className="w-2.5 h-2.5" />}
+    </button>
+  );
 }
 
 // Host vs peer from the event's attribution, matching the legacy AuthorChip
@@ -227,7 +252,10 @@ const AssistantBubble = memo(function AssistantBubble({ row }: { row: EventRow }
         <div className="bubble bubble-assistant msg-wide px-3.5 py-3 text-[13px] leading-relaxed">
           <Markdown source={text} />
         </div>
-        <span className="font-mono text-[10px] text-ink-faint pl-1">{clockTime(row.ts)}</span>
+        <div className="flex items-center gap-1 pl-1">
+          <span className="font-mono text-[10px] text-ink-faint">{clockTime(row.ts)}</span>
+          {text && <CopyResponseButton text={text} />}
+        </div>
       </div>
     </div>
   );
