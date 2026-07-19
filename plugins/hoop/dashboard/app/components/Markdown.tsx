@@ -154,11 +154,14 @@ const COMPONENTS: Components = {
   },
   // Only ever present when the file-chip rehype plugin is active (see below):
   // an `@file` mention rendered as a compact inline chip instead of plain text.
+  // Only ever rendered inside a colored chat bubble (host/peer) — `direct`
+  // (purple) reads as a distinct hue against both the green host bubble and
+  // the blue peer bubble, unlike `sdk` (blue), which clashed with peer.
   span: ({ className, children }) => {
     const cls = Array.isArray(className) ? className.join(" ") : className ?? "";
     if (cls.includes("hoop-file-chip")) {
       return (
-        <span className="mx-px inline-flex items-center rounded bg-sdk/15 px-1 font-mono text-[11px] text-sdk align-baseline">
+        <span className="mx-px inline-flex items-center rounded bg-direct/25 px-1.5 font-mono text-[11px] font-semibold text-direct ring-1 ring-inset ring-direct/40 align-baseline">
           {children}
         </span>
       );
