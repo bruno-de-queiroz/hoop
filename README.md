@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.svg" alt="hoop" width="224" height="88">
+</p>
+
 # hoop
 
 [![CI](https://github.com/bruno-de-queiroz/hoop/actions/workflows/ci.yml/badge.svg)](https://github.com/bruno-de-queiroz/hoop/actions/workflows/ci.yml)
