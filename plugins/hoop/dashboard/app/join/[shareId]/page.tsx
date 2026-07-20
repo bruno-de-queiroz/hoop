@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Check, X } from "lucide-react";
 import { Button, Field, Input } from "@/app/components/ui";
+import { HoopMark } from "@/app/components/shell/HoopLogo";
 
 /**
  * Share-link landing page. The peer token rides in the URL FRAGMENT
@@ -125,10 +126,10 @@ export default function JoinPage() {
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center bg-bg text-ink-soft p-6">
-      {/* hoop logotype — accent dot is the only rationed color up top */}
-      <div className="flex items-baseline gap-1 mb-8">
+      {/* hoop logotype — brand mark + wordmark, mirrors the leave screen */}
+      <div className="flex items-center gap-1.5 mb-8">
+        <HoopMark size={22} />
         <span className="font-display text-[20px] font-bold tracking-tight text-ink">hoop</span>
-        <span className="font-display text-[20px] font-bold text-accent">·</span>
       </div>
 
       <div className="w-full max-w-sm rounded-card bg-window border border-divider p-6 shadow-overlay">

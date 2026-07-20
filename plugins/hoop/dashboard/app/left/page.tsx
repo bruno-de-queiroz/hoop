@@ -1,4 +1,5 @@
 import { LogOut } from "lucide-react";
+import { HoopMark } from "../components/shell/HoopLogo";
 
 export const dynamic = "force-dynamic";
 
@@ -13,9 +14,9 @@ export default function LeftPage() {
   return (
     <main className="min-h-screen flex flex-col items-center justify-center bg-bg text-ink-soft p-6">
       {/* hoop logotype — mirrors the /join screen so leaving bookends joining */}
-      <div className="flex items-baseline gap-1 mb-8">
+      <div className="flex items-center gap-1.5 mb-8">
+        <HoopMark size={22} />
         <span className="font-display text-[20px] font-bold tracking-tight text-ink">hoop</span>
-        <span className="font-display text-[20px] font-bold text-accent">·</span>
       </div>
 
       <div className="w-full max-w-sm rounded-card bg-window border border-divider p-6 shadow-overlay">

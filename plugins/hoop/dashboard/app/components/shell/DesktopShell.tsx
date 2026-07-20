@@ -18,6 +18,7 @@ import { ShellThemeSwitcher } from "./ShellThemeSwitcher";
 import { ShellCenterPane } from "./ShellCenterPane";
 import { ShellAdmissionToast } from "./ShellAdmissionToast";
 import { CenterFullscreenContext, PlanReviewProvider } from "./ShellChrome";
+import { HoopMark } from "./HoopLogo";
 import { AuthBanner } from "../AuthBanner";
 
 // The right-rail mini strip shown when collapsed (mockup's rail-mini): section
@@ -102,8 +103,8 @@ export function DesktopShell({ isPeer, port }: { isPeer: boolean; port: string }
               fullscreen && "h-0 opacity-0 border-b-0 pointer-events-none",
             )}
           >
+            <HoopMark size={18} className="mr-0.5" />
             <span className="font-sans font-bold tracking-tight text-ink">hoop</span>
-            <span className="font-sans font-bold text-accent">·</span>
             <div className="ml-auto flex items-center gap-2">
               <ShellSearch />
               <ShellThemeSwitcher />

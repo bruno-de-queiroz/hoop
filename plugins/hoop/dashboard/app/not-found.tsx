@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Compass } from "lucide-react";
 import { AppShell, TitleBar, CenterPane } from "./components/ui/AppShell";
+import { HoopMark } from "./components/shell/HoopLogo";
 import { ShellThemeSwitcher } from "./components/shell/ShellThemeSwitcher";
 import { button } from "./components/ui/Button";
 
@@ -14,8 +15,8 @@ export default function NotFound() {
   return (
     <AppShell>
       <TitleBar className="max-lg:hidden">
+        <HoopMark size={18} className="mr-0.5" />
         <span className="font-sans font-bold tracking-tight text-ink">hoop</span>
-        <span className="font-sans font-bold text-accent">·</span>
         <div className="ml-auto flex items-center gap-2">
           <ShellThemeSwitcher />
         </div>
