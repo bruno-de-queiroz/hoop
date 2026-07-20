@@ -70,7 +70,7 @@ export interface SandboxClient {
     model?: string | null;
     runId?: string | null;
     via?: "new-conversation" | "skill";
-  }): Promise<{ sessionId: string; meta: ActiveSessionMeta }>;
+  }, participant?: string): Promise<{ sessionId: string; meta: ActiveSessionMeta }>;
   listSessions(): Promise<SessionInfo[]>;
   writeUserTurn(sessionId: string, text: string, participant?: string, images?: TurnImage[]): Promise<{ sessionId: string }>;
   /** Participant-to-participant chat — persisted + broadcast, never sent to the
@@ -141,7 +141,7 @@ export interface SandboxClient {
   listFiles(query: FilesQuery): Promise<FileEntry[]>;
 
   isValidSkillName(name: string): boolean;
-  startSkillRun(skill: string, args?: string): Promise<{ runId: string }>;
+  startSkillRun(skill: string, args?: string, participant?: string): Promise<{ runId: string }>;
   listRuns(): Promise<RunMeta[]>;
   getRun(runId: string): Promise<RunMeta | undefined>;
 
@@ -423,7 +423,7 @@ export function createHttpClient(socketPath: string): SandboxClient {
     boot() { ensureSse(); },
     shutdown,
 
-    startNewConversation: (opts) => request("POST", "/sessions", opts),
+    startNewConversation: (opts, participant) => request("POST", "/sessions", opts, participantOpts(participant)),
     listSessions: () => request("GET", "/sessions"),
     writeUserTurn: async (sessionId, text, participant, images) => {
       const res = await request<{ ok: boolean; sessionId: string }>(
@@ -503,11 +503,12 @@ export function createHttpClient(socketPath: string): SandboxClient {
     },
 
     isValidSkillName,
-    startSkillRun: async (skill, args) => {
+    startSkillRun: async (skill, args, participant) => {
       const res = await request<{ runId: string }>(
         "POST",
         `/skill/${encodeURIComponent(skill)}/run`,
-        { args }
+        { args },
+        participantOpts(participant),
       );
       return { runId: res.runId };
     },

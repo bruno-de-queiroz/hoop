@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { client } from "@/lib/sandbox-client";
 import { errorResponse, parseJsonBody, boundedString } from "@/lib/api-helpers";
+import { isHost, forwardedParticipant } from "@/lib/peer-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,6 +12,11 @@ const MAX_NAME_LEN = 200;
 const MAX_MODEL_LEN = 128;
 
 export async function POST(req: NextRequest) {
+  // Host-only: creating a session is not a co-drive action. A peer (any
+  // capability) is bound to the one session they were admitted to and must
+  // never spawn new ones. The sandbox re-checks this independently.
+  if (!isHost(req)) return errorResponse("this action is host-only", 403);
+
   const { body, error } = await parseJsonBody<{ gitRepo?: unknown; label?: unknown; name?: unknown; model?: unknown }>(
     req,
     { maxBytes: 8 * 1024 }
@@ -32,7 +38,7 @@ export async function POST(req: NextRequest) {
       name: name ?? undefined,
       model: model ?? undefined,
       via: "new-conversation",
-    });
+    }, forwardedParticipant(req));
     return Response.json({ sessionId, meta });
   } catch (e: any) {
     const status = typeof e?.status === "number" ? e.status : 500;

@@ -98,6 +98,25 @@ async function startServerWith(envOverrides: Record<string, string>): Promise<Ca
   };
 }
 
+function postJson(socketPath: string, token: string, path: string, participant?: string): Promise<{ status: number }> {
+  return new Promise((resolve, reject) => {
+    const headers: Record<string, string> = {
+      "x-sandbox-token": token,
+      "content-type": "application/json",
+    };
+    if (participant) headers["x-hoop-participant"] = participant;
+    const body = "{}";
+    headers["content-length"] = String(Buffer.byteLength(body));
+    const req = httpRequest({ socketPath, method: "POST", path, headers }, (res) => {
+      res.resume(); // drain so the socket closes
+      resolve({ status: res.statusCode ?? 0 });
+    });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 function openSseConnection(socketPath: string, token: string): Promise<{
   status: number;
   headers: IncomingMessage["headers"];
@@ -154,6 +173,31 @@ describe("probeSocketAlive — socket-conflict detection for listenOnSocket", ()
     const { probeSocketAlive } = await import("./server");
     const alive = await probeSocketAlive("/tmp/does-not-exist-" + Date.now() + ".sock", 200);
     expect(alive).toBe(false);
+  });
+});
+
+describe("host-only spawn guards (requireHost) — defence-in-depth", () => {
+  let srv: CapsServer;
+
+  afterEach(async () => {
+    if (srv) await srv.close();
+  });
+
+  it("POST /sessions rejects a forwarded peer with 403, allows host + internal (no header)", async () => {
+    srv = await startServerWith({});
+    // A peer participant the dashboard should have blocked — sandbox rejects it too.
+    expect((await postJson(srv.socketPath, srv.token, "/sessions", "peer:share-x")).status).toBe(403);
+    // Host and internal (no participant header) get past the guard. The mocked
+    // startNewConversation returns undefined → the handler 500s downstream; the
+    // point is only that requireHost did NOT short-circuit with a 403.
+    expect((await postJson(srv.socketPath, srv.token, "/sessions", "host")).status).not.toBe(403);
+    expect((await postJson(srv.socketPath, srv.token, "/sessions")).status).not.toBe(403);
+  });
+
+  it("POST /skill/:name/run rejects a forwarded peer with 403, allows host", async () => {
+    srv = await startServerWith({});
+    expect((await postJson(srv.socketPath, srv.token, "/skill/foo/run", "peer:share-x")).status).toBe(403);
+    expect((await postJson(srv.socketPath, srv.token, "/skill/foo/run", "host")).status).not.toBe(403);
   });
 });
 

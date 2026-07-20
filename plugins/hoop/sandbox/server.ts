@@ -264,6 +264,23 @@ function checkParticipant(
   return { ok: false, status: 403, reason: "invalid participant" };
 }
 
+/**
+ * Host-only guard for spawn routes that have no session/share to scope against
+ * (session create, skill run). Defense-in-depth: the dashboard already gates
+ * these with isHost(), but the proxy still forwards the authenticated
+ * `x-hoop-participant`, so if that route guard ever regresses a peer-forwarded
+ * request is rejected HERE too — a compromised/buggy dashboard can't spawn work
+ * as a peer. Host (or no participant header, e.g. an internal call) → allowed;
+ * a peer or any unknown format → 403. Writes the error response and returns
+ * false so callers can `if (!requireHost(req, res)) return;`.
+ */
+function requireHost(req: IncomingMessage, res: ServerResponse): boolean {
+  const raw = getHeader(req, PARTICIPANT_HEADER);
+  if (!raw || raw === "host") return true;
+  err(res, 403, "host-only action");
+  return false;
+}
+
 function boundedString(v: unknown, max: number): string | null {
   if (typeof v !== "string") return null;
   const t = v.trim();
@@ -322,6 +339,7 @@ add("GET", "/sessions", (_req, res) => {
 });
 
 add("POST", "/sessions", async (req, res) => {
+  if (!requireHost(req, res)) return;
   let body: { gitRepo?: unknown; label?: unknown; name?: unknown; model?: unknown };
   try { body = await readJson(req, MAX_BYTES_DEFAULT); } catch (e: any) { return err(res, e.status ?? 400, e.message); }
 
@@ -1376,6 +1394,7 @@ add("POST", "/search", async (req, res) => {
 // long-lived, so there is nothing to clean up on client disconnect.
 
 add("POST", "/skill/:name/run", async (req, res, params) => {
+  if (!requireHost(req, res)) return;
   const skill = params.name;
   if (!isValidSkillName(skill)) return err(res, 400, "invalid skill name");
 
