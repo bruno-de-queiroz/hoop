@@ -77,13 +77,20 @@ Two levels: **top-level verbs** act on the whole stack; **modules** scope a sing
 | `dashboard` | `start` · `stop` · `restart` · `rebuild` · `status` · `logs` | Controls **only the `dashboard` UI container** (`--no-deps`, leaves `agent-sandbox` alone). `rebuild` takes `-n\|--no-cache`. |
 | `sandbox` | `start` · `stop` · `restart` · `rebuild` · `update` | Controls **only the `agent-sandbox` container**. Lifecycle verbs run the shared engine scoped to the sandbox (so credential reconcile + plugin wiring + forwarded env still happen); `rebuild` recreates the container (`-n\|--no-cache` to skip the layer cache); `update` pins the baked-in `claude-code` version (`-c\|--claude-version`). |
 | `open` | *(default)* | Runs a **fresh, telemetry-isolated sandbox** over the current directory: mounts `$PWD` read-write into the agent workspace and launches `claude` interactively (`docker run --rm -it`, real tty for the TUI). Forces `HOOP_DISABLE_TELEMETRY=1` (add `-T\|--telemetry` to allow bundled-tool telemetry) and strips the dashboard-only hooks + the hoop plugin from an overlay `settings.json`, while keeping credentials, setup MCPs, skills, and other plugins. Extra args pass straight through, e.g. `hoop open --model opus` or `hoop open "fix the failing test"`. |
+| `add` | `mcp` · `plugin` · `skill` | Installs a component into the **sandbox profile** so it persists across rebuild/restart/recreate **and** is shared by both dashboard sessions and `hoop open` (the profile is bind-mounted into both). `mcp <name> [flags] [-- <cmd>]` → `claude mcp add`, defaulting to `--scope user` so the server is global (not stranded under one project — pass your own `-s\|--scope` to override); `plugin [-m\|--marketplace <spec>] <plugin[@marketplace]>` → `claude plugin install`; `skill -d\|--dir <dir> [-f\|--force]` copies a local skill directory (must contain `SKILL.md`) into `~/.claude/skills/<name>`, **dereferencing symlinks** so the real files resolve inside the container. `mcp`/`plugin` need the sandbox running; `skill` is host-only. |
+| `mount` | `add` · `list` · `remove` | Bind-mounts host folders into the sandbox workspace at `/home/agent/workspace/<name>`. `add -p\|--path <host-dir> [-n\|--name <name>]` adds one (the `-p` path tab-completes directories), `list` shows the configured mounts, `remove <name>` drops one. Mounts persist via a generated compose override; each `add`/`remove` **recreates the `agent-sandbox` container**. |
 
 ```bash
 hoop start                    # bring up the whole stack at http://localhost:7842/
 hoop dashboard rebuild        # rebuild + recreate ONLY the dashboard container
 hoop sandbox rebuild          # rebuild + recreate ONLY the agent-sandbox container
 hoop open                     # interactive claude in a sandbox over $PWD
+hoop add mcp context7 -- npx -y @upstash/context7-mcp   # install an MCP (user scope) into the sandbox
+hoop add skill -d ~/.claude/skills/impeccable           # copy a local skill into the sandbox profile
+hoop mount add -p ~/code/myproject                      # expose a host folder to the sandbox workspace
 ```
+
+The `add` / `mount` subcommands are also exposed as the **`/hoop:add`** and **`/hoop:mount`** slash commands, which delegate to this CLI. Everything `add` writes lives in `~/.claude/hoop/sandbox/profile` (bind-mounted at `/home/agent`), so a component installed once is available in every dashboard session and in `hoop open`, and survives image rebuilds.
 
 `hoop open` uses the `hoop-sandbox` image (build it once with `hoop sandbox rebuild`) and mounts the sandbox Claude profile (`~/.claude/hoop/sandbox/profile`, `-p\|--profile` to override) so `claude` is already authenticated — run `hoop start` once to seed those credentials from your host. Unlike the dashboard's `agent-sandbox`, `open` runs with telemetry blackholed and without hoop's dashboard hooks/plugin (which need the dashboard's socket), so it's a clean, isolated interactive session that still has your setup MCPs and skills. `hoop install` / `hoop uninstall` manage the PATH symlink and shell wiring; the repo itself is never modified.
 
@@ -148,7 +155,7 @@ hoop/
   .claude-plugin/marketplace.json        self-hosted marketplace
   plugins/hoop/
     .claude-plugin/plugin.json           manifest
-    commands/                            /hoop:setup, /hoop:dashboard, /hoop:plan
+    commands/                            /hoop:setup, /hoop:dashboard, /hoop:plan, /hoop:add, /hoop:mount
     catalog/                             8 install recipes (one per wizard layer)
     hooks/                               hooks.json + emit-event.sh (Unix-socket push, <50ms)
     sandbox/                             trusted agent runtime (owns claude + all state)
@@ -167,7 +174,7 @@ hoop/
       oo.sh                              oosh framework engine
       hoop.sh                            entry point (+ hoop.comp.sh / hoop.zcomp.sh)
       lib/stack.sh                       the two-service runtime engine (preflight + compose)
-      modules/                           dashboard, sandbox, open, install, uninstall
+      modules/                           dashboard, sandbox, open, add, mount, install, uninstall
   README.md
   LICENSE
 ```

@@ -10,9 +10,10 @@ Bind-mounts a folder from your host into the sandbox at
 it. By default the dashboard sandbox only mounts the claude profile — your code
 lives on the host, so mounting is how you expose a project to it.
 
-Mounts persist across restarts (they are stored and layered onto the compose
-config via a generated override). Applying a mount **recreates the
-agent-sandbox container**, which briefly interrupts running sandbox sessions.
+Mounts persist across restarts (they are stored in `mounts.list` and layered
+onto the compose config via a generated override). Applying or removing a mount
+**recreates the agent-sandbox container**, which briefly interrupts running
+sandbox sessions.
 
 ---
 
@@ -20,20 +21,23 @@ agent-sandbox container**, which briefly interrupts running sandbox sessions.
 
 | Invocation | Effect |
 |---|---|
-| `/hoop:mount <host-path> [name]` | Mount `<host-path>` at `/home/agent/workspace/<name>` (name defaults to the folder's basename), then recreate the sandbox. |
-| `/hoop:mount` (via `hoop sandbox mounts`) | Use `hoop sandbox mounts` to list current mounts and `hoop sandbox unmount <name>` to remove one. |
+| `/hoop:mount add -p <host-path> [-n <name>]` | Mount `<host-path>` at `/home/agent/workspace/<name>` (`-n` defaults to the folder's basename), then recreate the sandbox. |
+| `/hoop:mount list` | List the currently configured mounts. |
+| `/hoop:mount remove <name>` | Remove the mount with that name, then recreate the sandbox. |
 
 The mount target lands under the workspace, which is already an allowed cwd for
-sessions — start a session and use `/hoop:add` or the workspace path as needed.
+sessions. Resolve `<host-path>` to an absolute directory before mounting.
 
 ---
 
 ## Bash to run
 
+Pass the subcommand and its arguments straight through — `add -p <abs-path>
+[-n <name>]`, `list`, or `remove <name>`:
+
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/cli/hoop.sh" sandbox mount "$@"
+"${CLAUDE_PLUGIN_ROOT}/cli/hoop.sh" mount "$@"
 ```
 
-Show the CLI's stdout/stderr verbatim. Warn the user that this recreates the
-agent-sandbox container. To manage existing mounts, run
-`hoop sandbox mounts` / `hoop sandbox unmount <name>`.
+Show the CLI's stdout/stderr verbatim. Warn the user that `add`/`remove`
+recreate the agent-sandbox container.

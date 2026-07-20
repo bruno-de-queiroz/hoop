@@ -132,17 +132,16 @@ function _call() {
   fi
 }
 
-# `hoop sandbox add|mount|mounts|unmount` forward their args verbatim to the
-# real `claude` CLI (inside the sandbox) or to docker compose. oosh's parser
-# would strip the `--` separator that `claude mcp add … -- <cmd>` relies on and
-# warn on claude's own flags, so hand the raw args straight to the sandbox
-# module (which has its own pre-main intercept) before main() ever sees them.
-# `hoop shortlist …` / `hoop help …` keep first token = shortlist/help, so this
-# never fires for completion or help.
-if [[ "${1:-}" == "sandbox" ]]; then
-  case "${2:-}" in
-    add|mount|mounts|unmount) exec "${MODULES_DIR}/sandbox.sh" "${@:2}" ;;
-  esac
+# `hoop add mcp …` forwards its args verbatim to the real `claude mcp add`
+# inside the sandbox. oosh's parser would strip the `--` separator that stdio
+# MCPs (`… -- npx -y some-mcp`) rely on and warn on claude's own flags, so hand
+# the raw args straight to the add module (which has its own pre-main intercept
+# for `mcp`) before main() ever sees them. Only `add mcp` needs this — the other
+# add/mount subcommands use declared flags and flow through main() normally, so
+# they keep full help + tab-completion. `hoop shortlist …` / `hoop help …` keep
+# first token = shortlist/help, so this never fires for completion or help.
+if [[ "${1:-}" == "add" && "${2:-}" == "mcp" ]]; then
+  exec "${MODULES_DIR}/add.sh" "${@:2}"
 fi
 
 main "$0" "$@"
