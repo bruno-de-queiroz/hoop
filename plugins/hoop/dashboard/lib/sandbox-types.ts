@@ -26,34 +26,6 @@ export interface ActiveSessionMeta {
   errorMessage?: string;
 }
 
-export interface RunMeta {
-  runId: string;
-  skill: string;
-  args: string;
-  startedAt: number;
-  endedAt?: number;
-  exitCode?: number | null;
-  pid?: number;
-  sessionId?: string;
-  output: string;
-  outputBytes: number;
-}
-
-export interface RunChunk {
-  runId: string;
-  skill: string;
-  kind: "stdout" | "stderr";
-  data: string;
-}
-
-export interface RunEnd {
-  runId: string;
-  skill: string;
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  durationMs: number;
-}
-
 export interface Skill {
   name: string;
   description: string | null;

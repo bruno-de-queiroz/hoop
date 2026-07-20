@@ -31,9 +31,6 @@ export async function GET(request: Request) {
   const encoder = new TextEncoder();
   let eventListener: ((e: unknown) => void) | null = null;
   let sessionListener: (() => void) | null = null;
-  let runLinkListener: ((e: unknown) => void) | null = null;
-  let runChunkListener: ((e: unknown) => void) | null = null;
-  let runEndListener: ((e: unknown) => void) | null = null;
   let activeStatusListener: ((e: unknown) => void) | null = null;
   let activeErrorListener: ((e: unknown) => void) | null = null;
   let skillsListener: (() => void) | null = null;
@@ -54,23 +51,6 @@ export async function GET(request: Request) {
 
       sessionListener = () => send(`event: sessions\ndata: ${JSON.stringify({ changed: true })}\n\n`);
       client.sessionsBus.on("change", sessionListener);
-
-      // run link only — no implicit `sessions` ping. sessionsBus emits its
-      // own `change` when the underlying registry mutates, which fans out
-      // to dashboards through the sessionListener above. Double-pinging
-      // here caused the sidebar to refetch up to 3× per user turn (run
-      // link + session-status alias swap + sessions change), driving the
-      // flicker the user reported.
-      runLinkListener = (payload) => {
-        send(`event: run\ndata: ${JSON.stringify(payload)}\n\n`);
-      };
-      client.runsBus.on("link", runLinkListener);
-
-      runChunkListener = (payload) => send(`event: run-chunk\ndata: ${JSON.stringify(payload)}\n\n`);
-      client.runsBus.on("chunk", runChunkListener);
-
-      runEndListener = (payload) => send(`event: run-end\ndata: ${JSON.stringify(payload)}\n\n`);
-      client.runsBus.on("end", runEndListener);
 
       // session-status carries alive/dormant/ended transitions AND alias
       // swaps (`{ sessionId: newId, aliasFrom: oldId, status: "alive" }` when
@@ -110,9 +90,6 @@ export async function GET(request: Request) {
     cancel() {
       if (eventListener) client.eventBus.off("event", eventListener);
       if (sessionListener) client.sessionsBus.off("change", sessionListener);
-      if (runLinkListener) client.runsBus.off("link", runLinkListener);
-      if (runChunkListener) client.runsBus.off("chunk", runChunkListener);
-      if (runEndListener) client.runsBus.off("end", runEndListener);
       if (activeStatusListener) client.activeSessionsBus.off("change", activeStatusListener);
       if (activeErrorListener) client.activeSessionsBus.off("error", activeErrorListener);
       if (skillsListener) client.skillsBus.off("change", skillsListener);

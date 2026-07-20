@@ -113,8 +113,6 @@ export function ActiveSessionProvider({ children }: { children: React.ReactNode 
 
   // Refs so the SSE handler captures the latest selection + aliases
   // without re-binding the subscription every alias-set change.
-  const waitingRef = useRef(false);
-  waitingRef.current = isWaiting;
   const sidRef = useRef<string | null>(selectedId);
   sidRef.current = selectedId;
   const aliasesRef = useRef<readonly string[]>(aliases);
@@ -135,13 +133,20 @@ export function ActiveSessionProvider({ children }: { children: React.ReactNode 
         setIsWaiting(true);
         return;
       }
-      if (!waitingRef.current) return;
       // Allowlist: only clear "waiting" on events that mean the model has
       // actually started producing output. A bare denylist (clear unless
       // UserPromptSubmit) is wrong for the dormant-session wake path —
       // resuming claude fires a SessionStart hook before the model even
       // starts thinking, which used to flip the indicator off prematurely.
       if (!MODEL_OUTPUT_HOOKS.has(row.hook_type)) return;
+      // NB: do NOT gate this on `waitingRef.current`. /stop (and /model) emit a
+      // UserPromptSubmit command echo IMMEDIATELY followed by a synthesized Stop
+      // in the same server call, which the client often receives in one SSE
+      // batch. `waitingRef` only reflects the last *rendered* value, so within a
+      // batch it's still stale when Stop lands — gating here let the preceding
+      // UserPromptSubmit's `true` win and pinned the "thinking" indicator on
+      // after a stop. Applying the clear unconditionally (React no-ops when
+      // already false) makes the Stop authoritative regardless of batching.
       setIsWaiting(false);
     },
   });

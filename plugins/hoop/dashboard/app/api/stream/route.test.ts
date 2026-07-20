@@ -7,7 +7,6 @@ vi.mock("@/lib/sandbox-client", () => ({
     boot: vi.fn(),
     eventBus: fakeBus(),
     sessionsBus: fakeBus(),
-    runsBus: fakeBus(),
     activeSessionsBus: fakeBus(),
     skillsBus: fakeBus(),
   },

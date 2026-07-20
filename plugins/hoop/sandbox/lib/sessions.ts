@@ -2,7 +2,6 @@ import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, watch, typ
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { CLAUDE_SESSIONS_DIR } from "./paths";
-import { getRunForSession } from "./spawn";
 import { getActiveSession, listActiveSessions, bootActiveSessions, aliasesFor, isResumeInFlight } from "./active-sessions";
 
 export interface SessionInfo {
@@ -201,14 +200,15 @@ export function listSessions(): SessionInfo[] {
 
     const decorated = { ...info };
     if (info.sessionId) {
-      const run = getRunForSession(info.sessionId);
-      if (run) {
-        decorated.skill = run.skill;
-        decorated.skillArgs = run.args;
-        decorated.runId = run.runId;
-      }
       const active = getActiveSession(info.sessionId);
       if (active) {
+        // Skill-launched sessions carry the skill/args on their registry meta
+        // (they're regular sessions now — no separate run record). Surface them
+        // so the sidebar can badge the row as a skill run.
+        if (active.skill) {
+          decorated.skill = active.skill;
+          decorated.skillArgs = active.skillArgs ?? undefined;
+        }
         decorated.controllable = active.status !== "expired";
         decorated.lifecycle = active.status;
         decorated.displayName = active.displayName;

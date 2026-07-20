@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 vi.mock("./plugin-paths", () => ({
   discoverInstalledPluginDirs: () => [],
+  readInstalledPluginEntries: () => [],
 }));
 
 const ingestEventLineMock = vi.fn();

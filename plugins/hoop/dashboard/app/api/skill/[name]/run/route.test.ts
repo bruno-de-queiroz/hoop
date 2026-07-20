@@ -33,15 +33,15 @@ function post(participant?: string) {
 }
 
 describe("POST /api/skill/[name]/run", () => {
-  it("spawns for the host and forwards the participant", async () => {
-    startSkillRunMock.mockResolvedValueOnce({ runId: "r1" });
+  it("launches for the host and forwards the participant", async () => {
+    startSkillRunMock.mockResolvedValueOnce({ sessionId: "s1" });
     const res = await post("host");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ runId: "r1" });
+    expect(await res.json()).toEqual({ sessionId: "s1" });
     expect(startSkillRunMock).toHaveBeenCalledWith("foo", "--flag", "host");
   });
 
-  it("rejects a peer (any capability) with 403 and never spawns", async () => {
+  it("rejects a peer (any capability) with 403 and never launches", async () => {
     const res = await post("peer:share-abc");
     expect(res.status).toBe(403);
     expect(startSkillRunMock).not.toHaveBeenCalled();

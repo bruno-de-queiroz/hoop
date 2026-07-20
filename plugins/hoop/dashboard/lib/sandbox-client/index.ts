@@ -43,9 +43,6 @@ export const client: SandboxClient = new Proxy({} as SandboxClient, {
 export type {
   ActiveSessionMeta,
   SessionInfo,
-  RunMeta,
-  RunChunk,
-  RunEnd,
   Skill,
   SlashCommand,
   AgentRun,

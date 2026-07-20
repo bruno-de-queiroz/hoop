@@ -26,6 +26,8 @@ import {
 
 import {
   startNewConversation,
+  startSkillSession,
+  isValidSkillName,
   writeUserTurn,
   popPendingAuthor,
   markTurnFinished,
@@ -61,13 +63,6 @@ import {
   stopSessionsWatcher,
   sessionsBus,
 } from "./lib/sessions";
-import {
-  startSkillRun,
-  listRuns,
-  getRun,
-  isValidSkillName,
-  runsBus,
-} from "./lib/spawn";
 import {
   ingestEventLine,
   startIngestor,
@@ -917,9 +912,6 @@ add("GET", "/events/stream", async (_req, res) => {
   const onEvent = (e: unknown) => send("event", e);
   const onSessions = () => send("sessions", { changed: true });
   const onSkills = () => send("skills", { changed: true });
-  const onRunLink = (p: unknown) => { send("sessions", { changed: true }); send("run", p); };
-  const onRunChunk = (p: unknown) => send("run-chunk", p);
-  const onRunEnd = (p: unknown) => send("run-end", p);
   const onActiveChange = (p: unknown) => { send("sessions", { changed: true }); send("session-status", p); };
   const onActiveError = (p: unknown) => send("session-error", p);
   // Result-frame "turn" events update slot.meta.lastStats.totals
@@ -931,9 +923,6 @@ add("GET", "/events/stream", async (_req, res) => {
   eventBus.on("event", onEvent);
   sessionsBus.on("change", onSessions);
   skillsBus.on("change", onSkills);
-  runsBus.on("link", onRunLink);
-  runsBus.on("chunk", onRunChunk);
-  runsBus.on("end", onRunEnd);
   activeSessionsBus.on("change", onActiveChange);
   activeSessionsBus.on("error", onActiveError);
   activeSessionsBus.on("turn", onActiveTurn);
@@ -946,9 +935,6 @@ add("GET", "/events/stream", async (_req, res) => {
     eventBus.off("event", onEvent);
     sessionsBus.off("change", onSessions);
     skillsBus.off("change", onSkills);
-    runsBus.off("link", onRunLink);
-    runsBus.off("chunk", onRunChunk);
-    runsBus.off("end", onRunEnd);
     activeSessionsBus.off("change", onActiveChange);
     activeSessionsBus.off("error", onActiveError);
     activeSessionsBus.off("turn", onActiveTurn);
@@ -1327,27 +1313,6 @@ add("POST", "/peer-leave", async (req, res) => {
 
 add("GET", "/pending-joins", (_req, res) => json(res, 200, { joins: listPendingJoins() }));
 
-add("GET", "/runs", (_req, res) => {
-  const runs = listRuns().map((r) => ({
-    runId: r.runId,
-    skill: r.skill,
-    args: r.args,
-    startedAt: r.startedAt,
-    endedAt: r.endedAt,
-    exitCode: r.exitCode,
-    pid: r.pid,
-    sessionId: r.sessionId,
-    outputBytes: r.outputBytes,
-  }));
-  json(res, 200, { runs });
-});
-
-add("GET", "/runs/:id", (_req, res, params) => {
-  const run = getRun(params.id);
-  if (!run) return err(res, 404, "not found");
-  json(res, 200, run);
-});
-
 add("GET", "/agents", (_req, res, _params, url) => {
   const limit = clampInt(url.searchParams.get("limit"), { min: 1, max: 500, fallback: 50 });
   json(res, 200, listAgentRuns(limit));
@@ -1379,15 +1344,18 @@ add("POST", "/search", async (req, res) => {
 
 // ---------- JSON: skill run ----------
 //
-// Returns 200 JSON { runId } immediately after the subprocess has been
-// spawned. Run-progress events (chunks, end, errors) are multiplexed onto
-// the existing /events/stream SSE channel via runsBus → the stream handler
-// already forwards run-chunk / run-end frames, keyed by runId so each
-// subscriber can filter for their own run.
+// Launches the skill as a REGULAR controllable session and returns 200 JSON
+// { sessionId } once it's spawned and the first turn (`/<skill> <args>`) is
+// queued. The dashboard snaps to that session; from there it's an ordinary
+// session — /stop, /model, sharing, and the transcript all work. (This replaced
+// the old detached `claude -p` run, which produced an uncontrollable session.)
+//
+// Host-only: peers cannot trigger skill sessions.
 //
 // Error codes:
 //   400 — invalid skill name or malformed args body
 //   404 — skill or command not registered on this sandbox
+//   429 — too many concurrent controllable sessions
 //   500 — spawn failed for an unexpected reason
 //
 // req.on("close") is intentionally absent here: the response is not
@@ -1402,12 +1370,12 @@ add("POST", "/skill/:name/run", async (req, res, params) => {
   try { body = await readJson(req, MAX_BYTES_ARGS); } catch (e: any) { return err(res, e.status ?? 400, e.message); }
   const args = boundedString(body.args, 8 * 1024) ?? undefined;
 
-  let runId: string;
+  let sessionId: string;
   try {
-    ({ runId } = startSkillRun(skill, args));
+    ({ sessionId } = await startSkillSession(skill, args, "host"));
   } catch (e: any) {
-    const msg: string = e?.message ?? "spawn failed";
-    if (e?.name === "TooManyConcurrentRunsError") {
+    const msg: string = e?.message ?? "failed to start skill session";
+    if (e?.name === "TooManyControllableSessionsError") {
       res.setHeader("Retry-After", "5");
       return err(res, 429, msg);
     }
@@ -1416,7 +1384,7 @@ add("POST", "/skill/:name/run", async (req, res, params) => {
     return err(res, 500, msg);
   }
 
-  json(res, 200, { runId });
+  json(res, 200, { sessionId });
 });
 
 // ---------- Dispatcher ----------

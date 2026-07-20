@@ -10,10 +10,10 @@ import { cn } from "../ui/cn";
 
 // Desktop-shell Skills launcher (Phase 3). Reuses the same data flow as the
 // legacy SkillsPanel — /api/skills scoped to the selected session's cwd, live
-// refetch on the `skills` SSE event, and the run→poll→snap-to-new-session
-// launch — but presents with the primitives and the mockup's rail treatment.
-// Kept separate from SkillsPanel so the default dashboard stays frozen until
-// the Phase 4 cutover.
+// refetch on the `skills` SSE event — but presents with the primitives and the
+// mockup's rail treatment. A skill run is now a REGULAR session: POST returns
+// its { sessionId } and we snap straight to it (no run-id poll). Kept separate
+// from SkillsPanel so the default dashboard stays frozen until the Phase 4 cutover.
 
 interface Skill {
   name: string;
@@ -25,23 +25,6 @@ interface Skill {
 interface Status {
   state: "launching" | "ok" | "error";
   message: string;
-}
-
-async function waitForRunSession(runId: string, budgetMs = 8000, stepMs = 400): Promise<string | null> {
-  const deadline = Date.now() + budgetMs;
-  while (Date.now() < deadline) {
-    try {
-      const r = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
-      if (r.ok) {
-        const run = (await r.json()) as { sessionId?: string | null };
-        if (run?.sessionId) return run.sessionId;
-      }
-    } catch {
-      /* transient — keep polling */
-    }
-    await new Promise((res) => setTimeout(res, stepMs));
-  }
-  return null;
 }
 
 export function SkillsRail() {
@@ -128,17 +111,14 @@ export function SkillsRail() {
       return;
     }
 
-    let runId: string | undefined;
+    let sessionId: string | undefined;
     try {
-      const body = (await resp.json()) as { runId?: string };
-      runId = body?.runId;
+      const body = (await resp.json()) as { sessionId?: string };
+      sessionId = body?.sessionId;
     } catch {
       /* no body / not JSON */
     }
 
-    setStatuses((m) => ({ ...m, [key]: { state: "ok", message: "session launched — opening…" } }));
-
-    const sessionId = runId ? await waitForRunSession(runId) : null;
     if (sessionId) {
       setSelected(sessionId);
       setStatuses((m) => ({ ...m, [key]: { state: "ok", message: "opened new session ↗" } }));

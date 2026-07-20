@@ -21,18 +21,10 @@ import { markSessionActive } from "./lib/active-sessions";
 
 // ---- mock heavy deps before any import of server.ts ----
 
-const mockRunsBus = new EventEmitter();
-mockRunsBus.setMaxListeners(50);
-
-const mockStartSkillRun = vi.fn<(skill: string, args?: string) => { runId: string }>();
-
-vi.mock("./lib/spawn", () => ({
-  startSkillRun: (...a: Parameters<typeof mockStartSkillRun>) => mockStartSkillRun(...a),
-  listRuns: () => [],
-  getRun: () => undefined,
-  isValidSkillName: (name: string) => /^[A-Za-z0-9][A-Za-z0-9_:/-]{0,127}$/.test(name),
-  runsBus: mockRunsBus,
-}));
+// Skill runs are regular sessions now: the route calls startSkillSession, which
+// spawns a controllable slot and queues the `/<skill> <args>` first turn.
+const mockStartSkillSession =
+  vi.fn<(skill: string, args?: string, author?: string | null) => Promise<{ sessionId: string }>>();
 
 vi.mock("./lib/ingestor", () => ({
   ingestEventLine: vi.fn(() => ({ ok: true, id: 1 })),
@@ -49,6 +41,8 @@ vi.mock("./lib/sessions", () => ({
 
 vi.mock("./lib/active-sessions", () => ({
   startNewConversation: vi.fn(),
+  startSkillSession: (...a: Parameters<typeof mockStartSkillSession>) => mockStartSkillSession(...a),
+  isValidSkillName: (name: string) => /^[A-Za-z0-9][A-Za-z0-9_:/-]{0,127}$/.test(name),
   writeUserTurn: vi.fn(),
   isControllable: vi.fn(() => false),
   endSession: vi.fn(),
@@ -173,7 +167,8 @@ let srv: TestServer;
 
 beforeEach(async () => {
   vi.resetModules();
-  mockStartSkillRun.mockReset();
+  mockStartSkillSession.mockReset();
+  mockStartSkillSession.mockResolvedValue({ sessionId: "sess-default" });
   srv = await startTestServer();
 });
 
@@ -183,8 +178,8 @@ afterEach(async () => {
 });
 
 describe("POST /skill/:name/run — JSON response contract", () => {
-  it("returns 200 application/json { runId } when spawn succeeds", async () => {
-    mockStartSkillRun.mockReturnValueOnce({ runId: "test-run-id-123" });
+  it("returns 200 application/json { sessionId } when the skill session starts", async () => {
+    mockStartSkillSession.mockResolvedValueOnce({ sessionId: "sess-abc-123" });
 
     const res = await doRequest(
       srv.socketPath,
@@ -197,13 +192,13 @@ describe("POST /skill/:name/run — JSON response contract", () => {
     expect(res.status).toBe(200);
     expect(res.contentType).toMatch(/application\/json/);
     const parsed = JSON.parse(res.body);
-    expect(parsed).toEqual({ runId: "test-run-id-123" });
-    expect(parsed.runId).toBeTypeOf("string");
-    expect(parsed.runId.length).toBeGreaterThan(0);
+    expect(parsed).toEqual({ sessionId: "sess-abc-123" });
+    expect(parsed.sessionId).toBeTypeOf("string");
+    expect(parsed.sessionId.length).toBeGreaterThan(0);
   });
 
   it("does NOT send text/event-stream (old broken behaviour)", async () => {
-    mockStartSkillRun.mockReturnValueOnce({ runId: "r1" });
+    mockStartSkillSession.mockResolvedValueOnce({ sessionId: "s1" });
 
     const res = await doRequest(
       srv.socketPath,
@@ -216,8 +211,8 @@ describe("POST /skill/:name/run — JSON response contract", () => {
     expect(res.contentType).not.toMatch(/text\/event-stream/);
   });
 
-  it("passes skill name and args to startSkillRun", async () => {
-    mockStartSkillRun.mockReturnValueOnce({ runId: "r2" });
+  it("passes skill name, args and host author to startSkillSession", async () => {
+    mockStartSkillSession.mockResolvedValueOnce({ sessionId: "s2" });
 
     await doRequest(
       srv.socketPath,
@@ -227,13 +222,13 @@ describe("POST /skill/:name/run — JSON response contract", () => {
       JSON.stringify({ args: "some args here" }),
     );
 
-    expect(mockStartSkillRun).toHaveBeenCalledWith("my-day", "some args here");
+    expect(mockStartSkillSession).toHaveBeenCalledWith("my-day", "some args here", "host");
   });
 
   it("returns 404 application/json when skill is unknown", async () => {
-    mockStartSkillRun.mockImplementationOnce(() => {
-      throw new Error("unknown skill or command: no-such-skill");
-    });
+    mockStartSkillSession.mockRejectedValueOnce(
+      new Error("unknown skill or command: no-such-skill"),
+    );
 
     const res = await doRequest(
       srv.socketPath,
@@ -293,7 +288,7 @@ describe("POST /skill/:name/run — JSON response contract", () => {
   });
 
   it("returns 401 when sandbox token is missing", async () => {
-    mockStartSkillRun.mockReturnValueOnce({ runId: "r3" });
+    mockStartSkillSession.mockResolvedValueOnce({ sessionId: "s3" });
 
     const res = await doRequest(
       srv.socketPath,
@@ -329,124 +324,6 @@ describe("POST /skill/:name/run — JSON response contract", () => {
       status = 413; // treat connection reset as effective 413
     }
     expect(status).toBe(413);
-  });
-});
-
-describe("/events/stream — run events propagate via runsBus", () => {
-  /**
-   * Opens an SSE connection and returns a function that collects frames
-   * up to `count` then resolves. Yields collected frames.
-   */
-  function collectSseFrames(count: number): Promise<Array<{ event: string | null; data: string }>> {
-    return new Promise((resolve, reject) => {
-      const frames: Array<{ event: string | null; data: string }> = [];
-      const req = httpRequest(
-        {
-          socketPath: srv.socketPath,
-          method: "GET",
-          path: "/events/stream",
-          headers: { "x-sandbox-token": srv.token },
-        },
-        (res) => {
-          if (res.statusCode !== 200) { reject(new Error(`SSE returned ${res.statusCode}`)); return; }
-          res.setEncoding("utf-8");
-          let buf = "";
-          let curEvent: string | null = null;
-          const dataLines: string[] = [];
-
-          const flush = () => {
-            if (dataLines.length === 0) { curEvent = null; return; }
-            frames.push({ event: curEvent, data: dataLines.join("\n") });
-            curEvent = null;
-            dataLines.length = 0;
-            if (frames.length >= count) {
-              req.destroy();
-              resolve(frames);
-            }
-          };
-
-          res.on("data", (chunk: string) => {
-            buf += chunk;
-            let idx: number;
-            while ((idx = buf.indexOf("\n")) !== -1) {
-              const line = buf.slice(0, idx).replace(/\r$/, "");
-              buf = buf.slice(idx + 1);
-              if (line === "") { flush(); continue; }
-              if (line.startsWith(":")) continue;
-              if (line.startsWith("event:")) { curEvent = line.slice(6).trim(); continue; }
-              if (line.startsWith("data:")) { dataLines.push(line.slice(5).replace(/^ /, "")); continue; }
-            }
-          });
-          res.on("error", (e) => { if (frames.length < count) reject(e); });
-        }
-      );
-      req.on("error", (e) => { if (frames.length < count) reject(e); });
-      req.end();
-
-      // Safety timeout.
-      setTimeout(() => {
-        if (frames.length < count) reject(new Error(`SSE timeout: got ${frames.length}/${count} frames`));
-      }, 2000);
-    });
-  }
-
-  it("forwards run-chunk from runsBus as SSE event: run-chunk", async () => {
-    const p = collectSseFrames(1);
-
-    // Give the SSE connection a tick to establish before emitting.
-    await new Promise((r) => setTimeout(r, 30));
-
-    mockRunsBus.emit("chunk", { runId: "rx1", skill: "foo", kind: "stdout", data: "hello" });
-
-    const frames = await p;
-    expect(frames).toHaveLength(1);
-    expect(frames[0].event).toBe("run-chunk");
-    const payload = JSON.parse(frames[0].data);
-    expect(payload).toMatchObject({ runId: "rx1", kind: "stdout", data: "hello" });
-  });
-
-  it("forwards run-end from runsBus as SSE event: run-end", async () => {
-    const p = collectSseFrames(1);
-    await new Promise((r) => setTimeout(r, 30));
-
-    mockRunsBus.emit("end", { runId: "rx2", skill: "foo", exitCode: 0, signal: null, durationMs: 100 });
-
-    const frames = await p;
-    expect(frames).toHaveLength(1);
-    expect(frames[0].event).toBe("run-end");
-    const payload = JSON.parse(frames[0].data);
-    expect(payload).toMatchObject({ runId: "rx2", exitCode: 0 });
-  });
-});
-
-describe("POST /skill/:name/run — runId returned matches later runsBus emissions", () => {
-  it("runId from JSON response is the same one carried in subsequent runsBus events", async () => {
-    let capturedRunId: string | undefined;
-
-    // Intercept the startSkillRun call so we can grab its returned runId,
-    // then synchronously emit a chunk before the HTTP response arrives.
-    mockStartSkillRun.mockImplementationOnce((skill, args) => {
-      const { randomUUID } = require("node:crypto");
-      capturedRunId = randomUUID() as string;
-      // Schedule the chunk and end events to fire after the response is sent.
-      setImmediate(() => {
-        mockRunsBus.emit("chunk", { runId: capturedRunId, skill, kind: "stdout", data: "output" });
-        mockRunsBus.emit("end", { runId: capturedRunId, skill, exitCode: 0, signal: null, durationMs: 5 });
-      });
-      return { runId: capturedRunId };
-    });
-
-    const res = await doRequest(
-      srv.socketPath,
-      "POST",
-      "/skill/my-skill/run",
-      srv.token,
-      JSON.stringify({ args: "run it" }),
-    );
-
-    expect(res.status).toBe(200);
-    const { runId } = JSON.parse(res.body);
-    expect(runId).toBe(capturedRunId);
   });
 });
 

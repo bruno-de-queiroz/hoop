@@ -25,6 +25,7 @@ import { isCwdAllowed } from "./cwd-policy";
 import { isGitPush } from "./peer-policy";
 import { randomSessionName } from "./random-name";
 import { listSlashCommands } from "./commands";
+import { listSkills } from "./skills";
 import { log } from "@shared/logger";
 
 /**
@@ -88,11 +89,16 @@ export interface LastStats {
 
 export interface ActiveSessionMeta {
   sessionId: string;
-  runId: string | null;     // links back to lib/spawn.ts RunMeta when applicable
+  runId: string | null;     // vestigial; retained for checkpoint compatibility
   label: string;            // initial label (skill base name, "new conversation", or user-provided)
   displayName: string | null; // friendly name; auto-set from first prompt if not user-provided
   cwd: string;
   via: "skill" | "new-conversation" | "resumed";
+  // Set for a skill-launched session (via === "skill"): the invoked skill/command
+  // name and its args. Surfaced by lib/sessions.ts so the sidebar can badge the
+  // row as a skill run — the same labeling the old detached-run path provided.
+  skill?: string | null;
+  skillArgs?: string | null;
   startedAt: number;
   lastSeenAt: number;
   status: LifecycleStatus;
@@ -505,6 +511,9 @@ export async function startNewConversation(opts: {
   model?: string | null;
   runId?: string | null;
   via?: "new-conversation" | "skill";
+  // Skill/command name + args when via === "skill" (see startSkillSession).
+  skill?: string | null;
+  skillArgs?: string | null;
 }): Promise<{ sessionId: string; meta: ActiveSessionMeta }> {
   bootActiveSessions();
   // Sessions run in the sandbox workspace. When a git URL is given, clone it in
@@ -523,7 +532,66 @@ export async function startNewConversation(opts: {
   // to render immediately, rather than waiting for the first prompt). User
   // can rename via PATCH /sessions/:id at any time.
   const displayName = opts.name?.trim() || randomSessionName();
-  return spawnControllable({ cwd, label, displayName, model, via, runId, resumeSessionId: null });
+  return spawnControllable({
+    cwd, label, displayName, model, via, runId,
+    skill: opts.skill ?? null,
+    skillArgs: opts.skillArgs ?? null,
+    resumeSessionId: null,
+  });
+}
+
+const SKILL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_:/-]{0,127}$/;
+
+/** True for a syntactically valid skill/command token. */
+export function isValidSkillName(name: string): boolean {
+  return SKILL_NAME_RE.test(name);
+}
+
+function skillIsKnown(name: string): boolean {
+  const raw = name.startsWith("/") ? name.slice(1) : name;
+  for (const s of listSkills()) if (s.name === raw) return true;
+  for (const c of listSlashCommands()) if (c.name === raw) return true;
+  return false;
+}
+
+/**
+ * Launch a skill/command as a REGULAR controllable session.
+ *
+ * A skill run used to be a detached `claude -p` subprocess (lib/spawn.ts): that
+ * produced a Claude session the dashboard could display but never control, so
+ * `/stop` couldn't find it ("unknown session"), `/model` didn't apply, and the
+ * transcript rendered a clumsy "Use the X skill:" prose turn. Skills are just
+ * regular sessions — so we spawn a normal slot and deliver the invocation as its
+ * first user turn, verbatim: `/<skill> <args>`. Everything else (interrupt,
+ * model switch, subagent filtering, sharing) then works uniformly. Host-only at
+ * the route layer; peers cannot trigger skill sessions.
+ */
+export async function startSkillSession(
+  skill: string,
+  args?: string,
+  author: string | null = "host",
+): Promise<{ sessionId: string }> {
+  if (!isValidSkillName(skill)) throw new Error(`invalid skill name: ${skill}`);
+  if (!skillIsKnown(skill)) throw new Error(`unknown skill or command: ${skill}`);
+
+  // Strip control chars; keep it a single clean line of args.
+  const sanitizedArgs = (args ?? "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "").trim();
+  const base = skill.includes(":") ? skill.slice(skill.indexOf(":") + 1) : skill;
+
+  const { sessionId } = await startNewConversation({
+    via: "skill",
+    name: base,      // seed the sidebar name; the skill badge comes from skill/skillArgs
+    label: base,
+    skill,
+    skillArgs: sanitizedArgs || null,
+  });
+
+  // Deliver the invocation as the first turn. The leading slash makes claude run
+  // it as the slash command (skills invoke as `/<plugin>:<skill>`); kind
+  // "command" renders it as a clean command card instead of a chat bubble.
+  const invocation = sanitizedArgs ? `/${skill} ${sanitizedArgs}` : `/${skill}`;
+  await writeUserTurn(sessionId, invocation, author, null, { kind: "command" });
+  return { sessionId };
 }
 
 export function renameSession(sessionId: string, name: string): ActiveSessionMeta | null {
@@ -607,6 +675,8 @@ export async function wakeSession(sessionId: string): Promise<ActiveSessionMeta>
     model: slot.meta.model,
     via: "resumed",
     runId: slot.meta.runId,
+    skill: slot.meta.skill,
+    skillArgs: slot.meta.skillArgs,
     resumeSessionId: resumeId,
     // No transcript to resume → start a fresh session under the SAME id (see
     // above) so the dashboard's session URL stays valid and the turn is
@@ -793,7 +863,23 @@ export async function writeUserTurn(
     commandName != null &&
     (commandName === "plan" || listSlashCommands(slot.meta.cwd).some((c) => c.name === commandName));
   const turnKind = opts?.kind ?? (isCommandTurn ? "command" : null);
-  const promptOverride = isCommandTurn ? text.trim() : undefined;
+  let promptOverride = isCommandTurn ? text.trim() : undefined;
+
+  // Peer attribution: when a guest (not the host) drives the turn, the model
+  // should know WHO is asking — so it can address them by name and reason about
+  // the request in a shared session. We prepend a hidden context line to the
+  // text the MODEL receives (modelText) and keep the transcript showing exactly
+  // what the peer typed via promptOverride, so this steering never surfaces in
+  // anyone's UI. Host turns are unchanged (the host is the implicit default).
+  const isPeerTurn = author != null && author !== "host";
+  let modelText = turnText;
+  if (isPeerTurn) {
+    modelText =
+      `[Shared-session context: the following message is from "${author}", a peer ` +
+      `collaborator in this session (not the host). Address them by name when relevant.]\n\n` +
+      turnText;
+    if (promptOverride == null) promptOverride = text.trim();
+  }
 
   // Per-turn plan tracking. In plan mode the gate holds the session read-only
   // until the model calls submit_plan/ExitPlanMode — that call is what surfaces
@@ -816,7 +902,7 @@ export async function writeUserTurn(
   // exact same turn into a fresh child after a failed resume (below).
   const sendTurn = (targetId: string) => async () => {
     if (mode) await doWriteControl(targetId, { subtype: "set_permission_mode", mode });
-    await doWrite(targetId, turnText, opts?.images);
+    await doWrite(targetId, modelText, opts?.images);
   };
   // Serialise writes per session
   slot.writeQueue = slot.writeQueue.then(sendTurn(beforeId));
@@ -897,6 +983,17 @@ export async function interruptSession(sessionId: string, byAuthor: string | nul
       ctx: { session_id: canonicalSid, last_assistant_message: "⏹ Turn stopped.", author: byAuthor ?? "host" },
     }));
   } catch { /* best-effort — the kill already stopped the turn */ }
+  // Clear turnActive NOW rather than waiting for the async child `close`. The
+  // client shows the "thinking" indicator on `isWaiting || turnActive`; the
+  // synthesized Stop above only clears the event-derived local isWaiting, so a
+  // still-true server turnActive would keep the spinner up until the process
+  // actually exits (and SIGTERM on a mid-tool turn isn't instant). Emit a `turn`
+  // so every viewer's indicator clears immediately; the close handler later
+  // re-clears it idempotently.
+  if (slot.meta.turnActive === true) {
+    slot.meta.turnActive = false;
+    activeSessionsBus.emit("turn", { sessionId: canonicalSid });
+  }
 }
 
 /**
@@ -962,6 +1059,13 @@ export function setSessionModel(
       },
     }));
   } catch { /* best-effort */ }
+  // Clear turnActive eagerly (see interruptSession): the kill aborts any
+  // in-flight turn, but the server-authoritative flag would otherwise linger
+  // until the async close and keep the "thinking" indicator spinning.
+  if (slot.meta.turnActive === true) {
+    slot.meta.turnActive = false;
+    activeSessionsBus.emit("turn", { sessionId: canonicalSid });
+  }
   return { sessionId: canonicalSid, model: next };
 }
 
@@ -1125,6 +1229,8 @@ async function recoverWithFreshSession(oldCanonicalId: string): Promise<LiveSlot
     model: meta.model,
     via: "resumed",
     runId: meta.runId,
+    skill: meta.skill,
+    skillArgs: meta.skillArgs,
     // Brand-new id (randomUUID): NOT a resume, NOT the old id (which is claimed
     // by the unreadable transcript on disk).
     resumeSessionId: null,
@@ -1367,6 +1473,10 @@ interface SpawnOpts {
   model?: string | null;
   via: "new-conversation" | "skill" | "resumed";
   runId: string | null;
+  // For a skill-launched session: the skill/command name + args, carried onto
+  // the slot's meta for sidebar labeling.
+  skill?: string | null;
+  skillArgs?: string | null;
   resumeSessionId: string | null;
   /**
    * When resumeSessionId is null, start a brand-new session under THIS exact id
@@ -1476,6 +1586,8 @@ async function spawnControllable(opts: SpawnOpts): Promise<{ sessionId: string; 
     displayName: opts.displayName ?? null,
     cwd: opts.cwd,
     via: opts.via,
+    skill: opts.skill ?? null,
+    skillArgs: opts.skillArgs ?? null,
     startedAt,
     lastSeenAt: startedAt,
     status: "alive",
@@ -1967,6 +2079,10 @@ interface CheckpointFile {
     via: ActiveSessionMeta["via"];
     startedAt: number;
     lastSeenAt: number;
+    // Skill/command name + args for a skill-launched session, so its sidebar
+    // badge survives a restart. Optional; absent on non-skill sessions.
+    skill?: string | null;
+    skillArgs?: string | null;
     // Configured `--model` override, re-applied on every resume. Optional for
     // backwards compat with files written before the field existed.
     model?: string | null;
@@ -2010,6 +2126,8 @@ function saveCheckpoint() {
           via: s.meta.via,
           startedAt: s.meta.startedAt,
           lastSeenAt: s.meta.lastSeenAt,
+          ...(s.meta.skill ? { skill: s.meta.skill } : {}),
+          ...(s.meta.skillArgs ? { skillArgs: s.meta.skillArgs } : {}),
           ...(s.meta.model ? { model: s.meta.model } : {}),
           ...(al.length > 0 ? { aliases: al } : {}),
           ...(s.meta.lastStats ? { lastStats: s.meta.lastStats } : {}),
@@ -2081,6 +2199,8 @@ function loadCheckpoint() {
       displayName: entry.displayName ?? null,
       cwd: entry.cwd,
       via: entry.via,
+      skill: entry.skill ?? null,
+      skillArgs: entry.skillArgs ?? null,
       startedAt: entry.startedAt,
       lastSeenAt: entry.lastSeenAt,
       status: "dormant",

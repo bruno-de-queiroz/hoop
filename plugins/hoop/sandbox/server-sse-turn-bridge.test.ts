@@ -35,6 +35,8 @@ vi.mock("./lib/sessions", () => ({
 }));
 vi.mock("./lib/active-sessions", () => ({
   startNewConversation: vi.fn(),
+  startSkillSession: vi.fn(async () => ({ sessionId: "s1" })),
+  isValidSkillName: (name: string) => /^[A-Za-z0-9][A-Za-z0-9_:/-]{0,127}$/.test(name),
   writeUserTurn: vi.fn(),
   isControllable: vi.fn(() => false),
   endSession: vi.fn(),
@@ -43,13 +45,6 @@ vi.mock("./lib/active-sessions", () => ({
   bootActiveSessions: vi.fn(),
   shutdownActiveSessions: vi.fn(),
   activeSessionsBus: mockActiveSessionsBus,
-}));
-vi.mock("./lib/spawn", () => ({
-  startSkillRun: vi.fn(),
-  listRuns: () => [],
-  getRun: () => undefined,
-  isValidSkillName: (name: string) => /^[A-Za-z0-9][A-Za-z0-9_:/-]{0,127}$/.test(name),
-  runsBus: new EventEmitter(),
 }));
 vi.mock("./lib/skills", () => ({ listSkills: () => [], startSkillsWatcher: vi.fn(), stopSkillsWatcher: vi.fn(), skillsBus: new EventEmitter() }));
 vi.mock("./lib/commands", () => ({ listSlashCommands: () => [] }));

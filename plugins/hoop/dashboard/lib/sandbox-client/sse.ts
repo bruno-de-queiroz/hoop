@@ -10,7 +10,6 @@ function dispatchSseEvent(
   data: unknown,
   eventBus: EventEmitter,
   sessionsBus: EventEmitter,
-  runsBus: EventEmitter,
   activeSessionsBus: EventEmitter,
   skillsBus: EventEmitter,
 ) {
@@ -24,15 +23,6 @@ function dispatchSseEvent(
     case "skills":
       skillsBus.emit("change");
       return;
-    case "run":
-      runsBus.emit("link", data);
-      return;
-    case "run-chunk":
-      runsBus.emit("chunk", data);
-      return;
-    case "run-end":
-      runsBus.emit("end", data);
-      return;
     case "session-status":
       activeSessionsBus.emit("change", data);
       return;
@@ -45,7 +35,6 @@ function dispatchSseEvent(
 export interface SseBuses {
   eventBus: EventEmitter;
   sessionsBus: EventEmitter;
-  runsBus: EventEmitter;
   activeSessionsBus: EventEmitter;
   skillsBus: EventEmitter;
 }
@@ -118,7 +107,6 @@ export function openSseConnection(deps: SseConnectionDeps): Promise<void> {
             parsed,
             buses.eventBus,
             buses.sessionsBus,
-            buses.runsBus,
             buses.activeSessionsBus,
             buses.skillsBus,
           );

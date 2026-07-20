@@ -64,10 +64,6 @@ vi.mock("./active-sessions", () => ({
   isResumeInFlight: vi.fn(() => false),
 }));
 
-vi.mock("./spawn", () => ({
-  getRunForSession: vi.fn(() => null),
-}));
-
 vi.mock("./paths", () => ({
   CLAUDE_SESSIONS_DIR: "/mock/sessions",
 }));
@@ -85,8 +81,6 @@ beforeEach(async () => {
   (active.getActiveSession as any).mockReset().mockReturnValue(undefined);
   (active.listActiveSessions as any).mockReset().mockReturnValue([]);
   (active.isResumeInFlight as any).mockReset().mockReturnValue(false);
-  const spawn = await import("./spawn");
-  (spawn.getRunForSession as any).mockReset().mockReturnValue(null);
   const fsMod = await import("node:fs");
   unlinkSpy = (fsMod as any).unlinkSync;
   unlinkSpy.mockClear();

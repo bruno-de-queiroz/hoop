@@ -7,7 +7,6 @@ import { openSseConnection } from "./sse";
 
 import type {
   ActiveSessionMeta,
-  RunMeta,
   AgentRun,
   SearchType,
   SearchResponse,
@@ -141,9 +140,9 @@ export interface SandboxClient {
   listFiles(query: FilesQuery): Promise<FileEntry[]>;
 
   isValidSkillName(name: string): boolean;
-  startSkillRun(skill: string, args?: string, participant?: string): Promise<{ runId: string }>;
-  listRuns(): Promise<RunMeta[]>;
-  getRun(runId: string): Promise<RunMeta | undefined>;
+  /** Launch a skill as a REGULAR session; returns the new session's id. The
+   * dashboard snaps to it (the old detached-run { runId } contract is gone). */
+  startSkillRun(skill: string, args?: string, participant?: string): Promise<{ sessionId: string }>;
 
   listSkills(opts?: { cwd?: string }): Promise<Skill[]>;
   listSlashCommands(opts?: { cwd?: string }): Promise<SlashCommand[]>;
@@ -191,7 +190,6 @@ export interface SandboxClient {
 
   eventBus: EventEmitter;
   sessionsBus: EventEmitter;
-  runsBus: EventEmitter;
   activeSessionsBus: EventEmitter;
   skillsBus: EventEmitter;
 }
@@ -340,10 +338,9 @@ export function createHttpClient(socketPath: string): SandboxClient {
   // network hop underneath.
   const localEventBus = new EventEmitter();
   const localSessionsBus = new EventEmitter();
-  const localRunsBus = new EventEmitter();
   const localActiveSessionsBus = new EventEmitter();
   const localSkillsBus = new EventEmitter();
-  for (const bus of [localEventBus, localSessionsBus, localRunsBus, localActiveSessionsBus, localSkillsBus]) {
+  for (const bus of [localEventBus, localSessionsBus, localActiveSessionsBus, localSkillsBus]) {
     bus.setMaxListeners(100);
   }
 
@@ -394,7 +391,6 @@ export function createHttpClient(socketPath: string): SandboxClient {
           buses: {
             eventBus: localEventBus,
             sessionsBus: localSessionsBus,
-            runsBus: localRunsBus,
             activeSessionsBus: localActiveSessionsBus,
             skillsBus: localSkillsBus,
           },
@@ -504,22 +500,13 @@ export function createHttpClient(socketPath: string): SandboxClient {
 
     isValidSkillName,
     startSkillRun: async (skill, args, participant) => {
-      const res = await request<{ runId: string }>(
+      const res = await request<{ sessionId: string }>(
         "POST",
         `/skill/${encodeURIComponent(skill)}/run`,
         { args },
         participantOpts(participant),
       );
-      return { runId: res.runId };
-    },
-    listRuns: () => request<{ runs: RunMeta[] }>("GET", "/runs").then((r) => r.runs),
-    getRun: async (id) => {
-      try {
-        return await request<RunMeta>("GET", `/runs/${encodeURIComponent(id)}`);
-      } catch (e: any) {
-        if (e?.status === 404) return undefined;
-        throw e;
-      }
+      return { sessionId: res.sessionId };
     },
 
     listSkills: (opts?: { cwd?: string }) =>
@@ -575,7 +562,6 @@ export function createHttpClient(socketPath: string): SandboxClient {
 
     eventBus: localEventBus,
     sessionsBus: localSessionsBus,
-    runsBus: localRunsBus,
     activeSessionsBus: localActiveSessionsBus,
     skillsBus: localSkillsBus,
   };

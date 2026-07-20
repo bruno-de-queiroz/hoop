@@ -14,9 +14,6 @@ import { request as httpRequest, type IncomingMessage } from "node:http";
 
 // ---- mock heavy deps before any import of server.ts ----
 
-const mockRunsBus = new EventEmitter();
-mockRunsBus.setMaxListeners(50);
-
 const mockIngestEventLine = vi.fn<(line: string) => { ok: true; id?: number } | { ok: false; reason: string }>();
 
 const HOOK_TOK = "hook-token-".padEnd(64, "h");
@@ -29,14 +26,6 @@ vi.mock("./auth", () => ({
   hookToken: () => HOOK_TOK,
   SANDBOX_TOKEN_HEADER: "x-sandbox-token",
   HOOK_TOKEN_HEADER: "x-hook-token",
-}));
-
-vi.mock("./lib/spawn", () => ({
-  startSkillRun: vi.fn(),
-  listRuns: () => [],
-  getRun: () => undefined,
-  isValidSkillName: (name: string) => /^[A-Za-z0-9][A-Za-z0-9_:/-]{0,127}$/.test(name),
-  runsBus: mockRunsBus,
 }));
 
 vi.mock("./lib/ingestor", () => ({
@@ -54,6 +43,8 @@ vi.mock("./lib/sessions", () => ({
 
 vi.mock("./lib/active-sessions", () => ({
   startNewConversation: vi.fn(),
+  startSkillSession: vi.fn(async () => ({ sessionId: "s1" })),
+  isValidSkillName: (name: string) => /^[A-Za-z0-9][A-Za-z0-9_:/-]{0,127}$/.test(name),
   writeUserTurn: vi.fn(),
   isControllable: vi.fn(() => false),
   endSession: vi.fn(),

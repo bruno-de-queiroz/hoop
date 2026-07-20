@@ -334,7 +334,7 @@ function shouldForward(scope, type, data) {
     case "skills":     // skills are shared
       return true;
     default:
-      return false;    // run/run-chunk/run-end → host only
+      return false;    // anything unrecognized → host only
   }
 }
 

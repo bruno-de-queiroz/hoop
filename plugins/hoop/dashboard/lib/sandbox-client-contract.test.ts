@@ -181,25 +181,11 @@ const CASES: Case[] = [
   },
   {
     name: "startSkillRun",
-    routes: { "POST /skill/foo/run": { status: 200, body: { runId: "r1" } } },
+    routes: { "POST /skill/foo/run": { status: 200, body: { sessionId: "s1" } } },
     invoke: () => client.startSkillRun("foo", "args"),
     expectMethod: "POST",
     expectPath: "/skill/foo/run",
     expectBody: { args: "args" },
-  },
-  {
-    name: "listRuns",
-    routes: { "GET /runs": { status: 200, body: { runs: [] } } },
-    invoke: () => client.listRuns(),
-    expectMethod: "GET",
-    expectPath: "/runs",
-  },
-  {
-    name: "getRun",
-    routes: { "GET /runs/r1": { status: 200, body: { runId: "r1" } } },
-    invoke: () => client.getRun("r1"),
-    expectMethod: "GET",
-    expectPath: "/runs/r1",
   },
   {
     name: "listSkills",
@@ -296,17 +282,17 @@ describe("SandboxClient contract: every method hits the right sandbox route", ()
 });
 
 describe("SandboxClient.startSkillRun — JSON-only protocol", () => {
-  it("parses { runId } from a JSON 200 response and returns it", async () => {
+  it("parses { sessionId } from a JSON 200 response and returns it", async () => {
     stub.setRoutes({
-      "POST /skill/foo/run": { status: 200, body: { runId: "run-xyz-789" } },
+      "POST /skill/foo/run": { status: 200, body: { sessionId: "sess-xyz-789" } },
     });
     const result = await client.startSkillRun("foo", "some args");
-    expect(result).toEqual({ runId: "run-xyz-789" });
+    expect(result).toEqual({ sessionId: "sess-xyz-789" });
   });
 
   it("sends exactly one POST with JSON body { args } — no SSE upgrade", async () => {
     stub.setRoutes({
-      "POST /skill/bar/run": { status: 200, body: { runId: "r1" } },
+      "POST /skill/bar/run": { status: 200, body: { sessionId: "s1" } },
     });
     await client.startSkillRun("bar", "bar args");
 

@@ -1,7 +1,7 @@
 /**
  * Boundary tests for the runtime resource caps: MAX_SSE_CLIENTS and the
- * socket-conflict probe in listenOnSocket. The skill-run cap is covered by
- * lib/spawn.test.ts; this file focuses on the server-side gates.
+ * socket-conflict probe in listenOnSocket. This file focuses on the
+ * server-side gates.
  */
 
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -11,16 +11,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 
-const mockRunsBus = new EventEmitter();
-mockRunsBus.setMaxListeners(50);
-
-vi.mock("./lib/spawn", () => ({
-  startSkillRun: vi.fn(),
-  listRuns: () => [],
-  getRun: () => undefined,
-  isValidSkillName: () => true,
-  runsBus: mockRunsBus,
-}));
 vi.mock("./lib/ingestor", () => ({
   ingestEventLine: vi.fn(),
   startIngestor: vi.fn(),
@@ -34,6 +24,8 @@ vi.mock("./lib/sessions", () => ({
 }));
 vi.mock("./lib/active-sessions", () => ({
   startNewConversation: vi.fn(),
+  startSkillSession: vi.fn(async () => ({ sessionId: "s1" })),
+  isValidSkillName: () => true,
   writeUserTurn: vi.fn(),
   isControllable: vi.fn(() => false),
   endSession: vi.fn(),

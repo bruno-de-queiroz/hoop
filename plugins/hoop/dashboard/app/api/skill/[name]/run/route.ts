@@ -8,14 +8,13 @@ export const dynamic = "force-dynamic";
 /**
  * POST /api/skill/[name]/run
  *
- * Proxies to sandbox POST /skill/:name/run. The sandbox returns
- * `{ runId }` synchronously; run chunks/end events flow over /api/stream.
- * `proxy()` preserves the sandbox status — 429 stays 429, 404 stays 404.
+ * Proxies to sandbox POST /skill/:name/run, which launches the skill as a
+ * REGULAR session and returns `{ sessionId }` synchronously; the dashboard
+ * snaps to it. `proxy()` preserves the sandbox status — 429 stays 429, 404 404.
  */
 export async function POST(req: Request, { params }: { params: Promise<{ name: string }> }) {
-  // Host-only: spawning a skill run is not a co-drive action and creates a new
-  // run outside any shared session's scope. Peers must never trigger it. The
-  // sandbox re-checks this independently (defense-in-depth).
+  // Host-only: launching a skill session is not a co-drive action. Peers must
+  // never trigger it. The sandbox re-checks this independently (defense-in-depth).
   if (!isHost(req)) return errorResponse("this action is host-only", 403);
 
   const { name } = await params;
