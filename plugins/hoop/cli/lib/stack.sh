@@ -42,6 +42,9 @@ HS_ENV_FILE="$HOME/.claude/hoop/hoop.env"
 HS_COMPOSE_FILE="${HS_PLUGIN_ROOT}/dashboard/docker-compose.yml"
 HS_SVC_SANDBOX="agent-sandbox"
 HS_SVC_DASHBOARD="dashboard"
+# Image name the compose `agent-sandbox` service builds/runs (kept in sync with
+# docker-compose.yml). Reused as a throwaway probe container in host detection.
+HS_IMAGE_SANDBOX="hoop-sandbox"
 
 # User-defined host bind-mounts for the sandbox workspace, managed by
 # `hoop mount`. `mounts.list` is the source of truth (one
@@ -128,6 +131,55 @@ _hs_require_sandbox_up() {
   _die   "start it first:  hoop sandbox start"
 }
 
+# Resolve the address the sandbox should use for `host.docker.internal` and
+# export HOOP_HOST_GATEWAY for compose to interpolate into both services'
+# extra_hosts. VM-based runtimes (Docker Desktop, Rancher Desktop, OrbStack)
+# inject a WORKING host.docker.internal that reaches the real host; forcing the
+# alias to Docker's `:host-gateway` magic there instead pins it to the docker0
+# bridge gateway (e.g. 172.17.0.1 on Rancher), which cannot reach host services
+# — the Ollama/DMR embedders. So probe what a plain container (no --add-host)
+# actually resolves and reuse that IP; when nothing resolves — native Linux
+# Docker, where the docker0 gateway *is* the host — fall back to `host-gateway`.
+# Honors an explicit HOOP_HOST_GATEWAY override.
+#
+# The probe spawns a throwaway container, so its result is CACHED (keyed by the
+# docker context) to keep repeat start/rebuild fast; delete the cache file or
+# change context to re-probe. First-ever launch has no image to probe → falls
+# back to host-gateway for that run; the next start detects correctly. Fail-open.
+HS_HOST_GATEWAY_CACHE="$HOME/.claude/hoop/host-gateway.cache"
+_hs_detect_host_gateway() {
+  if [ -n "${HOOP_HOST_GATEWAY:-}" ]; then
+    export HOOP_HOST_GATEWAY
+    echo "host.docker.internal -> ${HOOP_HOST_GATEWAY} (from HOOP_HOST_GATEWAY)"
+    return 0
+  fi
+
+  local ctx cached_ctx cached_ip
+  ctx="$(docker context show 2>/dev/null || echo default)"
+  if [ -f "$HS_HOST_GATEWAY_CACHE" ]; then
+    IFS=$'\t' read -r cached_ctx cached_ip < "$HS_HOST_GATEWAY_CACHE" 2>/dev/null || true
+    if [ "$cached_ctx" = "$ctx" ] && [ -n "$cached_ip" ]; then
+      export HOOP_HOST_GATEWAY="$cached_ip"
+      echo "host.docker.internal -> ${HOOP_HOST_GATEWAY} (cached)"
+      return 0
+    fi
+  fi
+
+  local ip=""
+  if docker image inspect "$HS_IMAGE_SANDBOX" >/dev/null 2>&1; then
+    ip="$(docker run --rm --entrypoint sh "$HS_IMAGE_SANDBOX" -c \
+      'getent hosts host.docker.internal 2>/dev/null | awk "{print \$1; exit}"' 2>/dev/null | tr -d '[:space:]')"
+  fi
+  export HOOP_HOST_GATEWAY="${ip:-host-gateway}"
+  # Only cache a real probe result (image present); don't pin the first-run
+  # host-gateway fallback, so the next start re-probes once the image exists.
+  if [ -n "$ip" ]; then
+    mkdir -p "$(dirname "$HS_HOST_GATEWAY_CACHE")" 2>/dev/null || true
+    printf '%s\t%s\n' "$ctx" "$HOOP_HOST_GATEWAY" > "$HS_HOST_GATEWAY_CACHE" 2>/dev/null || true
+  fi
+  echo "host.docker.internal -> ${HOOP_HOST_GATEWAY}"
+}
+
 # Host-side prerequisite tools shared by build/up paths. jq for every JSON
 # read/write; awk for the macOS Keychain dump parse.
 _hs_preflight_common() {
@@ -142,6 +194,7 @@ _hs_preflight_common() {
       return 1
     fi
   done
+  _hs_detect_host_gateway
 }
 
 # --- Service resolution ------------------------------------------------------
@@ -243,14 +296,25 @@ _hs_ensure_plugin_enabled() {
     ' > "$installed"
   fi
 
+  # Enable the hoop plugin AND deny the browser MCP's RCE-equivalent tool.
+  # @playwright/mcp ships `browser_run_code_unsafe` (arbitrary JS in the
+  # Playwright process) as a "core" capability with no MCP-side off switch — so
+  # we neutralize it at claude's own permission layer, where a `deny` can't be
+  # overridden by any allow and removes the tool from context entirely. The rest
+  # of the browser toolset (navigate/click/type/screenshot/snapshot) stays.
+  local DENY_PW_UNSAFE="mcp__playwright__browser_run_code_unsafe"
   tmp="$(mktemp)"
   if [ -f "$settings" ]; then
-    jq --arg key "$KEY" '
+    jq --arg key "$KEY" --arg deny "$DENY_PW_UNSAFE" '
       .enabledPlugins //= {}
       | .enabledPlugins[$key] = true
+      | .permissions //= {}
+      | .permissions.deny //= []
+      | .permissions.deny += ([$deny] - .permissions.deny)
     ' "$settings" > "$tmp" && mv "$tmp" "$settings" || { rm -f "$tmp"; return 1; }
   else
-    jq -n --arg key "$KEY" '{ enabledPlugins: { ($key): true } }' > "$settings"
+    jq -n --arg key "$KEY" --arg deny "$DENY_PW_UNSAFE" \
+      '{ enabledPlugins: { ($key): true }, permissions: { deny: [$deny] } }' > "$settings"
   fi
 
   # settings.json:hooks — SANDBOX-ONLY wiring (permission gate + emitters).
@@ -319,6 +383,12 @@ _hs_detect_dmr() {
     echo "  or Docker Model Runner on :12434 (Docker Desktop 4.42+, or 'docker model' on Docker CE)."
   fi
 }
+
+# The Playwright browser MCP is registered from INSIDE the container (see
+# sandbox/entrypoint.sh), not here: it uses `claude mcp add` (claude's own config
+# writer) so it can't race claude's live rewrites of .claude.json, and it points
+# at an in-image path that's guaranteed present in whatever image is running —
+# no host-side editing, no image/profile version skew.
 
 # Sandbox-facing setup: profile, credentials, plugin wiring, forwarded env.
 _hs_preflight_sandbox() {

@@ -221,4 +221,37 @@ if [ -n "${HOOP_OTEL_COLLECTOR_URL:-}" ]; then
   for _raw in ${HOOP_OTEL_COLLECTOR_URL//,/ }; do blackhole_host "$_raw"; done
 fi
 
+# --- Register the in-container browser MCP (idempotent, claude-owned write) ---
+# @playwright/mcp + headless Chromium are baked into THIS image and the CLI path
+# is exported as PLAYWRIGHT_MCP_CLI (see Dockerfile), so registration is coupled
+# to the capability — the path we write always exists in the running image.
+#
+# We register via `claude mcp add` run as `agent` (claude's own config writer),
+# not a host-side jq edit of .claude.json, so it can never race claude's live
+# rewrites of that file. Presence is checked first (read-only jq), so the write
+# happens once on a fresh profile and every later boot is a pure read.
+#
+# `--isolated`: the profile is kept in memory and never persisted to disk, so no
+# cookies/logins carry across sessions (deliberate: no ambient auth state, and
+# concurrent clients don't fight over one on-disk profile). To drive a logged-in
+# site, hand the tools a `--storage-state` file. `--no-sandbox` is required
+# because we're already inside a locked-down unprivileged container. The
+# RCE-equivalent `browser_run_code_unsafe` tool is denied via claude's
+# permissions in the mounted settings.json (see cli/lib/stack.sh).
+if [ -n "${PLAYWRIGHT_MCP_CLI:-}" ] && [ -f "$PLAYWRIGHT_MCP_CLI" ]; then
+  # Presence check uses node (always in this image; jq is not) so we only ever
+  # write once and skip on every subsequent boot.
+  if ! gosu agent node -e 'let c={};try{c=require(process.argv[1])}catch(e){}process.exit(c&&c.mcpServers&&c.mcpServers.playwright?0:1)' "$HOME_DIR/.claude.json" >/dev/null 2>&1; then
+    gosu agent mkdir -p "$HOME_DIR/.cache/playwright-mcp" 2>/dev/null || true
+    if gosu agent claude mcp add playwright --scope user \
+         -- node "$PLAYWRIGHT_MCP_CLI" \
+              --headless --browser chromium --no-sandbox --isolated \
+              --output-dir "$HOME_DIR/.cache/playwright-mcp"; then
+      echo "[entrypoint] registered in-container playwright browser MCP"
+    else
+      echo "[entrypoint] WARNING: failed to register playwright browser MCP"
+    fi
+  fi
+fi
+
 exec gosu agent "$@"

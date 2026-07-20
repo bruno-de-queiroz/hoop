@@ -79,14 +79,20 @@ services:
       # GitHub CLI auth for the sandbox agent — the launcher forwards the token
       # for the host gh account chosen in /hoop:setup. Absent → gh unauthenticated.
       GH_TOKEN: ${GH_TOKEN:-}
+    # (Browser automation runs fully in-container via @playwright/mcp; the
+    # browser path + MCP CLI path are baked into the image as ENV in
+    # sandbox/Dockerfile — no compose env needed here.)
 
-    # Lets the sandbox reach a Playwright run-server on the host (dev-only
-    # browser-automation bridge — the sandbox image has no root/apt access to
-    # install the system libs a real browser needs, so the browser process
-    # runs on the host and this container drives it remotely over WS/CDP via
-    # playwright-core, which needs no local browser binary).
+    # Lets the sandbox reach host services over host.docker.internal — the
+    # Ollama/DMR embedders configured by /hoop:setup. (Browser automation now
+    # runs fully IN-CONTAINER via @playwright/mcp, so it no longer needs the
+    # host.) HOOP_HOST_GATEWAY is resolved by the CLI engine (cli/lib/stack.sh):
+    # on Docker Desktop / Rancher Desktop / OrbStack it pins the daemon-provided
+    # host IP (Docker's `host-gateway` magic points at the docker0 bridge there,
+    # which can't reach the host); `host-gateway` is the correct fallback on
+    # native Linux Docker.
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "host.docker.internal:${HOOP_HOST_GATEWAY:-host-gateway}"
 
     restart: unless-stopped
 
@@ -106,7 +112,7 @@ services:
       - "127.0.0.1:${HOOP_PORT:-7842}:7842"
 
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "host.docker.internal:${HOOP_HOST_GATEWAY:-host-gateway}"
 
     # Share the UDS volume so the dashboard can connect to /var/run/hoop/sandbox.sock.
     # group_add: 1100 lets `node` join the `hoop` group that owns the socket / token.

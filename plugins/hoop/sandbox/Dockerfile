@@ -106,6 +106,39 @@ RUN apt-get update \
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh \
  && uv --version
 
+# --- In-container browser automation (headless) ------------------------------
+# @playwright/mcp gives the agent navigate/screenshot/click/snapshot tools,
+# driven by a headless Chromium that runs INSIDE this sandbox as the
+# unprivileged `agent` user — no host process, no host networking, no version
+# drift (the browser we bake matches the exact playwright-core the MCP loads,
+# because both come from this one pinned install). entrypoint.sh registers the
+# MCP in the mounted profile via `claude mcp add`, so `hoop open` and the
+# dashboard sandbox both get it, using PLAYWRIGHT_MCP_CLI below.
+#
+# Version is pinned (single source of truth) for reproducible builds. NOTE:
+# every @playwright/mcp release pins a pre-release ("-alpha") playwright build —
+# that's upstream's choice, not ours; pinning the MCP version pins that browser
+# transitively. Bump PLAYWRIGHT_MCP_VERSION deliberately.
+#
+# Kept high + pinned (rarely changes) so a claude-code bump below never
+# re-downloads Chromium. Browsers land in a shared, world-readable path so the
+# `agent` user can read them at runtime; PLAYWRIGHT_BROWSERS_PATH pins it for
+# both the build install and the runtime MCP. Skip the npm-postinstall browser
+# download (it would fetch all engines) and install ONLY chromium --with-deps
+# (apt system libs, root at build time). The browser download is a single large
+# CDN fetch — retry it a few times so a transient blip doesn't fail the build.
+ARG PLAYWRIGHT_MCP_VERSION=0.0.78
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+ENV PLAYWRIGHT_MCP_CLI=/opt/playwright-mcp/node_modules/@playwright/mcp/cli.js
+RUN mkdir -p /opt/playwright-mcp \
+ && cd /opt/playwright-mcp \
+ && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-audit --no-fund "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}" \
+ && { node node_modules/playwright/cli.js install --with-deps chromium \
+      || { echo "browser install failed; retry 1/2 in 5s..."; sleep 5;  node node_modules/playwright/cli.js install --with-deps chromium; } \
+      || { echo "browser install failed; retry 2/2 in 10s..."; sleep 10; node node_modules/playwright/cli.js install --with-deps chromium; }; } \
+ && chmod -R a+rX /opt/playwright-mcp /opt/ms-playwright \
+ && rm -rf /var/lib/apt/lists/*
+
 ENV HOME=/home/agent
 # pipx/uv tools the agent installs at runtime land in the bind-mounted profile
 # (~/.local/bin) — keep it on PATH so `pipx install`-ed tools (e.g. NotebookLM)

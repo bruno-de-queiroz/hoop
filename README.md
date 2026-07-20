@@ -94,6 +94,15 @@ The `add` / `mount` subcommands are also exposed as the **`/hoop:add`** and **`/
 
 `hoop open` uses the `hoop-sandbox` image (build it once with `hoop sandbox rebuild`) and mounts the sandbox Claude profile (`~/.claude/hoop/sandbox/profile`, `-p\|--profile` to override) so `claude` is already authenticated — run `hoop start` once to seed those credentials from your host. Unlike the dashboard's `agent-sandbox`, `open` runs with telemetry blackholed and without hoop's dashboard hooks/plugin (which need the dashboard's socket), so it's a clean, isolated interactive session that still has your setup MCPs and skills. `hoop install` / `hoop uninstall` manage the PATH symlink and shell wiring; the repo itself is never modified.
 
+### Browser automation
+
+The `hoop-sandbox` image ships a **headless Chromium + the official [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp)**, registered in the sandbox profile automatically (from inside the container, via `claude mcp add`, so the registration can't point at a browser the running image doesn't have). The agent gets `browser_navigate`, `browser_click`, `browser_type`, `browser_fill_form`, `browser_snapshot`, `browser_take_screenshot`, and more — driven by a browser that runs **entirely in-container** as the unprivileged `agent` user. No host browser, no host process, no `host.docker.internal` gymnastics, and nothing runs in *your* user context. Because the same image + profile back both surfaces, browser tools are available in every dashboard session **and** in `hoop open`.
+
+Two deliberate hardening choices:
+
+- **Ephemeral profile (`--isolated`).** The browser profile is kept in memory and never written to disk, so no cookies or logins persist across sessions and there's no ambient auth lying around. To drive a site that needs a login, hand the browser tools a `--storage-state` file (see the [`@playwright/mcp` docs](https://github.com/microsoft/playwright-mcp#user-profile)).
+- **No arbitrary-code tool.** `@playwright/mcp` exposes `browser_run_code_unsafe` (arbitrary JavaScript in the Playwright process, RCE-equivalent) as a non-removable "core" capability. hoop denies it via Claude's own `permissions.deny` in the sandbox `settings.json`, so the model never sees it — the rest of the toolset is unaffected.
+
 ## Pairing & plan review
 
 `/hoop:dashboard` can hand a **share link** to a teammate over a `cloudflared` tunnel. They open it, pick a name, and the host admits them; from that point both sides see the same live transcript and can chat (`>` prefix) or co-drive the model — from a laptop or a phone.
