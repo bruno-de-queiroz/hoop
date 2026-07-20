@@ -178,6 +178,10 @@ export interface EventRow {
   // for the host's plan-review decision. Lets the transcript re-style the turn
   // instead of showing it as an ordinary host bubble. Null/absent for normal turns.
   kind?: string | null;
+  // Set ONLY for events that fired inside a subagent (claude's ctx.agent_id on
+  // sidechain PreToolUse/PostToolUse/SubagentStop). The main transcript hides
+  // these — subagent activity belongs in the Agents rail. Null/absent otherwise.
+  agent_id?: string | null;
 }
 
 export interface EventRowFull extends EventRow {

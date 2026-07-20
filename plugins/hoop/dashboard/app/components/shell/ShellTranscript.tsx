@@ -457,6 +457,11 @@ export const ShellTranscript = memo(function ShellTranscript({
   const items: { key: string; node: React.ReactNode }[] = [];
   for (let i = 0; i < events.length; i++) {
     const e = events[i];
+    // Subagent-internal events (claude sets ctx.agent_id on a sidechain's
+    // PreToolUse/PostToolUse/SubagentStop) don't belong in the main thread —
+    // they're surfaced in the Agents rail. The parent's own Task/Agent tool
+    // call has no agent_id, so the "a subagent ran" marker still shows here.
+    if (e.agent_id) continue;
     switch (e.hook_type) {
       case "SessionStart":
         if (i === firstStartIdx) items.push({ key: `s-${e.id}`, node: <Divider label="session start" /> });
@@ -490,7 +495,7 @@ export const ShellTranscript = memo(function ShellTranscript({
         break;
       case "PreToolUse": {
         const next = events[i + 1];
-        if (next && next.hook_type === "PostToolUse" && e.tool_name != null && next.tool_name === e.tool_name) {
+        if (next && !next.agent_id && next.hook_type === "PostToolUse" && e.tool_name != null && next.tool_name === e.tool_name) {
           items.push({ key: `t-${e.id}-${next.id}`, node: <ToolCard pre={e} post={next} /> });
           i += 1;
         } else {

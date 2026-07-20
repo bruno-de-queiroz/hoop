@@ -179,7 +179,7 @@ function ingestLines(lines: string[]): Array<{ id: number }> {
         insertFts.run(id, t);
         newRows.push({ id, text: t });
       }
-      emittable.push({ id, ts, session_id: sid, hook_type: hook, tool_name: tool, text: t, author: ctx.author ?? null, images: Array.isArray(ctx.images) ? ctx.images : null, kind: ctx.kind ?? null, payload: event });
+      emittable.push({ id, ts, session_id: sid, hook_type: hook, tool_name: tool, text: t, author: ctx.author ?? null, images: Array.isArray(ctx.images) ? ctx.images : null, kind: ctx.kind ?? null, agent_id: ctx.agent_id ?? null, payload: event });
     }
   });
   tx();

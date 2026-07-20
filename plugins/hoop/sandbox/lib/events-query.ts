@@ -28,6 +28,12 @@ export interface EventRow {
   // / "plan-rejection" for the host's plan-review decision. Extracted from
   // ctx.kind; lets the transcript re-style the turn. Null/absent for normal turns.
   kind?: string | null;
+  // The subagent id, present ONLY when this tool/stop event fired INSIDE a
+  // subagent (claude populates ctx.agent_id for PreToolUse/PostToolUse/
+  // SubagentStop in a sidechain, and omits it for the main agent). The main
+  // transcript uses it to hide subagent-internal activity, which is surfaced in
+  // the Agents rail instead. Null/absent for main-agent events.
+  agent_id?: string | null;
 }
 
 export interface EventRowFull extends EventRow {
@@ -66,6 +72,7 @@ export function listEvents(query: EventsQuery): EventRow[] {
     SELECT id, ts, session_id, hook_type, tool_name, text,
            json_extract(payload, '$.ctx.author') AS author,
            json_extract(payload, '$.ctx.kind') AS kind,
+           json_extract(payload, '$.ctx.agent_id') AS agent_id,
            json_extract(payload, '$.ctx.images') AS images_json
     FROM events
     ${where.length ? "WHERE " + where.join(" AND ") : ""}

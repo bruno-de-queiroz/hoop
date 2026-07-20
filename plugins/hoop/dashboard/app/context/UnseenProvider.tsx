@@ -57,10 +57,14 @@ export function UnseenProvider({ children }: { children: React.ReactNode }) {
         hook_type?: string | null;
         author?: string | null;
         text?: string | null;
+        agent_id?: string | null;
       };
       const sid = e?.session_id;
       const hook = e?.hook_type;
       if (!sid || !hook || !MESSAGE_HOOKS.has(hook)) return;
+      // A subagent's SubagentStop (ctx.agent_id set) is internal activity, not a
+      // main-thread message — don't raise an unseen badge for it.
+      if (e.agent_id) return;
       // A Stop/SubagentStop with no text is a turn-complete marker, not content.
       if ((hook === "Stop" || hook === "SubagentStop") && !(e.text ?? "").trim()) return;
       // Belongs to the session I'm currently viewing (or an alias of it)? Seen.
