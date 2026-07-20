@@ -12,6 +12,9 @@ interface Body {
   name?: string;
   typing?: boolean;
   leaving?: boolean;
+  /** Whether the viewer's tab is in the foreground (document.visibilityState).
+   * Absent → treated as active. Drives the `away` (dimmed) presence state. */
+  active?: boolean;
 }
 
 /**
@@ -41,7 +44,7 @@ export async function POST(req: NextRequest) {
   if (body.leaving) {
     leave(sessionId, participantId);
   } else {
-    heartbeat({ sessionId, participantId, name, kind, typing: !!body.typing });
+    heartbeat({ sessionId, participantId, name, kind, typing: !!body.typing, active: body.active !== false });
   }
   return Response.json({ participants: listPresence(sessionId) });
 }

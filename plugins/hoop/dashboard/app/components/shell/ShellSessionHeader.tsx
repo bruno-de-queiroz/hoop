@@ -208,10 +208,12 @@ export function ShellSessionHeader({
               <span
                 key={p.participantId}
                 className={cn(
-                  "avatar w-6 h-6 text-[9px] ring-2 ring-center",
+                  "avatar w-6 h-6 text-[9px] ring-2 ring-center transition-opacity",
                   p.kind === "peer" && "avatar-sdk",
+                  // Dimmed = backgrounded/idle but still connected (NOT left).
+                  p.away && "opacity-40",
                 )}
-                title={p.name}
+                title={p.away ? `${p.name} (away)` : p.name}
               >
                 {p.name.slice(0, 2).toUpperCase()}
               </span>

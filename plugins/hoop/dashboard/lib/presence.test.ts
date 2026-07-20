@@ -44,14 +44,46 @@ describe("presence registry", () => {
     expect(changes).toBe(2); // heartbeat + leave
   });
 
-  it("evicts stale participants past the TTL", () => {
+  it("evicts a participant only past the long eviction window, not the idle window", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer" });
+    mod.heartbeat({ sessionId: "s1", participantId: "host", name: "Host", kind: "host" });
     expect(mod.listPresence("s1")).toHaveLength(1);
-    // Advance beyond the 30s heartbeat TTL.
+    // Still present well past the (short) idle/dim window.
     vi.setSystemTime(31_000);
+    expect(mod.listPresence("s1")).toHaveLength(1);
+    // Evicted only past the long window (GONE_MS = 3 min).
+    vi.setSystemTime(3 * 60_000 + 1_000);
     expect(mod.listPresence("s1")).toHaveLength(0);
+  });
+
+  describe("away (dim) — NOT a departure", () => {
+    it("a peer reporting its tab inactive is marked away, not removed, no marker", () => {
+      const lefts: unknown[] = [];
+      mod.presenceBus().on("left", (p) => lefts.push(p));
+      mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer", active: false });
+      const list = mod.listPresence("s1");
+      expect(list).toHaveLength(1);
+      expect(list[0].away).toBe(true);
+      expect(lefts).toHaveLength(0);
+    });
+
+    it("an active peer is not away; goes away once its heartbeat is stale", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer" });
+      expect(mod.listPresence("s1")[0].away).toBe(false);
+      // Past the idle window (25s) but nowhere near GONE — dimmed, still here.
+      vi.setSystemTime(26_000);
+      const list = mod.listPresence("s1");
+      expect(list).toHaveLength(1);
+      expect(list[0].away).toBe(true);
+    });
+
+    it("hosts are never marked away", () => {
+      mod.heartbeat({ sessionId: "s1", participantId: "host", name: "Host", kind: "host", active: false });
+      expect(mod.listPresence("s1")[0].away).toBe(false);
+    });
   });
 
   describe("peer 'left' signal (marker source)", () => {
@@ -61,36 +93,41 @@ describe("presence registry", () => {
       return lefts;
     }
 
-    it("a beacon leave emits 'left' only AFTER the grace window", () => {
+    it("does NOT emit 'left' for a merely backgrounded peer (the bug: no 42s drop)", () => {
+      vi.useFakeTimers();
+      const lefts = collectLefts();
+      mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer", active: false });
+      // Well past the old TTL+grace (42s) — must stay (dimmed), not leave.
+      vi.advanceTimersByTime(60_000);
+      expect(lefts).toHaveLength(0);
+      expect(mod.listPresence("s1")).toHaveLength(1);
+    });
+
+    it("emits 'left' only after GONE_MS of inactivity", () => {
       vi.useFakeTimers();
       const lefts = collectLefts();
       mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer" });
-      mod.leave("s1", "peer:x"); // tab-close beacon
-      vi.advanceTimersByTime(11_000);
-      expect(lefts).toHaveLength(0); // still inside the 12s grace
+      vi.advanceTimersByTime(3 * 60_000 - 1_000);
+      expect(lefts).toHaveLength(0);
       vi.advanceTimersByTime(2_000);
       expect(lefts).toEqual([{ sessionId: "s1", participantId: "peer:x", name: "X" }]);
     });
 
-    it("a heartbeat within the grace window cancels the 'left' (surviving second tab)", () => {
-      vi.useFakeTimers();
+    it("an active beat pushes the gone-timer out (peer came back to the foreground)", () => {
+      vi.useFakeTimers(); // t=0
       const lefts = collectLefts();
-      mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer" });
-      mod.leave("s1", "peer:x");
-      vi.advanceTimersByTime(8_000);
-      // Another tab under the SAME participantId is still beating.
-      mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer" });
-      vi.advanceTimersByTime(10_000); // past the original grace deadline
+      mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer" }); // arm fire@180s
+      // Background beats in between don't reset the countdown…
+      vi.advanceTimersByTime(60_000); // t=60s
+      mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer", active: false });
+      // …but a foreground beat does — re-arms fire@ t=120s+180s=300s.
+      vi.advanceTimersByTime(60_000); // t=120s
+      mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer", active: true });
+      // Past the ORIGINAL deadline (180s) → still here, because it was re-armed.
+      vi.advanceTimersByTime(61_000); // t=181s
       expect(lefts).toHaveLength(0);
-    });
-
-    it("a peer that stops beating emits 'left' via the silent-drop watchdog", () => {
-      vi.useFakeTimers();
-      const lefts = collectLefts();
-      mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer" });
-      vi.advanceTimersByTime(41_000);
-      expect(lefts).toHaveLength(0); // watchdog is TTL(30s)+grace(12s)=42s
-      vi.advanceTimersByTime(2_000);
+      // Past the NEW deadline (300s).
+      vi.advanceTimersByTime(3 * 60_000); // t=361s
       expect(lefts).toHaveLength(1);
     });
 
@@ -99,9 +136,19 @@ describe("presence registry", () => {
       const lefts = collectLefts();
       mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer" });
       mod.leave("s1", "peer:x", { silent: true });
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(5 * 60_000);
       expect(lefts).toHaveLength(0);
       expect(mod.listPresence("s1")).toHaveLength(0);
+    });
+
+    it("a beacon leave drops the roster entry but the gone-watchdog still resolves to 'left'", () => {
+      vi.useFakeTimers();
+      const lefts = collectLefts();
+      mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer" });
+      mod.leave("s1", "peer:x"); // tab-close beacon — roster only
+      expect(mod.listPresence("s1")).toHaveLength(0);
+      vi.advanceTimersByTime(3 * 60_000 + 1_000);
+      expect(lefts).toEqual([{ sessionId: "s1", participantId: "peer:x", name: "X" }]);
     });
 
     it("never emits 'left' for a host", () => {
@@ -109,7 +156,7 @@ describe("presence registry", () => {
       const lefts = collectLefts();
       mod.heartbeat({ sessionId: "s1", participantId: "host", name: "Host", kind: "host" });
       mod.leave("s1", "host");
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(5 * 60_000);
       expect(lefts).toHaveLength(0);
     });
   });

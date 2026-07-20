@@ -9,6 +9,9 @@ export interface PresenceParticipant {
   kind: "host" | "peer";
   typing: boolean;
   lastSeen: number;
+  /** Tab backgrounded or heartbeat stale — render the avatar dimmed. Never
+   * means "left" (that's a durable transcript marker, not a presence state). */
+  away?: boolean;
 }
 
 const HEARTBEAT_MS = 10_000;
@@ -49,10 +52,14 @@ export function usePresence(sessionId: string | null): {
   // Stable identity (refs/args only) so `setTyping` below can be a stable
   // useCallback — consumers memoize on it (e.g. ShellComposer).
   const post = useCallback((sid: string, typing: boolean) => {
+    // Report foreground/background from visibilityState. It flips on
+    // `visibilitychange` INSTANTLY — before a backgrounded tab's timers get
+    // throttled — so the server can dim (not drop) a still-connected peer.
+    const active = typeof document === "undefined" || document.visibilityState === "visible";
     fetch("/api/presence", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: sid, name: myDisplayName(), typing }),
+      body: JSON.stringify({ sessionId: sid, name: myDisplayName(), typing, active }),
     }).catch(() => { /* transient */ });
   }, []);
 
@@ -80,8 +87,15 @@ export function usePresence(sessionId: string | null): {
     beat();
     const iv = setInterval(beat, HEARTBEAT_MS);
 
+    // Beat immediately on foreground/background flips so the `away` (dimmed)
+    // state updates at once instead of waiting up to a full (possibly
+    // throttled) heartbeat interval.
+    const onVisibility = () => beat();
+    document.addEventListener("visibilitychange", onVisibility);
+
     return () => {
       clearInterval(iv);
+      document.removeEventListener("visibilitychange", onVisibility);
       stopKeepalive();
       // Best-effort leave so the others see us drop promptly.
       try {
