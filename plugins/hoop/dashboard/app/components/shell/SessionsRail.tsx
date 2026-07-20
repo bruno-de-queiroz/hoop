@@ -76,9 +76,13 @@ export function SessionsRail() {
           return label.includes(q) || (s.cwd ?? "").toLowerCase().includes(q);
         })
       : visible;
-    // Stable sort by id so rows keep a fixed position — selecting a session
-    // must NOT reorder the list (no pinning the current one to the top).
-    const sorted = [...matched].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    // Sort by creation date, newest first. The sandbox guarantees startedAt on
+    // every controllable/dormant row; id is a deterministic tiebreaker.
+    const sorted = [...matched].sort(
+      (a, b) =>
+        (b.startedAt ?? 0) - (a.startedAt ?? 0) ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    );
     const isAlive = (s: SessionInfo) => (s.lifecycle ?? "alive") === "alive";
     return {
       active: sorted.filter(isAlive),

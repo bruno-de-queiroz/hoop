@@ -214,6 +214,9 @@ export function listSessions(): SessionInfo[] {
         decorated.displayName = active.displayName;
         decorated.turnActive = active.turnActive === true;
         if (active.lastStats) decorated.lastStats = active.lastStats;
+        // Backfill creation time from the registry when Claude's <pid>.json
+        // body didn't carry one (older versions / partial writes).
+        decorated.startedAt ??= active.startedAt;
       }
       const a = aliasesFor(info.sessionId);
       if (a.length > 0) decorated.aliases = a;
@@ -249,6 +252,7 @@ export function listSessions(): SessionInfo[] {
       cwd: a.cwd,
       kind: "interactive",
       entrypoint: "sdk-cli",
+      startedAt: a.startedAt,
       runId: a.runId ?? undefined,
       skill: a.via === "skill" ? a.label : undefined,
       controllable: a.status !== "expired",

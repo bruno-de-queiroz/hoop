@@ -211,6 +211,15 @@ describe("listSessions", () => {
     expect(out[0].displayName).toBe("n");
   });
 
+  it("backfills startedAt from the registry when the session file lacks one", () => {
+    // The beforeEach cache file for sess-100 has no startedAt in its body.
+    (active.getActiveSession as any).mockImplementation((id: string) =>
+      id === "sess-100" ? { sessionId: "sess-100", status: "alive", startedAt: 1699999999 } : undefined
+    );
+    const out = mod.listSessions();
+    expect(out[0].startedAt).toBe(1699999999);
+  });
+
   it("marks expired sessions as not controllable", () => {
     (active.getActiveSession as any).mockReturnValue({ sessionId: "sess-100", status: "expired" });
     const out = mod.listSessions();
@@ -220,12 +229,14 @@ describe("listSessions", () => {
 
   it("surfaces a dormant registry entry that has no live session file", () => {
     (active.listActiveSessions as any).mockReturnValue([
-      { sessionId: "sess-dormant", status: "dormant", cwd: "/elsewhere", lastSeenAt: Date.now(), via: "new-conversation" },
+      { sessionId: "sess-dormant", status: "dormant", cwd: "/elsewhere", startedAt: 1700000000, lastSeenAt: Date.now(), via: "new-conversation" },
     ]);
     const out = mod.listSessions();
     const dormant = out.find((s) => s.sessionId === "sess-dormant");
     expect(dormant).toBeDefined();
     expect(dormant?.lifecycle).toBe("dormant");
+    // Creation date comes from the registry so the rail can sort by it.
+    expect(dormant?.startedAt).toBe(1700000000);
   });
 
   it("surfaces a freshly-created alive session immediately, even when a cache entry shares its cwd", () => {
