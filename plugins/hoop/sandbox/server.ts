@@ -80,6 +80,7 @@ import {
   revokeShare,
   revokeAllShares,
   setSharePeerName,
+  markShareJoined,
   listShares,
   getShare,
   validateShareById,
@@ -1193,6 +1194,11 @@ add("POST", "/join-request", async (req, res) => {
     sessionId: share.sessionId,
     peerName,
   });
+  // A share that was already claimed once and is being redeemed again is a
+  // RETURN (the peer closed the tab / left, then reopened the link) — surface
+  // it as "rejoin" so the host's audit trail distinguishes it from a first join.
+  const returning = share.joinedBefore;
+  const verb = returning ? "rejoin" : "join";
   // Notify the host live (event stream → host dashboard) + leave an audit trail.
   try {
     ingestEventLine(JSON.stringify({
@@ -1201,7 +1207,7 @@ add("POST", "/join-request", async (req, res) => {
       // `message` is what the dashboard transcript surfaces as the divider
       // label (deriveText → systemText), so name the peer there rather than
       // leaving a bare "[PeerJoinRequest]".
-      ctx: { session_id: share.sessionId, peer_name: peerName, ticket_id: ticketId, message: `${peerName ?? "A guest"} asked to join` },
+      ctx: { session_id: share.sessionId, peer_name: peerName, ticket_id: ticketId, rejoin: returning, message: `${peerName ?? "A guest"} asked to ${verb}` },
     }));
   } catch { /* non-fatal */ }
   json(res, 200, { ticketId, secret });
@@ -1218,11 +1224,19 @@ add("POST", "/join-admit", async (req, res) => {
   if (typeof body.ticketId !== "string") return err(res, 400, "missing required field: ticketId");
   const r = admitJoin(body.ticketId);
   if (!r.ok) return err(res, 404, "unknown or already-resolved join");
+  // "rejoined" iff this share was already claimed once before (flag set at
+  // claim). Read here, before this cycle's own claim flips it, so the FIRST
+  // admit reads false → "joined" and every later one reads true → "rejoined".
+  const returning = !!(r.ticket && getShare(r.ticket.shareId)?.joinedBefore);
   try {
     ingestEventLine(JSON.stringify({
       ts: new Date().toISOString(),
       hook: "PeerJoinResolved",
-      ctx: { session_id: r.ticket!.sessionId, peer_name: r.ticket!.peerName, ticket_id: body.ticketId, decision: "admit", message: `${r.ticket!.peerName ?? "A guest"} joined` },
+      // Keep hook_type "PeerJoinResolved" (not a new hook): the host's admission
+      // toast refetches on any `PeerJoin*` event to clear the resolved ticket,
+      // and the transcript renders it via the default divider — so only the
+      // human-facing `message` changes for a rejoin.
+      ctx: { session_id: r.ticket!.sessionId, peer_name: r.ticket!.peerName, ticket_id: body.ticketId, decision: "admit", rejoin: returning, message: `${r.ticket!.peerName ?? "A guest"} ${returning ? "rejoined" : "joined"}` },
     }));
   } catch { /* non-fatal */ }
   json(res, 200, { ok: true });
@@ -1259,7 +1273,38 @@ add("POST", "/join-claim", async (req, res) => {
   }
   const grant = claimJoin(body.ticketId, body.secret);
   if (!grant) return err(res, 403, "not admitted");
+  // The peer actually entered: mark the share so a future redemption of this
+  // same link is recognized as a rejoin (see /join-admit + /join-request).
+  markShareJoined(grant.shareId);
   json(res, 200, grant);
+});
+
+/**
+ * Record that a peer LEFT a shared session. Symmetric with the join markers:
+ * emits a `PeerLeft` divider into the transcript (audit + live host notice).
+ * Called by the dashboard — either from an explicit "Leave session" click or
+ * from the presence layer (tab close / silent drop), which is the only place
+ * that knows a peer is gone (leave has no sandbox-side state). Session + name
+ * are cosmetic label data; nothing is gated on them, so trusting the dashboard
+ * here is fine (it already authenticated the peer).
+ */
+add("POST", "/peer-leave", async (req, res) => {
+  let body: { sessionId?: unknown; name?: unknown };
+  try { body = await readJson(req, MAX_BYTES_DEFAULT); } catch (e: any) { return err(res, e.status ?? 400, e.message); }
+  if (typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+    return err(res, 400, "missing required field: sessionId");
+  }
+  const name = typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 80) : null;
+  try {
+    ingestEventLine(JSON.stringify({
+      ts: new Date().toISOString(),
+      hook: "PeerLeft",
+      // Not a `PeerJoin*` hook (it isn't a pending join, so the host's admission
+      // toast must ignore it); renders as a plain divider via the default path.
+      ctx: { session_id: body.sessionId, peer_name: name, message: `${name ?? "A guest"} left` },
+    }));
+  } catch { /* non-fatal */ }
+  json(res, 200, { ok: true });
 });
 
 add("GET", "/pending-joins", (_req, res) => json(res, 200, { joins: listPendingJoins() }));

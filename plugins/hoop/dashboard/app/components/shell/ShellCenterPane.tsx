@@ -12,6 +12,7 @@ import { ShellPlanReviewCard } from "./ShellPlanReviewCard";
 import { ShellAskQuestion } from "./ShellAskQuestion";
 import { ShellShareModal } from "./ShellShareModal";
 import { ShellNewSession } from "./ShellNewSession";
+import { myDisplayName } from "../lib/participant";
 
 // Center pane (Phase 3): the active session rendered as a chat thread + composer
 // (mockup's center). Reads everything from the providers — header, stats,
@@ -25,6 +26,21 @@ export function ShellCenterPane() {
   const [shareOpen, setShareOpen] = useState(false);
   // Stable so the memoized transcript isn't re-rendered by every presence beat.
   const onLoadMore = useCallback(() => void active.loadMore(), [active]);
+
+  // Peer "Leave session": relinquish access. The route emits the leave marker,
+  // drops presence, and clears the peer cookie — so returning needs a fresh
+  // admit. Navigate away (replace, so Back can't re-open the now-cookieless
+  // session). Host has no leave (they delete instead), so only wire it for peers.
+  const onLeave = useCallback(async () => {
+    try {
+      await fetch("/api/share/leave", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: myDisplayName() }),
+      });
+    } catch { /* leave anyway — the cookie clear is best-effort UX */ }
+    window.location.replace("/");
+  }, []);
 
   // Gate on selection ONLY (matching the legacy panel). A freshly-created
   // session is selected by its `pending-<id>` before it lands in the fs-backed
@@ -51,6 +67,7 @@ export function ShellCenterPane() {
         onRename={active.rename}
         onShare={() => setShareOpen(true)}
         onDelete={active.remove}
+        onLeave={onLeave}
       />
       <ShellStatsStrip stats={active.stats} model={active.meta.model} />
       <ShellTranscript

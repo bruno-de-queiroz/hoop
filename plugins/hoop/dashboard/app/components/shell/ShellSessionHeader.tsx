@@ -35,6 +35,7 @@ export function ShellSessionHeader({
   onRename,
   onShare,
   onDelete,
+  onLeave,
 }: {
   session: SessionInfo | null;
   meta: SessionMeta;
@@ -44,6 +45,9 @@ export function ShellSessionHeader({
   onRename: (name: string) => Promise<void>;
   onShare: () => void;
   onDelete: () => Promise<void>;
+  /** Peer-only: leave the shared session (drops access, needs a fresh admit to
+   * return). Undefined for the host, who deletes rather than leaves. */
+  onLeave?: () => Promise<void>;
 }) {
   const { sessions } = useSessions();
   // Mount-gated: the server always reads as host, so default to host until
@@ -268,6 +272,28 @@ export function ShellSessionHeader({
                   }}
                 >
                   Delete session
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        {/* Peer counterpart: a guest can LEAVE (relinquish access) but never
+          * delete/rename — those are host-only and refused server-side. */}
+        {isPeer && onLeave && (
+          <div ref={menuRef} className="relative">
+            <button className="icon-btn w-8 h-8" title="More" onClick={() => setMenuOpen((v) => !v)}>
+              <MoreHorizontal className="w-4 h-4" />
+            </button>
+            {menuOpen && (
+              <div className="absolute right-0 top-full mt-1.5 z-30 w-40 rounded-xl p-1.5 bg-elevated border border-divider shadow-card">
+                <button
+                  className="list-row w-full text-left px-2 py-1.5 text-[12px] text-fail"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    if (confirm("Leave this session? You'll need the host to admit you again to return.")) void onLeave();
+                  }}
+                >
+                  Leave session
                 </button>
               </div>
             )}

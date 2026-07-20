@@ -112,4 +112,28 @@ describe("shares registry", () => {
     expect(list).toHaveLength(1);
     expect(list[0].shareId).toBe(a.shareId);
   });
+
+  // Rejoin state: `joinedBefore` starts false, flips true when a claim marks the
+  // share joined, and stays sticky. /join-admit reads this to say "rejoined"
+  // rather than "joined" when a peer returns through the admit gate.
+  it("a fresh share has not been joined before", () => {
+    const rec = mod.createShare({ sessionId: "s", publicHost: "h.example" });
+    expect(rec.joinedBefore).toBe(false);
+    expect(mod.getShare(rec.shareId)?.joinedBefore).toBe(false);
+  });
+
+  it("markShareJoined flips joinedBefore and is idempotent (sticky)", () => {
+    const rec = mod.createShare({ sessionId: "s", publicHost: "h.example" });
+    expect(mod.markShareJoined(rec.shareId)).toEqual({ ok: true });
+    expect(mod.getShare(rec.shareId)?.joinedBefore).toBe(true);
+    expect(mod.markShareJoined(rec.shareId)).toEqual({ ok: true });
+    expect(mod.getShare(rec.shareId)?.joinedBefore).toBe(true);
+  });
+
+  it("markShareJoined is a no-op for an unknown or revoked share", () => {
+    expect(mod.markShareJoined("does-not-exist")).toEqual({ ok: false });
+    const rec = mod.createShare({ sessionId: "s", publicHost: "h.example" });
+    mod.revokeShare(rec.shareId); // deny/revoke drops the record entirely
+    expect(mod.markShareJoined(rec.shareId)).toEqual({ ok: false });
+  });
 });

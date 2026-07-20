@@ -185,6 +185,9 @@ export interface SandboxClient {
   claimJoin(ticketId: string, secret: string): Promise<{ shareId: string; sessionId: string; peerName: string | null } | null>;
   /** Host: list pending joins for the Admit/Deny UI. */
   listPendingJoins(): Promise<{ joins: Array<{ ticketId: string; shareId: string; sessionId: string; peerName: string | null; createdAt: number }> }>;
+  /** Record that a peer left a session (emits a `PeerLeft` transcript divider).
+   * `name` is a cosmetic label for the marker. */
+  peerLeave(sessionId: string, name?: string | null): Promise<{ ok: boolean }>;
 
   eventBus: EventEmitter;
   sessionsBus: EventEmitter;
@@ -567,6 +570,7 @@ export function createHttpClient(socketPath: string): SandboxClient {
       }
     },
     listPendingJoins: () => request("GET", "/pending-joins"),
+    peerLeave: (sessionId, name) => request("POST", "/peer-leave", { sessionId, name: name ?? null }),
 
     eventBus: localEventBus,
     sessionsBus: localSessionsBus,

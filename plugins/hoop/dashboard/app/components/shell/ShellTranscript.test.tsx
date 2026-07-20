@@ -221,4 +221,21 @@ describe("ShellTranscript author attribution", () => {
     expect(screen.getByText("ralph joined")).toBeInTheDocument();
     expect(screen.queryByText("peerjoinresolved")).toBeNull();
   });
+
+  it("renders a returning peer as 'rejoined' (same PeerJoinResolved hook, different message)", () => {
+    // A rejoin reuses PeerJoinResolved (so the host's admission toast still
+    // clears); only the message differs, and the divider surfaces it verbatim.
+    renderTranscript([
+      ev({ id: 8, hook_type: "PeerJoinResolved", text: "[PeerJoinResolved] | message=Ralph rejoined" }),
+    ]);
+    expect(screen.getByText("ralph rejoined")).toBeInTheDocument();
+  });
+
+  it("renders a PeerLeft marker as a '<name> left' divider", () => {
+    renderTranscript([
+      ev({ id: 9, hook_type: "PeerLeft", text: "[PeerLeft] | message=Ralph left" }),
+    ]);
+    expect(screen.getByText("ralph left")).toBeInTheDocument();
+    expect(screen.queryByText("peerleft")).toBeNull();
+  });
 });

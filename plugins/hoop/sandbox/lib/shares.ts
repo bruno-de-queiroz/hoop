@@ -42,6 +42,12 @@ export interface ShareRecord {
   /** epoch ms; null = no expiry. */
   expiresAt: number | null;
   revoked: boolean;
+  /** True once a peer has actually CLAIMED this share at least once (i.e. really
+   * entered — not merely admitted). Set at claim, never cleared. Closing the tab
+   * doesn't revoke the share, so a later redemption of the same link is a
+   * RETURN: the join gate re-triggers (host can still deny an impersonator) and
+   * the admit/request markers say "rejoined" instead of "joined". */
+  joinedBefore: boolean;
 }
 
 const SHARES_FILE = join(STATE_DIR, "shares.json");
@@ -136,6 +142,7 @@ export function createShare(opts: {
     createdAt: now,
     expiresAt: opts.expiresInMs ? now + opts.expiresInMs : null,
     revoked: false,
+    joinedBefore: false,
   };
   shares.set(record.shareId, record);
   persist();
@@ -155,6 +162,22 @@ export function setSharePeerName(shareId: string, name: string | null): { ok: bo
   const trimmed = name?.trim();
   r.peerName = trimmed ? trimmed.slice(0, 80) : null;
   persist();
+  return { ok: true };
+}
+
+/**
+ * Mark a share as having been successfully joined (claimed) at least once, so a
+ * later redemption of the same link is recognized as a return ("rejoined").
+ * Idempotent; no-op for an unknown/dead share.
+ */
+export function markShareJoined(shareId: string): { ok: boolean } {
+  bootShares();
+  const r = shares.get(shareId);
+  if (!r || r.revoked) return { ok: false };
+  if (!r.joinedBefore) {
+    r.joinedBefore = true;
+    persist();
+  }
   return { ok: true };
 }
 

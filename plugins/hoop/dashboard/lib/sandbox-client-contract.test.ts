@@ -258,6 +258,14 @@ const CASES: Case[] = [
     expectPath: "/search",
     expectBody: { q: "q", type: "bm25", limit: 10 },
   },
+  {
+    name: "peerLeave",
+    routes: { "POST /peer-leave": { status: 200, body: { ok: true } } },
+    invoke: () => client.peerLeave("s1", "Bob"),
+    expectMethod: "POST",
+    expectPath: "/peer-leave",
+    expectBody: { sessionId: "s1", name: "Bob" },
+  },
 ];
 
 describe("SandboxClient contract: every method hits the right sandbox route", () => {
