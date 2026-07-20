@@ -6,10 +6,10 @@ import { SectionTitle } from "@/app/components/ui";
 
 // Shell-native "Start a session" form (mockup empty state). Accent avatar +
 // title, section-title labels over field inputs, a full-width accent Create
-// button. Reuses useSessions().createSession (which selects the new row). The
-// name field autofocuses — cwd already has a sensible default.
+// button. Reuses useSessions().createSession (which selects the new row).
+// Sessions run in the sandbox workspace; an optional git repo is cloned there
+// on start (skipped if a folder of the same name already exists).
 
-const DEFAULT_CWD = "/home/agent/workspace";
 const MODEL_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "", label: "default" },
   { value: "opus", label: "opus" },
@@ -19,24 +19,24 @@ const MODEL_OPTIONS: Array<{ value: string; label: string }> = [
 
 export function ShellNewSession({ onCreated }: { onCreated?: (sessionId: string) => void }) {
   const { createSession } = useSessions();
-  const [cwd, setCwd] = useState(DEFAULT_CWD);
+  const [gitRepo, setGitRepo] = useState("");
   const [name, setName] = useState("");
   const [model, setModel] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
-  const canSubmit = cwd.trim().length > 0 && !submitting;
+  const canSubmit = !submitting;
 
   const submit = useCallback(async () => {
-    if (cwd.trim().length === 0 || submitting) return;
+    if (submitting) return;
     setSubmitting(true);
     setError(null);
     try {
       const { sessionId } = await createSession({
-        cwd: cwd.trim(),
         name: name.trim() || undefined,
         model: model || undefined,
+        gitRepo: gitRepo.trim() || undefined,
       });
       if (!mountedRef.current) return;
       onCreated?.(sessionId);
@@ -45,7 +45,7 @@ export function ShellNewSession({ onCreated }: { onCreated?: (sessionId: string)
     } finally {
       if (mountedRef.current) setSubmitting(false);
     }
-  }, [cwd, name, model, submitting, createSession, onCreated]);
+  }, [gitRepo, name, model, submitting, createSession, onCreated]);
 
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -73,13 +73,15 @@ export function ShellNewSession({ onCreated }: { onCreated?: (sessionId: string)
       </p>
 
       <label className="block mb-3">
-        <SectionTitle>cwd</SectionTitle>
+        <SectionTitle>
+          git repo <span className="normal-case tracking-normal text-ink-hush">(optional)</span>
+        </SectionTitle>
         <input
           type="text"
-          value={cwd}
-          onChange={(e) => setCwd(e.target.value)}
+          value={gitRepo}
+          onChange={(e) => setGitRepo(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={DEFAULT_CWD}
+          placeholder="https://github.com/owner/repo.git — cloned into the workspace"
           className="field font-mono w-full text-[12px] px-3 py-2 mt-1.5"
         />
       </label>

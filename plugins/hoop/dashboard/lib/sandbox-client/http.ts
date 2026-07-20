@@ -61,7 +61,10 @@ export interface SandboxClient {
   shutdown(): void;
 
   startNewConversation(opts: {
-    cwd?: string;
+    // Optional git URL to clone into the sandbox workspace on start; the session
+    // cwd becomes that clone (or the default workspace when omitted). Replaces
+    // the old free-text cwd — the dashboard no longer picks a folder directly.
+    gitRepo?: string | null;
     label?: string;
     name?: string | null;
     model?: string | null;

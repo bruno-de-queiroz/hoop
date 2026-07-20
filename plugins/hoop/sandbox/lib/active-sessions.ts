@@ -1,7 +1,8 @@
-import { spawn, ChildProcess } from "node:child_process";
+import { spawn, execFile, ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
+import { promisify } from "node:util";
 import {
   existsSync,
   readFileSync,
@@ -9,13 +10,14 @@ import {
   renameSync,
   mkdirSync,
   unlinkSync,
+  rmSync,
   readdirSync,
   copyFileSync,
   statSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Writable } from "node:stream";
-import { STATE_DIR, CLAUDE_SESSIONS_DIR } from "./paths";
+import { STATE_DIR, CLAUDE_SESSIONS_DIR, WORKSPACE_DIR } from "./paths";
 import { ingestEventLine } from "./ingestor";
 import { deleteEventsForSessions, listEventSessionIds } from "./db";
 import { discoverInstalledPluginDirs } from "./plugin-paths";
@@ -423,10 +425,80 @@ export function isAlive(sessionId: string): boolean {
 }
 
 /**
+ * Derive a safe workspace subdirectory name from a git URL: take the last path
+ * segment, drop a trailing `.git`, strip any query/fragment, and keep only
+ * filesystem-safe characters. Falls back to "repo" if nothing usable remains.
+ */
+export function repoDirNameFromUrl(gitRepo: string): string {
+  let tail = gitRepo.trim();
+  tail = tail.split(/[?#]/)[0]; // drop query/fragment
+  tail = tail.replace(/\/+$/, ""); // trailing slashes
+  tail = tail.split(/[/:]/).pop() ?? ""; // last path/scp segment
+  tail = tail.replace(/\.git$/i, "");
+  tail = tail.replace(/[^A-Za-z0-9._-]/g, "-").replace(/^-+/, "");
+  // Reject "." / ".." / all-dots so the target can't resolve to WORKSPACE_DIR
+  // itself or its parent.
+  if (!tail || /^\.+$/.test(tail)) return "repo";
+  return tail;
+}
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Clone `gitRepo` into WORKSPACE_DIR/<name> and return that path. If the target
+ * already exists it is reused as-is (we never overwrite an existing folder).
+ *
+ * Async (not execFileSync) so a slow clone can't block the single-threaded
+ * server event loop — that would stall every other session, the SSE fan-out,
+ * and the permission-gate long-polls. We clone into a temp sibling and rename
+ * it in on success, so a failed/partial clone never leaves a poisoned dir a
+ * later session would silently reuse, and concurrent clones of the same repo
+ * can't collide on a half-written tree.
+ */
+async function cloneRepoIntoWorkspace(gitRepo: string): Promise<string> {
+  const name = repoDirNameFromUrl(gitRepo);
+  const target = join(WORKSPACE_DIR, name);
+  mkdirSync(WORKSPACE_DIR, { recursive: true });
+  if (existsSync(target)) {
+    log.info("active-sessions", "git clone skipped; target exists", { target });
+    return target;
+  }
+  const tmp = join(WORKSPACE_DIR, `.clone-${randomUUID()}`);
+  log.info("active-sessions", "git clone", { gitRepo, target });
+  try {
+    // `--` guards against a URL that looks like a flag. Inherits process env so
+    // GH_TOKEN (forwarded by the launcher) is available for gh-authed https.
+    await execFileAsync("git", ["clone", "--", gitRepo, tmp], {
+      cwd: WORKSPACE_DIR,
+      env: process.env,
+      timeout: 5 * 60_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+  } catch (e: any) {
+    rmSync(tmp, { recursive: true, force: true });
+    const stderr = e?.stderr?.toString?.().trim();
+    throw new Error(`git clone failed: ${stderr || e?.message || "unknown error"}`);
+  }
+  // A concurrent create may have populated `target` while we cloned; if so,
+  // discard our copy and reuse theirs rather than fail on rename.
+  if (existsSync(target)) {
+    rmSync(tmp, { recursive: true, force: true });
+    return target;
+  }
+  renameSync(tmp, target);
+  return target;
+}
+
+/**
  * Spawn a fresh controllable session. No initial prompt; the first user turn
  * arrives via writeUserTurn().
  */
 export async function startNewConversation(opts: {
+  // Optional git URL cloned into the workspace on start; the clone becomes the
+  // session cwd. This is what the dashboard sends now (folder selection is gone).
+  gitRepo?: string | null;
+  // Explicit working directory. No longer settable from the dashboard, but kept
+  // for internal callers/tests and honored when no gitRepo is given.
   cwd?: string;
   label?: string;
   name?: string | null;
@@ -435,7 +507,13 @@ export async function startNewConversation(opts: {
   via?: "new-conversation" | "skill";
 }): Promise<{ sessionId: string; meta: ActiveSessionMeta }> {
   bootActiveSessions();
-  const cwd = opts.cwd || process.env.HOOP_RUN_CWD || homedir() || "/root";
+  // Sessions run in the sandbox workspace. When a git URL is given, clone it in
+  // (once) and use that clone as the cwd; otherwise fall back to an explicit
+  // cwd / HOOP_RUN_CWD / the shared workspace.
+  const gitRepo = opts.gitRepo?.trim() || null;
+  const cwd = gitRepo
+    ? await cloneRepoIntoWorkspace(gitRepo)
+    : opts.cwd || process.env.HOOP_RUN_CWD || WORKSPACE_DIR;
   const label = opts.label || "new conversation";
   const via = opts.via || "new-conversation";
   const runId = opts.runId ?? null;

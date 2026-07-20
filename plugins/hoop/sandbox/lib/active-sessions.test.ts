@@ -95,7 +95,10 @@ const shared = vi.hoisted(() => {
 
 vi.mock("node:child_process", () => {
   const spawn = (_cmd: string, args: string[] = []) => shared.make(args);
-  return { spawn, default: { spawn } };
+  // execFile is imported (promisified) for git-clone-on-start; no test exercises
+  // that path, so a stub is enough to satisfy the module-level promisify().
+  const execFile = () => {};
+  return { spawn, execFile, default: { spawn, execFile } };
 });
 
 async function flush() {
@@ -118,6 +121,23 @@ beforeEach(async () => {
 afterEach(() => {
   if (originalEnv === undefined) delete process.env.HOOP_CWD_ROOTS;
   else process.env.HOOP_CWD_ROOTS = originalEnv;
+});
+
+describe("repoDirNameFromUrl", () => {
+  it.each([
+    ["https://github.com/owner/repo.git", "repo"],
+    ["https://github.com/owner/repo", "repo"],
+    ["git@github.com:owner/repo.git", "repo"],
+    ["https://github.com/owner/repo/", "repo"],
+    ["ssh://git@host:22/team/My.Repo.git", "My.Repo"],
+    ["https://host/foo?ref=main#frag", "foo"],
+    ["https://host/weird name!.git", "weird-name-"],
+    // "." / ".." / all-dots must not resolve to WORKSPACE_DIR or its parent.
+    ["https://x/..", "repo"],
+    ["https://x/.", "repo"],
+  ])("%s -> %s", (url, want) => {
+    expect(mod.repoDirNameFromUrl(url)).toBe(want);
+  });
 });
 
 describe("startNewConversation", () => {

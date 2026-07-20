@@ -130,4 +130,17 @@ function _call() {
   fi
 }
 
+# `hoop sandbox add|mount|mounts|unmount` forward their args verbatim to the
+# real `claude` CLI (inside the sandbox) or to docker compose. oosh's parser
+# would strip the `--` separator that `claude mcp add … -- <cmd>` relies on and
+# warn on claude's own flags, so hand the raw args straight to the sandbox
+# module (which has its own pre-main intercept) before main() ever sees them.
+# `hoop shortlist …` / `hoop help …` keep first token = shortlist/help, so this
+# never fires for completion or help.
+if [[ "${1:-}" == "sandbox" ]]; then
+  case "${2:-}" in
+    add|mount|mounts|unmount) exec "${MODULES_DIR}/sandbox.sh" "${@:2}" ;;
+  esac
+fi
+
 main "$0" "$@"

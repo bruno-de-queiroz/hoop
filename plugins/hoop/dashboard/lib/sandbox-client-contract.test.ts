@@ -115,10 +115,10 @@ const CASES: Case[] = [
   {
     name: "startNewConversation",
     routes: { "POST /sessions": { status: 200, body: { sessionId: "s1", meta: {} } } },
-    invoke: () => client.startNewConversation({ cwd: "/work", label: "L" }),
+    invoke: () => client.startNewConversation({ gitRepo: "https://example.com/x.git", label: "L" }),
     expectMethod: "POST",
     expectPath: "/sessions",
-    expectBody: { cwd: "/work", label: "L" },
+    expectBody: { gitRepo: "https://example.com/x.git", label: "L" },
   },
   {
     name: "writeUserTurn",

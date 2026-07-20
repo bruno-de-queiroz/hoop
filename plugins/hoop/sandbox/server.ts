@@ -11,7 +11,7 @@
  * client that connects to the UDS — never expose the UDS as TCP.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, statSync, unlinkSync, chmodSync, chownSync, mkdirSync } from "node:fs";
+import { existsSync, unlinkSync, chmodSync, chownSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { URL } from "node:url";
 
@@ -108,7 +108,6 @@ import { getSessionSummary } from "./lib/session-summary";
 import { listFiles, CwdPolicyError } from "./lib/files";
 import { listEvents, getEvent } from "./lib/events-query";
 import { clampInt } from "@shared/clamp";
-import { isAllowedCwd } from "./lib/cwd-policy";
 import { backupEventsDb, checkpointDb } from "./lib/db";
 import { mutatingLimiter } from "./rate-limit";
 import { log } from "@shared/logger";
@@ -322,24 +321,21 @@ add("GET", "/sessions", (_req, res) => {
 });
 
 add("POST", "/sessions", async (req, res) => {
-  let body: { cwd?: unknown; label?: unknown; name?: unknown; model?: unknown };
+  let body: { gitRepo?: unknown; label?: unknown; name?: unknown; model?: unknown };
   try { body = await readJson(req, MAX_BYTES_DEFAULT); } catch (e: any) { return err(res, e.status ?? 400, e.message); }
 
-  const cwd = boundedString(body.cwd, 4096);
+  const gitRepo = boundedString(body.gitRepo, 2048);
   const label = boundedString(body.label, 200);
   const name = boundedString(body.name, 200);
   const model = boundedString(body.model, 128);
 
-  if (cwd) {
-    const policy = isAllowedCwd(cwd);
-    if (!policy.ok) return err(res, 400, policy.reason ?? "cwd not allowed");
-    if (!existsSync(cwd)) return err(res, 400, `cwd does not exist: ${cwd}`);
-    try {
-      if (!statSync(cwd).isDirectory()) {
-        return err(res, 400, `cwd is not a directory: ${cwd}`);
-      }
-    } catch (e: any) {
-      return err(res, 400, `cwd unreadable: ${e?.message ?? cwd}`);
+  // Optional git URL to clone into the workspace on start (cloned dir becomes
+  // the session cwd, under WORKSPACE_DIR which cwd-policy already permits).
+  // Accept only well-formed remote URLs; reject flag-like / whitespace input.
+  if (gitRepo) {
+    const ok = /^(https?|ssh|git):\/\/\S+$/.test(gitRepo) || /^[\w.-]+@[\w.-]+:\S+$/.test(gitRepo);
+    if (!ok || gitRepo.startsWith("-") || /\s/.test(gitRepo)) {
+      return err(res, 400, "gitRepo must be a valid git URL (https://, ssh://, git://, or user@host:path)");
     }
   }
 
@@ -352,7 +348,7 @@ add("POST", "/sessions", async (req, res) => {
 
   try {
     const { sessionId, meta } = await startNewConversation({
-      cwd: cwd ?? undefined,
+      gitRepo: gitRepo ?? undefined,
       label: label ?? undefined,
       name: name ?? undefined,
       model: model ?? undefined,
