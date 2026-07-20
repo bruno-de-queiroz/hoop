@@ -15,6 +15,6 @@ export const WORKSPACE_DIR = join(homedir(), "workspace");
 
 // Embedding dimension. Default matches OpenAI text-embedding-3-small.
 // If you switch to a smaller local model (e.g. Ollama nomic-embed-text = 768,
-// bge-small = 384), set EMBED_DIM in dashboard.env and re-run setup so the
+// bge-small = 384), set EMBED_DIM in hoop.env and re-run setup so the
 // vec0 virtual table is recreated with the right dim.
 export const EMBED_DIM = parseInt(process.env.EMBED_DIM ?? "1536", 10) || 1536;

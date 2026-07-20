@@ -6,7 +6,7 @@ let _warned = false;
 let _consentWarned = false;
 
 /**
- * Semantic search is opt-in. Configure via ~/.claude/hoop/dashboard.env:
+ * Semantic search is opt-in. Configure via ~/.claude/hoop/hoop.env:
  *   - EMBEDDING_BASE_URL=<local OpenAI-compatible endpoint> (recommended)
  *   - OPENAI_API_KEY=<key> with no EMBEDDING_BASE_URL (hosted; ships data to
  *     a third party; requires HOOP_EMBED_HOSTED_CONSENT=yes).

@@ -1,6 +1,6 @@
 /**
  * Node-only instrumentation. Loaded by Next at boot under the nodejs runtime.
- * Loads ~/.claude/hoop/dashboard.env (key=value lines), then primes the
+ * Loads ~/.claude/hoop/hoop.env (key=value lines), then primes the
  * sandbox client (opens its long-lived SSE channel to /events/stream) and
  * registers a SIGTERM/SIGINT drainer that closes the client cleanly.
  */
@@ -12,7 +12,7 @@ import { log } from "@shared/logger";
 import { registerShutdown } from "@shared/shutdown";
 
 try {
-  const envFile = join(homedir(), ".claude", "hoop", "dashboard.env");
+  const envFile = join(homedir(), ".claude", "hoop", "hoop.env");
   if (existsSync(envFile)) {
     const text = readFileSync(envFile, "utf-8");
     for (const line of text.split("\n")) {
@@ -26,7 +26,7 @@ try {
     }
   }
 } catch (err) {
-  log.warn("instrumentation", "could not load dashboard.env", { err });
+  log.warn("instrumentation", "could not load hoop.env", { err });
 }
 
 client.boot();

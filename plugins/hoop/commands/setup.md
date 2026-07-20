@@ -44,7 +44,9 @@ if [ -z "$PLUGIN_ROOT" ] || [ ! -f "$PLUGIN_ROOT/.claude-plugin/plugin.json" ]; 
 fi
 TEMPLATES="$PLUGIN_ROOT/templates"
 CATALOG="$PLUGIN_ROOT/catalog"
-LAUNCHER="$PLUGIN_ROOT/dashboard/bin/hoop-dashboard"
+# The hoop CLI, shipped inside the plugin. It self-resolves its own location, so
+# no env setup is needed.
+HOOP_CLI="$PLUGIN_ROOT/cli/hoop.sh"
 
 # Sandbox profile paths (host side). The sandbox container bind-mounts this
 # directory as /home/agent, so writes here are visible inside the sandbox.
@@ -55,7 +57,8 @@ mkdir -p "$SANDBOX_STATE"
 # Launcher overrides file (semantic-search backend + gh account). The launcher
 # sources this at start and forwards the values into the sandbox via compose.
 # Holds secrets → 0600, never logged. set_env_kv upserts a KEY=VALUE line.
-HOOP_ENV_FILE="$HOME/.claude/hoop/dashboard.env"
+# Named hoop.env because its values are almost all sandbox-facing.
+HOOP_ENV_FILE="$HOME/.claude/hoop/hoop.env"
 set_env_kv() {
   local key="$1" val="$2"
   mkdir -p "$(dirname "$HOOP_ENV_FILE")"; touch "$HOOP_ENV_FILE"; chmod 600 "$HOOP_ENV_FILE"
@@ -92,13 +95,13 @@ fi
 # command before running it, per the wizard's rules.
 if ! sandbox_running; then
   echo "hoop sandbox isn't running — starting it (first run builds the image, ~2-3 min)…"
-  echo "+ $LAUNCHER start"
-  "$LAUNCHER" start || { echo "Failed to start the hoop sandbox — fix the error above and re-run /hoop:setup."; exit 1; }
+  echo "+ $HOOP_CLI start"
+  "$HOOP_CLI" start || { echo "Failed to start the hoop sandbox — fix the error above and re-run /hoop:setup."; exit 1; }
 fi
-# Re-verify: the launcher waits on the health endpoint, but confirm the
-# container itself is really up before we start docker-exec'ing into it.
+# Re-verify: start waits on the health endpoint, but confirm the container
+# itself is really up before we start docker-exec'ing into it.
 if ! sandbox_running; then
-  echo "hoop sandbox still isn't running after start. Inspect: $LAUNCHER logs"
+  echo "hoop sandbox still isn't running after start. Inspect: $HOOP_CLI logs"
   exit 1
 fi
 ```
@@ -309,7 +312,7 @@ the launcher forwards from a chosen host `gh` account. So the wizard does NOT ru
 1. Ensure the user is logged in on the host (`gh auth status`; if not, print `gh auth login` and wait — host browser OAuth).
 2. List host accounts (`gh auth status` shows them) and `AskUserQuestion` header "GitHub account" to pick which one the sandbox agent should act as (e.g. a work vs personal account). Single-select from the logged-in accounts.
 3. Persist the choice: `set_env_kv HOOP_GH_ACCOUNT "<username>"`. The launcher resolves `gh auth token --user <username>` at start and forwards it as `GH_TOKEN`. Do NOT write the raw token to the env file or the log.
-4. On the next `hoop-dashboard restart` (Step 12) the sandbox agent can run `gh` authenticated as that account. Verify post-restart with `sandbox_claude` is N/A — instead `docker exec "$SANDBOX_CTR" gh auth status`.
+4. On the next `/hoop:dashboard restart` (Step 12) the sandbox agent can run `gh` authenticated as that account. Verify post-restart with `sandbox_claude` is N/A — instead `docker exec "$SANDBOX_CTR" gh auth status`.
 
 Detect-and-skip: `docker exec "$SANDBOX_CTR" sh -c 'command -v gh'` confirms the binary; `grep -q HOOP_GH_ACCOUNT "$HOOP_ENV_FILE"` confirms an account is already wired.
 
@@ -578,7 +581,7 @@ Audit trail: ~/.claude/hoop/sandbox/profile/.claude/hoop/install-log.md
               (also viewable from the dashboard)
 
 Restart the sandbox so newly-added MCPs are picked up:
-  ~/.claude/hoop/dashboard/bin/hoop-dashboard restart
+  /hoop:dashboard restart   (or: hoop sandbox restart)
 ```
 
 Then ask: "Launch the hoop dashboard now? It gives you a local web UI with sessions, skills, sub-agents, and event search."

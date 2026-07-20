@@ -42,7 +42,7 @@ Each step writes a line to `~/.claude/hoop/install-log.md` so re-runs are idempo
 
 ## Dashboard
 
-`/hoop:dashboard` (or `start | stop | restart | status | logs`) runs the dashboard **inside a container**. Your host only needs Docker Desktop — no Node, no `npm install`, no Next.js build pollution.
+`/hoop:dashboard` (or `start | stop | restart | rebuild | status | logs`) runs the dashboard **inside a container**. Your host only needs Docker Desktop — no Node, no `npm install`, no Next.js build pollution. Each verb takes an optional service target (`all` (default) · `sandbox` · `dashboard`); `start` builds lazily (only when an image is missing) while `rebuild` always rebuilds.
 
 Pairing (inviting a teammate to co-drive a session) also needs **`cloudflared`** on the host — it exposes the local dashboard over a public tunnel. Install with `brew install cloudflared` (macOS) or from the [Cloudflare downloads page](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/). The dashboard runs fine without it; only share links require it.
 
@@ -58,29 +58,34 @@ The dashboard is single-user and localhost-only by design; access is gated by a 
 
 ## CLI (`hoop`)
 
-`cli/` ships a small [oosh](https://github.com/bruno-de-queiroz/oosh)-based CLI that wraps the runtime. It's vendored in-repo (framework engine + entry point + completions) so it needs no external install and resolves the repo paths on its own.
+`plugins/hoop/cli/` ships a small [oosh](https://github.com/bruno-de-queiroz/oosh)-based CLI that wraps the runtime. It lives **inside the plugin** (framework engine + entry point + completions + the stack engine in `lib/stack.sh`) so it ships with the plugin and the slash commands (`/hoop:setup`, `/hoop:dashboard`) can invoke it directly. It needs no external install and resolves its own paths.
 
 ```bash
-./cli/hoop.sh install     # symlink `hoop` onto PATH + shell completion (bash/zsh)
+./plugins/hoop/cli/hoop.sh install     # symlink `hoop` onto PATH + shell completion (bash/zsh)
 # or run in place without installing:
-./cli/hoop.sh <module> <command>
+./plugins/hoop/cli/hoop.sh <module> <command>
 ```
 
-Three modules:
+Two levels: **top-level verbs** act on the whole stack; **modules** scope a single service. All of them drive one engine (`cli/lib/stack.sh`) — the single source of truth for host-side preflight (Claude profile, credential reconcile, plugin wiring, auth tokens, embedding env) and compose orchestration. `start`/`rebuild` are deliberately split — `start` only builds an image when it's missing (fast otherwise), while `rebuild` always rebuilds so you pick up code changes.
+
+| Command | What it does |
+|---|---|
+| `hoop start` · `stop` · `restart` · `rebuild` · `status` · `logs` | Whole stack (`agent-sandbox` + `dashboard`) via the engine (`up -d` / `down` / `build + up -d --force-recreate` for the project). `rebuild` takes `-n\|--no-cache`. |
 
 | Module | Commands | What it does |
 |---|---|---|
-| `dashboard` | `start` · `stop` · `restart` · `status` · `logs` | Thin wrapper over `plugins/hoop/dashboard/bin/hoop-dashboard` — the full two-service runtime (`dashboard` + `agent-sandbox`). |
-| `sandbox` | `start` · `stop` · `restart` · `rebuild` | Lifecycle of just the `agent-sandbox` service via the repo's `docker-compose.yml`. `rebuild` rebuilds the image and recreates the container (`-n\|--no-cache` to skip the layer cache). |
+| `dashboard` | `start` · `stop` · `restart` · `rebuild` · `status` · `logs` | Controls **only the `dashboard` UI container** (`--no-deps`, leaves `agent-sandbox` alone). `rebuild` takes `-n\|--no-cache`. |
+| `sandbox` | `start` · `stop` · `restart` · `rebuild` · `update` | Controls **only the `agent-sandbox` container**. Lifecycle verbs run the shared engine scoped to the sandbox (so credential reconcile + plugin wiring + forwarded env still happen); `rebuild` recreates the container (`-n\|--no-cache` to skip the layer cache); `update` pins the baked-in `claude-code` version (`-c\|--claude-version`). |
 | `open` | *(default)* | Runs a **fresh, telemetry-isolated sandbox** over the current directory: mounts `$PWD` read-write into the agent workspace and launches `claude` interactively (`docker run --rm -it`, real tty for the TUI). Forces `HOOP_DISABLE_TELEMETRY=1` (add `-T\|--telemetry` to allow bundled-tool telemetry) and strips the dashboard-only hooks + the hoop plugin from an overlay `settings.json`, while keeping credentials, setup MCPs, skills, and other plugins. Extra args pass straight through, e.g. `hoop open --model opus` or `hoop open "fix the failing test"`. |
 
 ```bash
-hoop dashboard start          # bring up the dashboard at http://localhost:7842/
-hoop sandbox rebuild          # rebuild + recreate the agent-sandbox container
+hoop start                    # bring up the whole stack at http://localhost:7842/
+hoop dashboard rebuild        # rebuild + recreate ONLY the dashboard container
+hoop sandbox rebuild          # rebuild + recreate ONLY the agent-sandbox container
 hoop open                     # interactive claude in a sandbox over $PWD
 ```
 
-`hoop open` uses the `hoop-sandbox` image (build it once with `hoop sandbox rebuild`) and mounts the sandbox Claude profile (`~/.claude/hoop/sandbox/profile`, `-p\|--profile` to override) so `claude` is already authenticated — run `hoop dashboard start` once to seed those credentials from your host. Unlike the dashboard's `agent-sandbox`, `open` runs with telemetry blackholed and without hoop's dashboard hooks/plugin (which need the dashboard's socket), so it's a clean, isolated interactive session that still has your setup MCPs and skills. `hoop install` / `hoop uninstall` manage the PATH symlink and shell wiring; the repo itself is never modified.
+`hoop open` uses the `hoop-sandbox` image (build it once with `hoop sandbox rebuild`) and mounts the sandbox Claude profile (`~/.claude/hoop/sandbox/profile`, `-p\|--profile` to override) so `claude` is already authenticated — run `hoop start` once to seed those credentials from your host. Unlike the dashboard's `agent-sandbox`, `open` runs with telemetry blackholed and without hoop's dashboard hooks/plugin (which need the dashboard's socket), so it's a clean, isolated interactive session that still has your setup MCPs and skills. `hoop install` / `hoop uninstall` manage the PATH symlink and shell wiring; the repo itself is never modified.
 
 ## Pairing & plan review
 
@@ -131,7 +136,7 @@ This is the "sandboxed agent" model: the OS-process boundary is the security bou
   install-log.md       append-only audit trail of every setup run
   events.jsonl         audit log of every event + fallback if the dashboard is down
   events.db            SQLite (FTS5 + sqlite-vec) consumed by the dashboard
-  dashboard.env        opt-in: OPENAI_API_KEY / EMBEDDING_BASE_URL overrides
+  hoop.env             opt-in: OPENAI_API_KEY / EMBEDDING_BASE_URL overrides (sandbox-facing)
 ```
 
 The plugin does **not** edit your `~/.claude/CLAUDE.md` or `~/.claude/settings.json`.
@@ -154,15 +159,15 @@ hoop/
     dashboard/                           untrusted view (no claude, no credentials)
       Dockerfile                         dashboard image (Next.js standalone; no claude, no compilers)
       docker-compose.yml                 agent-sandbox + dashboard services (embeddings via external Ollama/DMR/OpenAI)
-      bin/hoop-dashboard                 thin compose wrapper
       app/api/*                          proxy routes → sandbox over the socket
       lib/sandbox-client/                HTTP-over-UDS client; lib/auth*, lib/peer-*  (auth + pairing)
     shared/                              logger, clamp, shutdown (used by both images)
     templates/install-log.md.tmpl
-  cli/                                   oosh-based `hoop` CLI (vendored)
-    oo.sh                                oosh framework engine
-    hoop.sh                              entry point (+ hoop.comp.sh / hoop.zcomp.sh)
-    modules/                             dashboard, sandbox, open, install, uninstall
+    cli/                                 oosh-based `hoop` CLI (ships inside the plugin)
+      oo.sh                              oosh framework engine
+      hoop.sh                            entry point (+ hoop.comp.sh / hoop.zcomp.sh)
+      lib/stack.sh                       the two-service runtime engine (preflight + compose)
+      modules/                           dashboard, sandbox, open, install, uninstall
   README.md
   LICENSE
 ```

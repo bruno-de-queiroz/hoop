@@ -64,8 +64,10 @@ function cli() {
   ln -sf "${HOOP_OUT_DIR}/hoop.sh" "$binDir/hoop"
   ln -sf "${HOOP_OUT_DIR}/hoop.comp.sh" "$compDir/hoop"
 
+  # NB: we intentionally do NOT export HOOP_DIR — hoop.sh always self-resolves
+  # its own location, and a stale exported HOOP_DIR (e.g. after the CLI moves)
+  # only causes confusion. HOOP_PATH is still needed by the completion script.
   for i in ${PROFILES[@]}; do
-    _write_to_profile $i "export HOOP_DIR=${HOOP_OUT_DIR}"
     _write_to_profile $i "export HOOP_PATH=$binDir"
     if [[ "$i" == *".zshrc" ]]; then
       _write_to_profile $i "autoload -Uz compinit && compinit"

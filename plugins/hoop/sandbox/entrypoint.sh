@@ -5,7 +5,7 @@
 # state, then drops to the non-root `agent` user (uid 1100) via gosu before
 # exec-ing the server process.
 #
-# Mount layout (set up on the host by bin/hoop-dashboard):
+# Mount layout (set up on the host by the hoop CLI engine, cli/lib/stack.sh):
 #   /home/agent/                       ← bind-mount source = $HOME/.claude/hoop/sandbox/profile
 #     .claude.json                     ← claude top-level config
 #     .claude/
@@ -71,7 +71,7 @@ chmod 0770 "$RUN_DIR"
 # canonical paths.
 export HOME="$HOME_DIR"
 
-# --- Telemetry isolation (opt-in, configured via /hoop:setup → dashboard.env) ---
+# --- Telemetry isolation (opt-in, configured via /hoop:setup → hoop.env) ---
 #
 # One master switch, off by default so the shipped image and the open-source
 # repo carry no org-specific config or surprising outbound suppression:

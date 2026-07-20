@@ -10,7 +10,8 @@ name: hoop
 # The two services share a named volume that holds /var/run/hoop/
 # (the socket and the dashboard-readable sandbox.token).
 #
-# Launcher: plugins/hoop/dashboard/bin/hoop-dashboard.
+# Driven by the hoop CLI engine: plugins/hoop/cli/lib/stack.sh
+# (via `hoop start` / `hoop dashboard start` / `hoop sandbox start`).
 
 services:
   agent-sandbox:
@@ -46,8 +47,13 @@ services:
 
     environment:
       HOOP_PLUGIN_ROOT: /opt/hoop
-      EMBED_DIM: "768"
-      # Telemetry isolation (opt-in, configured by /hoop:setup → dashboard.env,
+      # Embedding vector width for the sqlite-vec table. Default 768 matches the
+      # recommended local model (nomic-embed-text). Overridable via hoop.env
+      # (forwarded by the launcher) when using a model of a different dim, e.g.
+      # 1536 for OpenAI text-embedding-3-small — re-run /hoop:setup after changing
+      # so the vec0 table is recreated with the new dim.
+      EMBED_DIM: ${EMBED_DIM:-768}
+      # Telemetry isolation (opt-in, configured by /hoop:setup → hoop.env,
       # forwarded by the launcher). Empty by default so this OPEN-SOURCE repo
       # carries no org-specific endpoints or surprising outbound suppression.
       #   HOOP_DISABLE_TELEMETRY=1 → master switch. The entrypoint (a) exports the
@@ -63,7 +69,7 @@ services:
       HOOP_DISABLE_TELEMETRY: ${HOOP_DISABLE_TELEMETRY:-}
       HOOP_OTEL_COLLECTOR_URL: ${HOOP_OTEL_COLLECTOR_URL:-}
       # Semantic-search embedding backend. Forwarded by the launcher from either
-      # Docker Model Runner auto-detection or ~/.claude/hoop/dashboard.env
+      # Docker Model Runner auto-detection or ~/.claude/hoop/hoop.env
       # (OPENAI_API_KEY / EMBEDDING_BASE_URL / EMBEDDING_MODEL), configured by
       # /hoop:setup. Absent → BM25-only search.
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
@@ -119,7 +125,7 @@ services:
       HOOP_SANDBOX_SOCKET: /var/run/hoop/sandbox.sock
       HOOP_SANDBOX_TOKEN_FILE: /var/run/hoop/sandbox.token
       HOOP_DASHBOARD_TOKEN_FILE: /var/lib/hoop/dashboard/dashboard.token
-      # Forwarded by bin/hoop-dashboard from ~/.local/share/hoop/dashboard.token.
+      # Forwarded by the hoop CLI engine (cli/lib/stack.sh) from ~/.local/share/hoop/dashboard.token.
       # The middleware (edge runtime) only reads this env; no file IO in the
       # request hot path.
       HOOP_DASHBOARD_TOKEN: ${HOOP_DASHBOARD_TOKEN:-}

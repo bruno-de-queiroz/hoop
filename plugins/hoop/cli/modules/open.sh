@@ -123,7 +123,7 @@ function _launch() {
   mkdir -p "${OPEN_PROFILE}/.claude"
   if [[ ! -s "${OPEN_PROFILE}/.claude/.credentials.json" ]]; then
     _error "no claude credentials in ${OPEN_PROFILE} — claude may prompt for login."
-    _error "run 'hoop dashboard start' once to seed them from your host, or 'claude login' inside the sandbox."
+    _error "run 'hoop start' (or 'hoop sandbox start') once to seed them from your host, or 'claude login' inside the sandbox."
   fi
 
   local workspace="/home/agent/workspace"

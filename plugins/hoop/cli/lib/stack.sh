@@ -1,0 +1,417 @@
+#!/usr/bin/env bash
+# stack.sh — the hoop two-service runtime engine, as a sourced library.
+#
+# Owns everything the old `hoop-dashboard`/`hoop-stack` launcher did: host-side
+# preflight (Claude profile, credential reconcile, plugin wiring, auth tokens,
+# embedding env) and the docker-compose orchestration for both `agent-sandbox`
+# and `dashboard`. It is sourced by the oosh CLI modules (stack/dashboard/
+# sandbox) and by the top-level `hoop` verbs — the single source of truth.
+#
+# Contract for sourcing: this file has NO top-level side effects. It only
+# assigns HS_* variables and defines functions, so it is safe to source during
+# tab-completion or `help`. All docker/host checks happen inside the functions.
+#
+# Public API (all take an optional service: all|sandbox|dashboard, default all):
+#   hoop_stack_start <svc>    up -d (builds only a missing image)
+#   hoop_stack_stop <svc>     down (all) / stop (single)
+#   hoop_stack_restart <svc>  stop + start
+#   hoop_stack_rebuild <svc>  build + up -d --force-recreate  (HOOP_BUILD_NO_CACHE=1 busts cache)
+#   hoop_stack_status         is the dashboard up?
+#   hoop_stack_logs <svc>     follow logs
+
+# --- Paths (resolved from this file's location: <plugin>/cli/lib/stack.sh) ---
+HS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HS_PLUGIN_ROOT="$(cd "${HS_LIB_DIR}/../.." && pwd)"
+
+HS_PORT="${HOOP_PORT:-7842}"
+# Layout on host (mirrors what the sandbox container sees at /home/agent/):
+#   $HS_SANDBOX_PROFILE/
+#     .claude.json    ← claude top-level config (oauthAccount, mcpServers, projects)
+#     .claude/        ← .credentials.json, plugins/, sessions/, projects/, hoop/, …
+# compose binds $HS_SANDBOX_PROFILE to /home/agent so both land where claude expects.
+HS_SANDBOX_PROFILE_ROOT="$HOME/.claude/hoop/sandbox"
+HS_SANDBOX_PROFILE="$HS_SANDBOX_PROFILE_ROOT/profile"
+HS_SANDBOX_CLAUDE_DIR="$HS_SANDBOX_PROFILE/.claude"
+HS_DASHBOARD_TOKEN_FILE="$HOME/.local/share/hoop/dashboard.token"
+HS_PEER_SECRET_FILE="$HOME/.local/share/hoop/peer-signing.secret"
+# Opt-in overrides written by /hoop:setup (embedding backend + gh account).
+# Sourced at start and forwarded into the sandbox via compose. Named hoop.env
+# because its values are almost all sandbox-facing.
+HS_ENV_FILE="$HOME/.claude/hoop/hoop.env"
+
+HS_COMPOSE_FILE="${HS_PLUGIN_ROOT}/dashboard/docker-compose.yml"
+HS_COMPOSE=(docker compose -f "$HS_COMPOSE_FILE")
+HS_SVC_SANDBOX="agent-sandbox"
+HS_SVC_DASHBOARD="dashboard"
+
+# compose interpolates ${HOOP_PLUGIN_ROOT} (read-only plugin mount) and
+# ${HOOP_PORT}; export them so `docker compose` sees them.
+export HOOP_PLUGIN_ROOT="$HS_PLUGIN_ROOT"
+export HOOP_PORT="$HS_PORT"
+
+# --- Host guards -------------------------------------------------------------
+
+_hs_in_container() {
+  [ -f /.dockerenv ] || grep -qi docker /proc/1/cgroup 2>/dev/null
+}
+
+# Refuse to drive compose from inside a container, and require docker. Callers
+# do `_hs_require_host || return $?`.
+_hs_require_host() {
+  if _hs_in_container; then
+    echo "hoop: refusing to control the stack from inside a container — run on your host shell." >&2
+    return 2
+  fi
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "hoop: docker not found on host." >&2
+    return 1
+  fi
+}
+
+# Host-side prerequisite tools shared by build/up paths. jq for every JSON
+# read/write; awk for the macOS Keychain dump parse.
+_hs_preflight_common() {
+  local dep
+  for dep in jq awk curl docker; do
+    if ! command -v "$dep" >/dev/null 2>&1; then
+      echo "hoop: \`$dep\` is required but not on PATH." >&2
+      case "$dep" in
+        jq)     echo "  Install: brew install jq" >&2 ;;
+        docker) echo "  Install Docker Desktop or your distro's docker package." >&2 ;;
+      esac
+      return 1
+    fi
+  done
+}
+
+# --- Service resolution ------------------------------------------------------
+
+# Single source of truth for the cache-bust switch: translate a truthy value
+# into the HOOP_BUILD_NO_CACHE env the rebuild path reads. Callers (the module
+# `-n|--no-cache` flags and the top-level arg scan) funnel through here so the
+# env var name lives in exactly one place.
+hoop_stack_nocache() {
+  [[ "${1:-}" == true ]] && export HOOP_BUILD_NO_CACHE=1
+  return 0
+}
+
+# Map a user-facing service token to the internal target keyword. Defaults to
+# `all`. Prints the normalized target; returns 2 on an unknown value.
+hoop_stack_resolve_service() {
+  case "${1:-all}" in
+    all|both|"")            echo all ;;
+    sandbox|agent-sandbox)  echo sandbox ;;
+    dashboard|dash|ui)      echo dashboard ;;
+    *) echo "hoop: unknown service '$1' (use: all | sandbox | dashboard)" >&2; return 2 ;;
+  esac
+}
+
+# --- Sandbox-facing preflight ------------------------------------------------
+
+# Reconcile the sandbox's .claudeAiOauth with the host, delegating drift rules
+# to the shared lib so the launcher and the SessionStart/Stop hook can't
+# diverge. See hooks/scripts/creds-lib.sh for the full rules.
+_hs_reconcile_credentials() {
+  local FILE="$1"
+  # shellcheck source=../../hooks/scripts/creds-lib.sh
+  . "$HS_PLUGIN_ROOT/hooks/scripts/creds-lib.sh"
+
+  local HOST RESULT
+  HOST=$(hoop_creds_host_blob)
+  if [ -z "$HOST" ]; then
+    # No host credentials at all. Only worth a hint on a genuine first install.
+    if [ ! -f "$FILE" ]; then
+      echo "hoop: no host Claude credentials found (macOS Keychain 'Claude Code-credentials' or ~/.claude/.credentials.json)." >&2
+      echo "  Run \`claude login\` on this host first, then re-run." >&2
+    fi
+    return 0
+  fi
+
+  RESULT=$(hoop_creds_reconcile "$FILE" "$HOST")
+  case "$RESULT" in
+    reseeded:first)      echo "seeded sandbox credentials from host" ;;
+    reseeded:host-newer) echo "sandbox credentials: refreshed .claudeAiOauth from host (host token newer)" ;;
+    reseeded:added)      echo "sandbox credentials: added .claudeAiOauth from host" ;;
+    skip:sandbox-newer)  echo "sandbox credentials: sandbox token newer than host — left as-is" ;;
+    insync|no-host|*)    : ;;  # silent on the common no-op paths
+  esac
+}
+
+# Synthesize a minimal profile .claude.json with oauthAccount + userID from the
+# host's ~/.claude.json so the sandbox claude has an identity on first run.
+_hs_seed_claude_json() {
+  local OUT="$HS_SANDBOX_PROFILE/.claude.json"
+  local SRC="$HOME/.claude.json"
+  if [ ! -f "$SRC" ] || ! command -v jq >/dev/null 2>&1; then
+    echo "{}" > "$OUT"
+    chmod 0600 "$OUT"
+    return 0
+  fi
+  jq '{
+    oauthAccount, userID, anonymousId,
+    firstStartTime, hasCompletedOnboarding,
+    numStartups, migrationVersion, installMethod
+  } | with_entries(select(.value != null))' "$SRC" > "$OUT" \
+    || { echo "hoop: failed to read $SRC as JSON" >&2; return 1; }
+  if ! jq -e 'has("oauthAccount")' "$OUT" >/dev/null; then
+    echo "WARNING: oauthAccount missing from $SRC — sandbox claude may prompt for login." >&2
+  fi
+  chmod 0600 "$OUT"
+  echo "seeded $OUT from host ~/.claude.json"
+}
+
+# Register + enable the hoop plugin in the sandbox profile so its hooks load
+# when claude subprocesses spawn, and seed the SANDBOX-ONLY hook wiring.
+_hs_ensure_plugin_enabled() {
+  local installed="$HS_SANDBOX_CLAUDE_DIR/plugins/installed_plugins.json"
+  local settings="$HS_SANDBOX_CLAUDE_DIR/settings.json"
+  local KEY="hoop@workspace"
+  local INSTALL_PATH="/opt/hoop"
+  local tmp
+  mkdir -p "$(dirname "$installed")"
+
+  tmp="$(mktemp)"
+  if [ -f "$installed" ]; then
+    jq --arg key "$KEY" --arg path "$INSTALL_PATH" '
+      .version = (.version // 2)
+      | .plugins //= {}
+      | .plugins[$key] //= [{ scope: "user", installPath: $path, version: "0.1.0" }]
+    ' "$installed" > "$tmp" && mv "$tmp" "$installed" || { rm -f "$tmp"; return 1; }
+  else
+    jq -n --arg key "$KEY" --arg path "$INSTALL_PATH" '
+      { version: 2, plugins: { ($key): [{ scope: "user", installPath: $path, version: "0.1.0" }] } }
+    ' > "$installed"
+  fi
+
+  tmp="$(mktemp)"
+  if [ -f "$settings" ]; then
+    jq --arg key "$KEY" '
+      .enabledPlugins //= {}
+      | .enabledPlugins[$key] = true
+    ' "$settings" > "$tmp" && mv "$tmp" "$settings" || { rm -f "$tmp"; return 1; }
+  else
+    jq -n --arg key "$KEY" '{ enabledPlugins: { ($key): true } }' > "$settings"
+  fi
+
+  # settings.json:hooks — SANDBOX-ONLY wiring (permission gate + emitters).
+  # Declared here, not in the plugin manifest, so the host never runs them.
+  tmp="$(mktemp)"
+  jq '.hooks = {
+    "PreToolUse": [ { "hooks": [
+      { "type":"command", "command":"/opt/hoop/hooks/scripts/permission-gate.sh", "timeout":130 },
+      { "type":"command", "command":"/opt/hoop/hooks/scripts/emit-event.sh PreToolUse", "timeout":5 }
+    ] } ],
+    "PostToolUse": [ { "hooks": [ { "type":"command", "command":"/opt/hoop/hooks/scripts/emit-event.sh PostToolUse", "timeout":5 } ] } ],
+    "SessionStart": [ { "hooks": [ { "type":"command", "command":"/opt/hoop/hooks/scripts/emit-event.sh SessionStart", "timeout":5 } ] } ],
+    "Stop": [ { "hooks": [ { "type":"command", "command":"/opt/hoop/hooks/scripts/emit-event.sh Stop", "timeout":5 } ] } ],
+    "UserPromptSubmit": [ { "hooks": [ { "type":"command", "command":"/opt/hoop/hooks/scripts/emit-event.sh UserPromptSubmit", "timeout":5 } ] } ]
+  }' "$settings" > "$tmp" && mv "$tmp" "$settings" || { rm -f "$tmp"; return 1; }
+}
+
+# Move files from the pre-restructure flat layout into profile/ + .claude/.
+_hs_migrate_legacy_profile() {
+  if [ -f "$HS_SANDBOX_PROFILE/.claude.json" ] || [ -f "$HS_SANDBOX_CLAUDE_DIR/.credentials.json" ]; then
+    return 0
+  fi
+  local legacy_creds="$HS_SANDBOX_PROFILE_ROOT/.credentials.json"
+  local legacy_config="$HS_SANDBOX_PROFILE_ROOT/.claude.json"
+  local legacy_agentic="$HS_SANDBOX_PROFILE_ROOT/hoop"
+  if [ ! -e "$legacy_creds" ] && [ ! -e "$legacy_config" ] && [ ! -e "$legacy_agentic" ]; then
+    return 0
+  fi
+  echo "migrating legacy sandbox profile layout -> $HS_SANDBOX_PROFILE/"
+  [ -f "$legacy_creds" ]  && mv "$legacy_creds"  "$HS_SANDBOX_CLAUDE_DIR/.credentials.json"
+  [ -f "$legacy_config" ] && mv "$legacy_config" "$HS_SANDBOX_PROFILE/.claude.json"
+  if [ -d "$legacy_agentic" ]; then
+    mv "$legacy_agentic" "$HS_SANDBOX_CLAUDE_DIR/hoop"
+  fi
+}
+
+_hs_load_env_file() {
+  # Source the opt-in overrides /hoop:setup writes (OPENAI_API_KEY,
+  # EMBEDDING_BASE_URL / EMBEDDING_MODEL, EMBED_DIM, GH account). `set -a`
+  # exports every assignment so compose's ${VAR:-} interpolation picks them up.
+  [ -f "$HS_ENV_FILE" ] || return 0
+  echo "loading overrides from $HS_ENV_FILE"
+  set -a; . "$HS_ENV_FILE"; set +a
+  if [ -n "${HOOP_GH_ACCOUNT:-}" ] && command -v gh >/dev/null 2>&1; then
+    GH_TOKEN="$(gh auth token --user "$HOOP_GH_ACCOUNT" 2>/dev/null || true)"
+    export GH_TOKEN
+  fi
+}
+
+_hs_detect_dmr() {
+  # Sets EMBEDDING_BASE_URL / EMBEDDING_MODEL if Docker Model Runner is up.
+  # An explicit endpoint from the env file wins — don't clobber it.
+  if [ -n "${EMBEDDING_BASE_URL:-}" ] || [ -n "${OPENAI_API_KEY:-}" ]; then
+    echo "embedding backend configured via $HS_ENV_FILE -> semantic search enabled"
+    return 0
+  fi
+  local dmr_url="http://localhost:12434/engines/llama.cpp/v1"
+  if curl -fsS --connect-timeout 1 "$dmr_url/models" >/dev/null 2>&1; then
+    export EMBEDDING_BASE_URL="http://host.docker.internal:12434/engines/llama.cpp/v1"
+    export EMBEDDING_MODEL="${EMBEDDING_MODEL:-ai/nomic-embed-text-v1.5}"
+    echo "DMR detected at localhost:12434 -> semantic search enabled"
+  else
+    echo "No embedding backend -> BM25-only search."
+    echo "  Enable semantic search via /hoop:setup — portable option is Ollama:"
+    echo "    ollama pull nomic-embed-text  (then set EMBEDDING_BASE_URL/MODEL in $HS_ENV_FILE)"
+    echo "  or Docker Model Runner on :12434 (Docker Desktop 4.42+, or 'docker model' on Docker CE)."
+  fi
+}
+
+# Sandbox-facing setup: profile, credentials, plugin wiring, forwarded env.
+_hs_preflight_sandbox() {
+  mkdir -p "$HS_SANDBOX_CLAUDE_DIR"
+  chmod 0700 "$HS_SANDBOX_PROFILE" "$HS_SANDBOX_CLAUDE_DIR" 2>/dev/null || true
+  _hs_migrate_legacy_profile
+  _hs_reconcile_credentials "$HS_SANDBOX_CLAUDE_DIR/.credentials.json"
+  if [ ! -s "$HS_SANDBOX_PROFILE/.claude.json" ] || [ "$(cat "$HS_SANDBOX_PROFILE/.claude.json")" = "{}" ]; then
+    _hs_seed_claude_json
+  fi
+  _hs_ensure_plugin_enabled
+  _hs_load_env_file
+  _hs_detect_dmr
+}
+
+# Dashboard-facing setup: the two secrets the UI container reads from its env.
+_hs_preflight_dashboard() {
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    echo "hoop: \`cloudflared\` not found — pairing/share links won't work until it's installed." >&2
+    echo "  Install: brew install cloudflared (macOS) · https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/ (other)" >&2
+  fi
+
+  mkdir -p "$(dirname "$HS_DASHBOARD_TOKEN_FILE")"
+  if [ ! -s "$HS_DASHBOARD_TOKEN_FILE" ]; then
+    if command -v openssl >/dev/null 2>&1; then
+      openssl rand -hex 32 > "$HS_DASHBOARD_TOKEN_FILE"
+    else
+      head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$HS_DASHBOARD_TOKEN_FILE"
+    fi
+    chmod 0600 "$HS_DASHBOARD_TOKEN_FILE"
+  fi
+  export HOOP_DASHBOARD_TOKEN="$(cat "$HS_DASHBOARD_TOKEN_FILE")"
+
+  if [ ! -s "$HS_PEER_SECRET_FILE" ]; then
+    if command -v openssl >/dev/null 2>&1; then
+      openssl rand -hex 32 > "$HS_PEER_SECRET_FILE"
+    else
+      head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$HS_PEER_SECRET_FILE"
+    fi
+    chmod 0600 "$HS_PEER_SECRET_FILE"
+  fi
+  export HOOP_PEER_SIGNING_SECRET="$(cat "$HS_PEER_SECRET_FILE")"
+}
+
+# Poll the dashboard's health endpoint.
+_hs_wait_for_dashboard() {
+  echo "waiting for http://localhost:$HS_PORT/api/health ..."
+  local _
+  for _ in $(seq 1 60); do
+    if curl -fsS "http://localhost:$HS_PORT/api/health" >/dev/null 2>&1; then
+      echo "ready at http://localhost:$HS_PORT/"
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "WARNING: dashboard didn't respond within ~30s. Recent logs:"
+  "${HS_COMPOSE[@]}" logs --tail 40 "$HS_SVC_DASHBOARD"
+  return 1
+}
+
+# --- Public API --------------------------------------------------------------
+
+hoop_stack_status() {
+  "${HS_COMPOSE[@]}" ps --status running --quiet "$HS_SVC_DASHBOARD" 2>/dev/null | grep -q . \
+    && echo "running on http://localhost:$HS_PORT/" \
+    || { echo "not running"; return 1; }
+}
+
+hoop_stack_logs() {
+  _hs_require_host || return $?
+  local svc; svc=$(hoop_stack_resolve_service "${1:-all}") || return $?
+  case "$svc" in
+    all)       exec "${HS_COMPOSE[@]}" logs -f ;;
+    sandbox)   exec "${HS_COMPOSE[@]}" logs -f "$HS_SVC_SANDBOX" ;;
+    dashboard) exec "${HS_COMPOSE[@]}" logs -f "$HS_SVC_DASHBOARD" ;;
+  esac
+}
+
+hoop_stack_stop() {
+  _hs_require_host || return $?
+  local svc; svc=$(hoop_stack_resolve_service "${1:-all}") || return $?
+  case "$svc" in
+    # `all` tears the whole project down (containers + network); a single
+    # service just stops that container so the other keeps running.
+    all)       "${HS_COMPOSE[@]}" down --remove-orphans ;;
+    sandbox)   "${HS_COMPOSE[@]}" stop "$HS_SVC_SANDBOX" ;;
+    dashboard) "${HS_COMPOSE[@]}" stop "$HS_SVC_DASHBOARD" ;;
+  esac
+}
+
+# Bring services up WITHOUT forcing a rebuild. `docker compose up` still builds
+# a MISSING image (first launch), so this "just works" cold while staying fast
+# on later starts. Use hoop_stack_rebuild to pick up code changes.
+hoop_stack_start() {
+  _hs_require_host || return $?
+  _hs_preflight_common || return 1
+  local svc; svc=$(hoop_stack_resolve_service "${1:-all}") || return $?
+  case "$svc" in
+    sandbox)
+      _hs_preflight_sandbox
+      echo "hoop: starting agent-sandbox (builds only if image missing)..."
+      "${HS_COMPOSE[@]}" up -d --no-deps "$HS_SVC_SANDBOX" || { echo "compose up failed"; return 1; }
+      ;;
+    dashboard)
+      _hs_preflight_dashboard
+      echo "hoop: starting dashboard (builds only if image missing)..."
+      "${HS_COMPOSE[@]}" up -d --no-deps "$HS_SVC_DASHBOARD" || { echo "compose up failed"; return 1; }
+      _hs_wait_for_dashboard
+      ;;
+    all)
+      _hs_preflight_sandbox
+      _hs_preflight_dashboard
+      echo "hoop: starting dashboard + agent-sandbox (builds only if images missing)..."
+      "${HS_COMPOSE[@]}" up -d || { echo "compose up failed"; return 1; }
+      _hs_wait_for_dashboard
+      ;;
+  esac
+}
+
+# Rebuild image(s) and recreate the container(s). HOOP_BUILD_NO_CACHE=1 busts
+# the layer cache. The "pick up my code / deps changes" path.
+hoop_stack_rebuild() {
+  _hs_require_host || return $?
+  _hs_preflight_common || return 1
+  local svc; svc=$(hoop_stack_resolve_service "${1:-all}") || return $?
+  local build_args=(); [ -n "${HOOP_BUILD_NO_CACHE:-}" ] && build_args=(--no-cache)
+  case "$svc" in
+    sandbox)
+      _hs_preflight_sandbox
+      echo "hoop: rebuilding agent-sandbox image..."
+      "${HS_COMPOSE[@]}" build "${build_args[@]}" "$HS_SVC_SANDBOX" || { echo "build failed"; return 1; }
+      "${HS_COMPOSE[@]}" up -d --no-deps --force-recreate "$HS_SVC_SANDBOX" || { echo "compose up failed"; return 1; }
+      ;;
+    dashboard)
+      _hs_preflight_dashboard
+      echo "hoop: rebuilding dashboard image..."
+      "${HS_COMPOSE[@]}" build "${build_args[@]}" "$HS_SVC_DASHBOARD" || { echo "build failed"; return 1; }
+      "${HS_COMPOSE[@]}" up -d --no-deps --force-recreate "$HS_SVC_DASHBOARD" || { echo "compose up failed"; return 1; }
+      _hs_wait_for_dashboard
+      ;;
+    all)
+      _hs_preflight_sandbox
+      _hs_preflight_dashboard
+      echo "hoop: rebuilding dashboard + agent-sandbox images..."
+      "${HS_COMPOSE[@]}" build "${build_args[@]}" || { echo "build failed"; return 1; }
+      "${HS_COMPOSE[@]}" up -d --force-recreate || { echo "compose up failed"; return 1; }
+      _hs_wait_for_dashboard
+      ;;
+  esac
+}
+
+# Restart = stop + start for the target.
+hoop_stack_restart() {
+  local svc; svc=$(hoop_stack_resolve_service "${1:-all}") || return $?
+  hoop_stack_stop "$svc" && hoop_stack_start "$svc"
+}

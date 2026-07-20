@@ -5,7 +5,7 @@
 #
 # Sourced by:
 #   - hooks/scripts/refresh-sandbox-creds.sh   (host Stop / SessionStart hook)
-#   - dashboard/bin/hoop-dashboard             (launcher preflight)
+#   - cli/lib/stack.sh                         (hoop CLI host-side preflight)
 #
 # THE FILE IS A MULTI-TOKEN DOCUMENT
 # ---------------------------------
