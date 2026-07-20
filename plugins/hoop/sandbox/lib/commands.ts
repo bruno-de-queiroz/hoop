@@ -1,8 +1,8 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { listSkills, skillsBus } from "./skills";
 import { parseFrontmatter } from "./frontmatter";
+import { readInstalledPluginEntries } from "./plugin-paths";
 
 export interface SlashCommand {
   name: string;        // e.g. "hoop:setup" or "model" (built-in)
@@ -68,32 +68,23 @@ export function listSlashCommands(cwd?: string | null): SlashCommand[] {
 function computeSlashCommands(cwd?: string | null): SlashCommand[] {
   const out: SlashCommand[] = [];
 
-  // Plugin commands
-  const cacheRoot = join(homedir(), ".claude", "plugins", "cache");
-  if (existsSync(cacheRoot)) {
-    for (const marketplace of safeReaddir(cacheRoot)) {
-      const mDir = join(cacheRoot, marketplace);
-      if (!isDir(mDir)) continue;
-      for (const pluginName of safeReaddir(mDir)) {
-        const pDir = join(mDir, pluginName);
-        if (!isDir(pDir)) continue;
-        for (const version of safeReaddir(pDir)) {
-          const cmdDir = join(pDir, version, "commands");
-          if (!isDir(cmdDir)) continue;
-          for (const file of safeReaddir(cmdDir)) {
-            if (!file.endsWith(".md")) continue;
-            const base = file.slice(0, -3);
-            const full = join(cmdDir, file);
-            const fm = parseFrontmatter(full);
-            out.push({
-              name: `${pluginName}:${base}`,
-              description: (fm.description as string) ?? null,
-              plugin: `${pluginName}@${marketplace}`,
-              kind: "command",
-            });
-          }
-        }
-      }
+  // Plugin commands. Iterate the INSTALLED plugin entries (one active version
+  // each) rather than readdir-ing every version dir under the cache — the cache
+  // retains orphaned older versions after an update, and walking them all
+  // double-lists a plugin's commands (the claude-mem duplication).
+  for (const { key, name: pluginName, installPath } of readInstalledPluginEntries()) {
+    const cmdDir = join(installPath, "commands");
+    if (!isDir(cmdDir)) continue;
+    for (const file of safeReaddir(cmdDir)) {
+      if (!file.endsWith(".md")) continue;
+      const base = file.slice(0, -3);
+      const fm = parseFrontmatter(join(cmdDir, file));
+      out.push({
+        name: `${pluginName}:${base}`,
+        description: (fm.description as string) ?? null,
+        plugin: key,
+        kind: "command",
+      });
     }
   }
 
@@ -138,7 +129,16 @@ function computeSlashCommands(cwd?: string | null): SlashCommand[] {
     });
   }
 
-  return out.sort((a, b) => a.name.localeCompare(b.name));
+  // Defensive dedupe by kind+name (a skill and a command can legitimately share
+  // a name, so kind is part of the key). The installed-version pinning above
+  // already removes cross-version dupes; this guards any residual collision.
+  const seen = new Set<string>();
+  return out
+    .filter((c) => {
+      const k = `${c.kind}\u0000${c.name}`;
+      return seen.has(k) ? false : (seen.add(k), true);
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function safeReaddir(p: string): string[] {

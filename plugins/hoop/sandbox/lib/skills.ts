@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, watch, type FSWatcher } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, statSync, watch, type FSWatcher } from "node:fs";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { CLAUDE_SKILLS_DIR, WORKSPACE_DIR } from "./paths";
 import { parseFrontmatter } from "./frontmatter";
+import { readInstalledPluginEntries } from "./plugin-paths";
 
 export interface Skill {
   name: string;
@@ -43,26 +43,16 @@ function collectSkillsFromDir(dir: string, source: "user" | "plugin", plugin?: s
 }
 
 function collectPluginSkills(): Skill[] {
-  // Plugins live under ~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/skills/<skill>/SKILL.md
-  const cacheRoot = join(homedir(), ".claude", "plugins", "cache");
-  if (!existsSync(cacheRoot)) return [];
+  // Skills live under <installPath>/skills/<skill>/SKILL.md. Iterate the
+  // INSTALLED plugin entries (one active version each) rather than readdir-ing
+  // the cache tree: the cache can hold orphaned older versions after an update,
+  // and walking every version dir double-lists a plugin's skills (the claude-mem
+  // duplication). installed_plugins.json is exactly what claude loads.
   const out: Skill[] = [];
-  for (const marketplace of readdirSync(cacheRoot)) {
-    const mDir = join(cacheRoot, marketplace);
-    try {
-      if (!statSync(mDir).isDirectory()) continue;
-    } catch { continue; }
-    for (const pluginName of readdirSync(mDir)) {
-      const pDir = join(mDir, pluginName);
-      try {
-        if (!statSync(pDir).isDirectory()) continue;
-      } catch { continue; }
-      for (const version of readdirSync(pDir)) {
-        const skillsDir = join(pDir, version, "skills");
-        if (!existsSync(skillsDir)) continue;
-        out.push(...collectSkillsFromDir(skillsDir, "plugin", `${pluginName}@${marketplace}`));
-      }
-    }
+  for (const { key, installPath } of readInstalledPluginEntries()) {
+    const skillsDir = join(installPath, "skills");
+    if (!existsSync(skillsDir)) continue;
+    out.push(...collectSkillsFromDir(skillsDir, "plugin", key));
   }
   return out;
 }
@@ -132,8 +122,15 @@ function computeSkills(cwd?: string | null): Skill[] {
   const projectNames = new Set(project.map((p) => p.name));
   const filteredUserAfterProject = filteredUser.filter((u) => !projectNames.has(u.name));
 
+  // Final dedupe by the invocation name, keeping the first occurrence (user →
+  // project → plugin precedence above). collectPluginSkills already pins one
+  // version per plugin, so this is a safety net against any residual collision
+  // rather than the primary fix — but it guarantees the dashboard never shows
+  // the same `/name` twice.
+  const seen = new Set<string>();
   return [...filteredUserAfterProject, ...project, ...pluginNamespaced]
     .map(({ baseName, ...rest }: any) => rest as Skill)
+    .filter((s) => (seen.has(s.name) ? false : (seen.add(s.name), true)))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
