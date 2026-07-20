@@ -29,8 +29,10 @@ export function ShellCenterPane() {
 
   // Peer "Leave session": relinquish access. The route emits the leave marker,
   // drops presence, and clears the peer cookie — so returning needs a fresh
-  // admit. Navigate away (replace, so Back can't re-open the now-cookieless
-  // session). Host has no leave (they delete instead), so only wire it for peers.
+  // admit. Navigate to the terminal /left closing view (replace, so Back can't
+  // re-open the now-cookieless session). NOT `/` — with the peer cookie gone
+  // that renders the HOST new-session onboarding. Host has no leave (they
+  // delete instead), so this is only wired for peers.
   const onLeave = useCallback(async () => {
     try {
       await fetch("/api/share/leave", {
@@ -39,7 +41,7 @@ export function ShellCenterPane() {
         body: JSON.stringify({ name: myDisplayName() }),
       });
     } catch { /* leave anyway — the cookie clear is best-effort UX */ }
-    window.location.replace("/");
+    window.location.replace("/left");
   }, []);
 
   // Gate on selection ONLY (matching the legacy panel). A freshly-created
