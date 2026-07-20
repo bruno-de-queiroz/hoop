@@ -63,10 +63,19 @@ emit_deny() {
     no-dashboard) printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"permission gate unreachable; dashboard offline"}}' ;;
     timeout)      printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"no response from dashboard within timeout"}}' ;;
     user)         printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"denied by user via dashboard"}}' ;;
+    policy)       printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"blocked by hoop policy: browser_run_code_unsafe (arbitrary-code browser tool) is permanently disabled"}}' ;;
     *)            printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"denied"}}' ;;
   esac
   exit 0
 }
+
+# Hard-deny list: tools that are NEVER allowed — not even via a dashboard
+# approval. @playwright/mcp ships `browser_run_code_unsafe` (arbitrary JS in the
+# Playwright process, RCE-equivalent) as a non-removable "core" capability, and
+# under `--permission-mode bypassPermissions` claude's own permissions.deny is
+# inert — so THIS gate is the only reliable place to block it on the dashboard.
+# (The settings.json deny still covers `hoop open`, which uses normal perms.)
+HARD_DENY='^mcp__playwright__browser_run_code_unsafe$'
 
 # 1. Read hook context. Extract the tool_name.
 PAYLOAD=$(cat 2>/dev/null)
@@ -74,6 +83,11 @@ if [ -z "$PAYLOAD" ]; then
   emit_deny no-dashboard
 fi
 TOOL_NAME=$(printf '%s' "$PAYLOAD" | grep -o '"tool_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+
+# 1a. Hard-deny: never routed to the dashboard, never approvable.
+if printf '%s' "$TOOL_NAME" | grep -qE "$HARD_DENY"; then
+  emit_deny policy
+fi
 
 # 2. Fast-path: read-only tools allow without a round trip. Everything else
 #    (Bash, ExitPlanMode, writes, AskUserQuestion, MCP, …) routes to the sandbox,
