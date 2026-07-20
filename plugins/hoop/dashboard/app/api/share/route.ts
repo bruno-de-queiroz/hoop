@@ -1,16 +1,17 @@
 import { client } from "@/lib/sandbox-client";
 import { parseJsonBody, errorResponse } from "@/lib/api-helpers";
-import { isHost } from "@/lib/peer-auth";
+import { canAdmitPeers, canAccessSession, forwardedParticipant } from "@/lib/peer-auth";
 import { signPeerToken, peerSigningSecret } from "@/lib/peer-token";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** List active shares (host only). */
+/** List active shares. Host sees all; a full-capability peer sees only their own
+ * session's (so they can manage/revoke co-guests). The sandbox scopes + re-checks. */
 export async function GET(req: Request) {
-  if (!isHost(req)) return errorResponse("forbidden", 403);
+  if (!canAdmitPeers(req)) return errorResponse("forbidden", 403);
   try {
-    const result = await client.listShares();
+    const result = await client.listShares(forwardedParticipant(req));
     return Response.json(result);
   } catch (e) {
     const status = (e as { status?: number })?.status ?? 500;
@@ -28,13 +29,14 @@ interface CreateBody {
 }
 
 /**
- * Create a share grant (host only) and return a redeemable link. The sandbox
- * stores the grant; we sign the stateless peer token here (the dashboard holds
- * the signing secret) and embed it in the link FRAGMENT so it never reaches a
- * server log or Referer.
+ * Create a share grant and return a redeemable link. Host mints for any session;
+ * a full-capability peer mints only for the session they're in (the sandbox
+ * re-checks capability + scope). The sandbox stores the grant; we sign the
+ * stateless peer token here (the dashboard holds the signing secret) and embed it
+ * in the link FRAGMENT so it never reaches a server log or Referer.
  */
 export async function POST(req: Request) {
-  if (!isHost(req)) return errorResponse("forbidden", 403);
+  if (!canAdmitPeers(req)) return errorResponse("forbidden", 403);
 
   const secret = peerSigningSecret();
   if (!secret) {
@@ -48,6 +50,8 @@ export async function POST(req: Request) {
   if (error) return error;
   if (!body.sessionId) return errorResponse("missing required field: sessionId", 400);
   if (!body.publicBaseUrl) return errorResponse("missing required field: publicBaseUrl", 400);
+  // A peer may only mint for their OWN session (first-line gate; sandbox re-checks).
+  if (!canAccessSession(req, body.sessionId)) return errorResponse("forbidden", 403);
 
   let base: URL;
   try {
@@ -66,7 +70,7 @@ export async function POST(req: Request) {
       capability: body.capability ?? "full",
       expiresInMs: body.expiresInMs ?? null,
       peerName: body.peerName ?? null,
-    });
+    }, forwardedParticipant(req));
 
     const peerToken = await signPeerToken(
       {

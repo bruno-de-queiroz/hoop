@@ -4,6 +4,7 @@ import { Copy, Loader2, Power, Radio, Trash2, UserCheck } from "lucide-react";
 import type { ShareRecord } from "@/lib/sandbox-types";
 import { Button, StatusDot } from "../../ui";
 import { cn } from "../../ui/cn";
+import { countryLabel } from "../../lib/format";
 
 // Settings → Sharing (Phase 3). Full parity with the legacy SharingPanel —
 // tunnel lifecycle, pending-join admit/deny, per-share revoke, and the
@@ -22,10 +23,19 @@ interface PendingJoin {
   shareId: string;
   sessionId: string;
   peerName: string | null;
+  peerIp?: string | null;
+  peerCountry?: string | null;
   createdAt: number;
 }
 
-export function SettingsSharing() {
+/**
+ * Settings → Sharing. In `peerMode` (a full-capability peer) this renders only
+ * what a co-driver may do — admit/deny pending joins and revoke co-guests in
+ * their own session — and hides host-only surfaces (tunnel lifecycle, link
+ * creation, and the revoke-all/close-tunnel kill switch). The sandbox scopes the
+ * peer's share list + enforces capability, so this is presentation, not the gate.
+ */
+export function SettingsSharing({ peerMode = false }: { peerMode?: boolean }) {
   const [tunnel, setTunnel] = useState<TunnelStatus>({ status: "stopped", url: null, error: null });
   const [shares, setShares] = useState<ShareRecord[]>([]);
   const [joins, setJoins] = useState<PendingJoin[]>([]);
@@ -35,8 +45,9 @@ export function SettingsSharing() {
 
   const refresh = useCallback(async () => {
     try {
+      // A peer can't read the host-only tunnel status; skip that fetch entirely.
       const [t, s, j] = await Promise.all([
-        fetch("/api/tunnel").then((r) => (r.ok ? r.json() : null)),
+        peerMode ? Promise.resolve(null) : fetch("/api/tunnel").then((r) => (r.ok ? r.json() : null)),
         fetch("/api/share").then((r) => (r.ok ? r.json() : null)),
         fetch("/api/share/pending-joins").then((r) => (r.ok ? r.json() : null)),
       ]);
@@ -46,7 +57,7 @@ export function SettingsSharing() {
     } catch {
       /* non-fatal — next poll retries */
     }
-  }, []);
+  }, [peerMode]);
 
   useEffect(() => {
     void refresh();
@@ -132,7 +143,7 @@ export function SettingsSharing() {
   return (
     <section>
       <div className="section-title mb-2 flex items-center gap-2">
-        <Radio className="w-3.5 h-3.5" /> Sharing
+        <Radio className="w-3.5 h-3.5" /> {peerMode ? "Session peers" : "Sharing"}
         {shares.length > 0 && (
           <span className="ml-1 rounded-[6px] bg-elevated px-1.5 py-0.5 font-mono text-[10px] text-ink-faint">
             {shares.length}
@@ -153,6 +164,12 @@ export function SettingsSharing() {
                 <span className="text-ink-soft">{j.peerName ?? "someone"}</span>
                 <span className="text-ink-faint">wants to join</span>
               </div>
+              {j.peerIp && (
+                <div className="mt-1 font-mono text-[10.5px] text-ink-faint">
+                  from {j.peerIp}
+                  {countryLabel(j.peerCountry) ? ` (${countryLabel(j.peerCountry)})` : ""}
+                </div>
+              )}
               <div className="mt-2 flex justify-end gap-2">
                 <Button
                   variant="ghost"
@@ -178,7 +195,16 @@ export function SettingsSharing() {
         </div>
       )}
 
-      {/* Tunnel status card — the mockup's resting treatment. */}
+      {/* Peer mode: no tunnel to show. When there's nothing pending and no
+        * co-guests, say so instead of rendering an empty section. */}
+      {peerMode && joins.length === 0 && shares.length === 0 && (
+        <div className="rounded-control bg-sunken border border-divider px-4 py-3 text-[11px] text-ink-faint">
+          No other peers in this session yet.
+        </div>
+      )}
+
+      {/* Tunnel status card — host only (the mockup's resting treatment). */}
+      {!peerMode && (
       <div className="rounded-control bg-sunken border border-divider px-4 py-3 flex items-center gap-3">
         <StatusDot state={dotState} className="shrink-0" />
         <div className="flex-1 min-w-0">
@@ -216,6 +242,7 @@ export function SettingsSharing() {
           </Button>
         )}
       </div>
+      )}
 
       {/* Active shares */}
       {shares.length > 0 && (
@@ -243,8 +270,8 @@ export function SettingsSharing() {
         </ul>
       )}
 
-      {/* Kill switch */}
-      {(running || shares.length > 0) && (
+      {/* Kill switch — host only (revokes ALL shares + closes the tunnel). */}
+      {!peerMode && (running || shares.length > 0) && (
         <button
           type="button"
           onClick={stopSharing}

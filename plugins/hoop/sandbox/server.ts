@@ -87,6 +87,7 @@ import { validateImageBase64 } from "./lib/image-guard";
 import {
   createJoinTicket,
   joinStatus,
+  getJoinTicket,
   admitJoin,
   denyJoin,
   claimJoin,
@@ -228,8 +229,8 @@ const PARTICIPANT_HEADER = "x-hoop-participant";
 function checkParticipant(
   req: IncomingMessage,
   requestedSessionId: string,
-  action: "turn" | "bash" | "permission",
-): { ok: true; author: string | null; isPeer: boolean; shareId: string | null; capability: ShareCapability | null } | { ok: false; status: number; reason: string } {
+  action: "turn" | "bash" | "permission" | "admit",
+): { ok: true; author: string; isPeer: boolean; shareId: string | null; capability: ShareCapability | null } | { ok: false; status: number; reason: string } {
   const raw = getHeader(req, PARTICIPANT_HEADER);
   if (!raw || raw === "host") return { ok: true, author: "host", isPeer: false, shareId: null, capability: null };
   if (raw.startsWith("peer:")) {
@@ -1074,9 +1075,11 @@ add("GET", "/identity", (_req, res) => json(res, 200, getIdentity()));
 
 // ── Session sharing (peer co-drive) ─────────────────────────────────────────
 // The sandbox owns share grants (durable + authoritative). The dashboard
-// proxies these host-only routes; peer requests never reach them (peers can't
-// mint or revoke shares). Capability is re-validated sandbox-side on the
-// message/bash/permission routes so a compromised dashboard can't forge it.
+// proxies these routes; create/list/revoke are gated per-request via
+// checkParticipant — host manages any session, a full-capability peer manages
+// only their own (mint/list/revoke co-guest links), drive/spectate cannot. The
+// gate is re-checked HERE (not just in the dashboard) so a compromised or buggy
+// dashboard can't forge a peer past capability + session scope.
 const VALID_CAPABILITIES = new Set<ShareCapability>(["full", "drive", "spectate"]);
 
 add("POST", "/shares", async (req, res) => {
@@ -1094,6 +1097,14 @@ add("POST", "/shares", async (req, res) => {
   if (typeof body.publicHost !== "string" || body.publicHost.trim().length === 0) {
     return err(res, 400, "missing required field: publicHost");
   }
+  // Host mints for any session; a full-capability peer may mint links only for
+  // the session they're in (same "admit"/manage gate). drive/spectate and
+  // out-of-scope peers are rejected HERE — the authoritative check — so a
+  // compromised dashboard can't forge a peer into minting. Checked before the
+  // session-existence probe so a non-scoped peer can't enumerate sessions.
+  const guard = checkParticipant(req, body.sessionId, "admit");
+  if (!guard.ok) return err(res, guard.status, guard.reason);
+
   // The session must exist (and be controllable) to be shareable.
   const meta = getActiveSession(body.sessionId);
   if (!meta) return err(res, 404, "unknown session");
@@ -1130,7 +1141,16 @@ add("POST", "/shares", async (req, res) => {
   json(res, 200, record);
 });
 
-add("POST", "/shares/:id/revoke", (_req, res, params) => {
+add("POST", "/shares/:id/revoke", (req, res, params) => {
+  // Host may revoke any share; a full peer may revoke shares only within the
+  // session they're in (same "admit" capability gate). Resolve the TARGET
+  // share's session first, then scope the caller against it — so a full peer can
+  // eject another guest from their own session but never touch another session's
+  // shares. drive/spectate and out-of-scope peers are rejected here.
+  const target = getShare(params.id);
+  if (!target) return err(res, 404, "unknown share");
+  const guard = checkParticipant(req, target.sessionId, "admit");
+  if (!guard.ok) return err(res, guard.status, guard.reason);
   const result = revokeShare(params.id);
   if (!result.ok) return err(res, 404, "unknown share");
   dropJoinsForShare(params.id); // kill any pending/admitted joins on this share
@@ -1147,7 +1167,25 @@ add("POST", "/shares/revoke-all", (_req, res) => {
   json(res, 200, { ok: true, revoked: revoked.length });
 });
 
-add("GET", "/shares", (_req, res) => json(res, 200, { shares: listShares() }));
+add("GET", "/shares", (req, res) => {
+  // Host sees every share; a full peer sees only their own session's shares (so
+  // they can manage/revoke co-guests). drive/spectate get nothing to act on.
+  const all = listShares();
+  const raw = getHeader(req, PARTICIPANT_HEADER);
+  if (!raw || raw === "host") return json(res, 200, { shares: all });
+  if (!raw.startsWith("peer:")) return err(res, 403, "invalid participant");
+  const shareId = raw.slice("peer:".length);
+  const v = validateShareById(shareId, {});
+  if (!v.ok || !v.record) return err(res, 403, "share revoked or expired");
+  if (!capabilityAllows(v.record.capability, "admit")) {
+    return err(res, 403, "your share can view the session but can't manage peers");
+  }
+  const peerCanonical = getActiveSession(v.record.sessionId)?.sessionId ?? v.record.sessionId;
+  const scoped = all.filter(
+    (s) => (getActiveSession(s.sessionId)?.sessionId ?? s.sessionId) === peerCanonical,
+  );
+  json(res, 200, { shares: scoped });
+});
 
 // Redemption lookup: the dashboard's /api/share/redeem calls this to confirm a
 // share exists for (shareId, host) before setting the peer cookie. Returns only
@@ -1179,7 +1217,7 @@ add("GET", "/shares/:id", (_req, res, params, url) => {
 /** Redemption creates a pending join ticket. Session + peerName are taken from
  * the sandbox's own share record (not trusted from the caller). */
 add("POST", "/join-request", async (req, res) => {
-  let body: { shareId?: unknown; name?: unknown };
+  let body: { shareId?: unknown; name?: unknown; peerIp?: unknown; peerCountry?: unknown };
   try { body = await readJson(req, MAX_BYTES_DEFAULT); } catch (e: any) { return err(res, e.status ?? 400, e.message); }
   if (typeof body.shareId !== "string" || body.shareId.length === 0) {
     return err(res, 400, "missing required field: shareId");
@@ -1193,10 +1231,25 @@ add("POST", "/join-request", async (req, res) => {
   const chosen = typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 80) : null;
   const peerName = chosen ?? share.peerName;
   if (chosen) setSharePeerName(share.shareId, chosen);
+  // Best-effort joiner IP for the admit prompt (info only). The dashboard reads
+  // it from the tunnel edge and pre-sanitizes; re-validate the shape here since
+  // this is the trust boundary — reject anything that isn't a bare IP literal.
+  const peerIp =
+    typeof body.peerIp === "string" && body.peerIp.length <= 45 && /^[0-9a-f:.]+$/.test(body.peerIp)
+      ? body.peerIp
+      : null;
+  // Two-letter country code (or "T1" for Tor); re-validated at this trust
+  // boundary before it can reach the host's admit prompt.
+  const peerCountry =
+    typeof body.peerCountry === "string" && /^[A-Z0-9]{2}$/.test(body.peerCountry)
+      ? body.peerCountry
+      : null;
   const { ticketId, secret } = createJoinTicket({
     shareId: share.shareId,
     sessionId: share.sessionId,
     peerName,
+    peerIp,
+    peerCountry,
   });
   // A share that was already claimed once and is being redeemed again is a
   // RETURN (the peer closed the tab / left, then reopened the link) — surface
@@ -1226,6 +1279,16 @@ add("POST", "/join-admit", async (req, res) => {
   let body: { ticketId?: unknown };
   try { body = await readJson(req, MAX_BYTES_DEFAULT); } catch (e: any) { return err(res, e.status ?? 400, e.message); }
   if (typeof body.ticketId !== "string") return err(res, 400, "missing required field: ticketId");
+  // Authoritative admit gate (independent of the dashboard's own check): the
+  // host may admit any join; a peer may admit only into the session they're in
+  // and only with a "full" share. We scope against the TICKET's session (peek
+  // it without consuming), so a full peer can bring another guest into their
+  // own session but never touch a join for a different one. drive/spectate and
+  // out-of-scope peers are rejected here even if the dashboard route regresses.
+  const pending = getJoinTicket(body.ticketId);
+  if (!pending) return err(res, 404, "unknown or already-resolved join");
+  const guard = checkParticipant(req, pending.sessionId, "admit");
+  if (!guard.ok) return err(res, guard.status, guard.reason);
   const r = admitJoin(body.ticketId);
   if (!r.ok) return err(res, 404, "unknown or already-resolved join");
   // "rejoined" iff this share was already claimed once before (flag set at
@@ -1240,7 +1303,10 @@ add("POST", "/join-admit", async (req, res) => {
       // toast refetches on any `PeerJoin*` event to clear the resolved ticket,
       // and the transcript renders it via the default divider — so only the
       // human-facing `message` changes for a rejoin.
-      ctx: { session_id: r.ticket!.sessionId, peer_name: r.ticket!.peerName, ticket_id: body.ticketId, decision: "admit", rejoin: returning, message: `${r.ticket!.peerName ?? "A guest"} ${returning ? "rejoined" : "joined"}` },
+      // decided_by records WHO admitted (the host, or a full-capability peer's
+      // name) — so a peer-driven admission is attributable, not silently
+      // credited to the host. guard.author is "host" for the host.
+      ctx: { session_id: r.ticket!.sessionId, peer_name: r.ticket!.peerName, ticket_id: body.ticketId, decision: "admit", decided_by: guard.author ?? "host", rejoin: returning, message: `${r.ticket!.peerName ?? "A guest"} ${returning ? "rejoined" : "joined"}` },
     }));
   } catch { /* non-fatal */ }
   json(res, 200, { ok: true });
@@ -1250,6 +1316,12 @@ add("POST", "/join-deny", async (req, res) => {
   let body: { ticketId?: unknown };
   try { body = await readJson(req, MAX_BYTES_DEFAULT); } catch (e: any) { return err(res, e.status ?? 400, e.message); }
   if (typeof body.ticketId !== "string") return err(res, 400, "missing required field: ticketId");
+  // Same gate as admit: host anywhere, or a "full" peer within their own
+  // session. Scope against the ticket's session before it's consumed.
+  const pending = getJoinTicket(body.ticketId);
+  if (!pending) return err(res, 404, "unknown or already-resolved join");
+  const guard = checkParticipant(req, pending.sessionId, "admit");
+  if (!guard.ok) return err(res, guard.status, guard.reason);
   const r = denyJoin(body.ticketId);
   if (!r.ok) return err(res, 404, "unknown or already-resolved join");
   // Deny is treated as hostile: revoke the whole share and drop its tickets.
@@ -1261,7 +1333,7 @@ add("POST", "/join-deny", async (req, res) => {
     ingestEventLine(JSON.stringify({
       ts: new Date().toISOString(),
       hook: "PeerJoinResolved",
-      ctx: { ticket_id: body.ticketId, decision: "deny", peer_name: r.peerName ?? null, message: `${r.peerName ?? "A guest"}'s join was declined` },
+      ctx: { ticket_id: body.ticketId, decision: "deny", decided_by: guard.author ?? "host", peer_name: r.peerName ?? null, message: `${r.peerName ?? "A guest"}'s join was declined` },
     }));
   } catch { /* non-fatal */ }
   json(res, 200, { ok: true });
@@ -1286,19 +1358,26 @@ add("POST", "/join-claim", async (req, res) => {
 /**
  * Record that a peer LEFT a shared session. Symmetric with the join markers:
  * emits a `PeerLeft` divider into the transcript (audit + live host notice).
- * Called by the dashboard — either from an explicit "Leave session" click or
- * from the presence layer (tab close / silent drop), which is the only place
- * that knows a peer is gone (leave has no sandbox-side state). Session + name
- * are cosmetic label data; nothing is gated on them, so trusting the dashboard
- * here is fine (it already authenticated the peer).
+ *
+ * A `PeerLeft` has exactly ONE source: the explicit "Leave session" action in
+ * the dashboard (there is no inactivity watchdog — a backgrounded/gone peer just
+ * dims and silently drops from the roster). The peer is identified by `shareId`
+ * (the trusted, dashboard-authenticated identity); the display name is sourced
+ * from the authoritative share record so the marker always shows the peer's real
+ * name (not a stale/default heartbeat label), falling back to the forwarded name.
  */
 add("POST", "/peer-leave", async (req, res) => {
-  let body: { sessionId?: unknown; name?: unknown };
+  let body: { sessionId?: unknown; name?: unknown; shareId?: unknown };
   try { body = await readJson(req, MAX_BYTES_DEFAULT); } catch (e: any) { return err(res, e.status ?? 400, e.message); }
   if (typeof body.sessionId !== "string" || body.sessionId.length === 0) {
     return err(res, 400, "missing required field: sessionId");
   }
-  const name = typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 80) : null;
+  const forwardedName = typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 80) : null;
+  const shareId = typeof body.shareId === "string" && body.shareId ? body.shareId : null;
+
+  // Prefer the authoritative share name; fall back to whatever the dashboard
+  // forwarded (the share may already be gone, e.g. explicit leave revoked it).
+  const name = (shareId ? getShare(shareId)?.peerName ?? null : null) ?? forwardedName;
   try {
     ingestEventLine(JSON.stringify({
       ts: new Date().toISOString(),
@@ -1311,7 +1390,31 @@ add("POST", "/peer-leave", async (req, res) => {
   json(res, 200, { ok: true });
 });
 
-add("GET", "/pending-joins", (_req, res) => json(res, 200, { joins: listPendingJoins() }));
+add("GET", "/pending-joins", (req, res) => {
+  // Each pending join carries its share capability so the admission UI can show
+  // it without a second host-only /shares call (which a full peer can't make).
+  const withCap = listPendingJoins().map((j) => ({
+    ...j,
+    capability: getShare(j.shareId)?.capability ?? null,
+  }));
+  const raw = getHeader(req, PARTICIPANT_HEADER);
+  // Host (or an internal, header-less call) sees every pending join.
+  if (!raw || raw === "host") return json(res, 200, { joins: withCap });
+  if (!raw.startsWith("peer:")) return err(res, 403, "invalid participant");
+  // A peer may see pending joins only for the session they're in, and only with
+  // a "full" share (drive/spectate can't admit, so they get nothing to act on).
+  const shareId = raw.slice("peer:".length);
+  const v = validateShareById(shareId, {});
+  if (!v.ok || !v.record) return err(res, 403, "share revoked or expired");
+  if (!capabilityAllows(v.record.capability, "admit")) {
+    return err(res, 403, "your share can view the session but can't admit peers");
+  }
+  const peerCanonical = getActiveSession(v.record.sessionId)?.sessionId ?? v.record.sessionId;
+  const scoped = withCap.filter(
+    (j) => (getActiveSession(j.sessionId)?.sessionId ?? j.sessionId) === peerCanonical,
+  );
+  json(res, 200, { joins: scoped });
+});
 
 add("GET", "/agents", (_req, res, _params, url) => {
   const limit = clampInt(url.searchParams.get("limit"), { min: 1, max: 500, fallback: 50 });

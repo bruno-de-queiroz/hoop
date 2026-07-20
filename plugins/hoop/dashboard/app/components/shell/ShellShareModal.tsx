@@ -8,9 +8,14 @@ import { Modal } from "../ui/Overlay";
 import { cn } from "../ui/cn";
 
 // Shell-native port of the legacy ShareDialog (per-session peer sharing).
-// Behaviour is unchanged — server-managed cloudflared tunnel, mint/list/revoke
-// share links, QR to scan — but rendered on the Modal primitive with design
-// tokens instead of the raw neutral-* dialog. Host-only (gated by the caller).
+// Server-managed cloudflared tunnel, mint/list/revoke share links, QR to scan —
+// rendered on the Modal primitive with design tokens.
+//
+// `peerMode`: a full-capability peer (co-host) may mint/list/revoke links for the
+// session they're in, but CANNOT start/stop the tunnel (host-only). A peer is
+// already connected THROUGH the tunnel, so window.location.origin IS the public
+// base URL — no need to read the host-only /api/tunnel. The routes + sandbox
+// re-check capability and session scope; this flag only shapes the UI.
 
 interface CreateResult {
   shareId: string;
@@ -46,10 +51,12 @@ export function ShellShareModal({
   open,
   sessionId,
   onClose,
+  peerMode = false,
 }: {
   open: boolean;
   sessionId: string;
   onClose: () => void;
+  peerMode?: boolean;
 }) {
   const [tunnel, setTunnel] = useState<TunnelStatus>({ status: "stopped", url: null, error: null });
   const [startingTunnel, setStartingTunnel] = useState(false);
@@ -83,12 +90,21 @@ export function ShellShareModal({
     }
   }, []);
 
-  // Load tunnel + shares whenever the modal opens.
+  // Load shares whenever the modal opens; a peer can't read the host-only tunnel
+  // status (and doesn't need it — its own origin is the public base URL).
   useEffect(() => {
     if (!open) return;
     void refreshShares();
-    void refreshTunnel();
-  }, [open, refreshShares, refreshTunnel]);
+    if (!peerMode) void refreshTunnel();
+  }, [open, peerMode, refreshShares, refreshTunnel]);
+
+  // In peerMode the public base URL is the origin the peer is already using
+  // (they reached this dashboard through the host's tunnel); otherwise it's the
+  // host's live tunnel URL.
+  const publicBaseUrl = peerMode
+    ? (typeof window !== "undefined" ? window.location.origin : null)
+    : tunnel.url;
+  const canCreate = peerMode ? Boolean(publicBaseUrl) : tunnel.status === "running";
 
   const startTunnel = useCallback(async () => {
     setStartingTunnel(true);
@@ -106,8 +122,8 @@ export function ShellShareModal({
   }, []);
 
   const create = useCallback(async () => {
-    if (!tunnel.url) {
-      setError("start the tunnel first");
+    if (!publicBaseUrl) {
+      setError(peerMode ? "sharing is unavailable" : "start the tunnel first");
       return;
     }
     setError(null);
@@ -119,7 +135,7 @@ export function ShellShareModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId,
-          publicBaseUrl: tunnel.url,
+          publicBaseUrl,
           capability,
           expiresInMs: expiryMs,
           peerName: peerName.trim() || null,
@@ -137,7 +153,7 @@ export function ShellShareModal({
     } finally {
       setCreating(false);
     }
-  }, [sessionId, tunnel.url, expiryMs, peerName, capability, refreshShares]);
+  }, [sessionId, publicBaseUrl, peerMode, expiryMs, peerName, capability, refreshShares]);
 
   const copyLink = useCallback(async () => {
     if (!created?.link) return;
@@ -198,43 +214,55 @@ export function ShellShareModal({
         {/* LEFT — the form */}
         <div className="flex flex-col gap-4 min-w-0 sm:order-1">
           <p className="text-[12px] leading-relaxed text-ink-mute">
-            hoop exposes the dashboard over a managed public tunnel — no setup on your end. Start it,
-            then create a link. Pick how much the guest can do below.
+            {peerMode
+              ? "You can invite others into this session and manage their access. Pick how much the guest can do below."
+              : "hoop exposes the dashboard over a managed public tunnel — no setup on your end. Start it, then create a link. Pick how much the guest can do below."}
           </p>
 
           <div>
-            <div className="section-title mb-1.5">Public tunnel</div>
-            <div className="flex items-center gap-2 rounded-control bg-sunken border border-divider px-2.5 py-2">
-              <span
-                className={cn(
-                  "h-2 w-2 shrink-0 rounded-full",
-                  running ? "bg-wrap" : tunnel.status === "error" ? "bg-fail" : "bg-ink-hush",
-                )}
-              />
-              {running && tunnel.url ? (
-                <code className="flex-1 truncate font-mono text-[11px] text-ink-soft" title={tunnel.url}>
-                  {tunnel.url}
+            <div className="section-title mb-1.5">{peerMode ? "Public URL" : "Public tunnel"}</div>
+            {peerMode ? (
+              // A peer can't control the tunnel — it's the host's. Show the origin
+              // links will point to (the one the peer is connected through).
+              <div className="flex items-center gap-2 rounded-control bg-sunken border border-divider px-2.5 py-2">
+                <span className="h-2 w-2 shrink-0 rounded-full bg-wrap" />
+                <code className="flex-1 truncate font-mono text-[11px] text-ink-soft" title={publicBaseUrl ?? ""}>
+                  {publicBaseUrl ?? "unavailable"}
                 </code>
-              ) : (
-                <span className="flex-1 font-mono text-[11px] text-ink-faint">
-                  {tunnel.status === "starting" || startingTunnel ? "starting tunnel…" : "tunnel is off"}
-                </span>
-              )}
-              {!running && (
-                <button
-                  type="button"
-                  onClick={startTunnel}
-                  disabled={startingTunnel || tunnel.status === "starting"}
-                  className="pill-btn shrink-0 text-[11px] px-2.5 py-1 disabled:opacity-40"
-                >
-                  {startingTunnel || tunnel.status === "starting" ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                  ) : (
-                    "start tunnel"
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 rounded-control bg-sunken border border-divider px-2.5 py-2">
+                <span
+                  className={cn(
+                    "h-2 w-2 shrink-0 rounded-full",
+                    running ? "bg-wrap" : tunnel.status === "error" ? "bg-fail" : "bg-ink-hush",
                   )}
-                </button>
-              )}
-            </div>
+                />
+                {running && tunnel.url ? (
+                  <code className="flex-1 truncate font-mono text-[11px] text-ink-soft" title={tunnel.url}>
+                    {tunnel.url}
+                  </code>
+                ) : (
+                  <span className="flex-1 font-mono text-[11px] text-ink-faint">
+                    {tunnel.status === "starting" || startingTunnel ? "starting tunnel…" : "tunnel is off"}
+                  </span>
+                )}
+                {!running && (
+                  <button
+                    type="button"
+                    onClick={startTunnel}
+                    disabled={startingTunnel || tunnel.status === "starting"}
+                    className="pill-btn shrink-0 text-[11px] px-2.5 py-1 disabled:opacity-40"
+                  >
+                    {startingTunnel || tunnel.status === "starting" ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      "start tunnel"
+                    )}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex gap-3">
@@ -285,7 +313,7 @@ export function ShellShareModal({
 
           <button
             onClick={create}
-            disabled={creating || !running}
+            disabled={creating || !canCreate}
             className="accent-btn w-full py-2.5 text-[12px] font-semibold disabled:opacity-40"
           >
             {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}

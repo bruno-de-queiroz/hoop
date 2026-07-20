@@ -34,6 +34,9 @@ vi.mock("./lib/active-sessions", () => ({
   activeSessionsBus: new EventEmitter(),
   bootActiveSessions: vi.fn(),
   shutdownActiveSessions: vi.fn(),
+  // No canonicalization in tests → checkParticipant falls back to raw session
+  // ids (share.sessionId compared verbatim), which is what these authz tests want.
+  getActiveSession: vi.fn(() => undefined),
 }));
 vi.mock("./lib/skills", () => ({ listSkills: () => [], startSkillsWatcher: vi.fn(), stopSkillsWatcher: vi.fn(), skillsBus: new EventEmitter() }));
 vi.mock("./lib/commands", () => ({ listSlashCommands: () => [] }));
@@ -106,6 +109,34 @@ function postJson(socketPath: string, token: string, path: string, participant?:
     req.on("error", reject);
     req.write(body);
     req.end();
+  });
+}
+
+/** General request helper (any method + optional JSON body + participant). */
+function reqJson(
+  socketPath: string,
+  token: string,
+  method: string,
+  path: string,
+  participant?: string,
+  bodyObj?: unknown,
+): Promise<{ status: number }> {
+  return new Promise((resolve, reject) => {
+    const headers: Record<string, string> = { "x-sandbox-token": token };
+    if (participant) headers["x-hoop-participant"] = participant;
+    let body: string | undefined;
+    if (method !== "GET") {
+      body = JSON.stringify(bodyObj ?? {});
+      headers["content-type"] = "application/json";
+      headers["content-length"] = String(Buffer.byteLength(body));
+    }
+    const r = httpRequest({ socketPath, method, path, headers }, (res) => {
+      res.resume();
+      resolve({ status: res.statusCode ?? 0 });
+    });
+    r.on("error", reject);
+    if (body) r.write(body);
+    r.end();
   });
 }
 
@@ -190,6 +221,94 @@ describe("host-only spawn guards (requireHost) — defence-in-depth", () => {
     srv = await startServerWith({});
     expect((await postJson(srv.socketPath, srv.token, "/skill/foo/run", "peer:share-x")).status).toBe(403);
     expect((await postJson(srv.socketPath, srv.token, "/skill/foo/run", "host")).status).not.toBe(403);
+  });
+});
+
+describe("peer admit/deny/revoke/list authorization — capability + session scope", () => {
+  let srv: CapsServer;
+
+  afterEach(async () => {
+    if (srv) await srv.close();
+  });
+
+  // Fresh shares/joins created directly against the (real, non-mocked) modules
+  // the running server captured after startServerWith's resetModules — so the
+  // state we set up is exactly what the route handlers see.
+  async function setup() {
+    srv = await startServerWith({});
+    const shares = await import("./lib/shares");
+    const joins = await import("./lib/peer-joins");
+    const full = shares.createShare({ sessionId: "S1", publicHost: "h.example", capability: "full" });
+    const drive = shares.createShare({ sessionId: "S1", publicHost: "h.example", capability: "drive" });
+    const spectate = shares.createShare({ sessionId: "S1", publicHost: "h.example", capability: "spectate" });
+    const otherSession = shares.createShare({ sessionId: "S2", publicHost: "h.example", capability: "full" });
+    return { shares, joins, full, drive, spectate, otherSession };
+  }
+
+  it("/join-admit: drive/spectate peers are rejected; host + full peer (same session) pass; full peer is denied cross-session", async () => {
+    const { joins, full, drive, spectate, otherSession } = await setup();
+    // One pending ticket in S1; rejections don't consume it, so reuse it.
+    const t1 = joins.createJoinTicket({ shareId: full.shareId, sessionId: "S1", peerName: "guest" });
+    expect((await reqJson(srv.socketPath, srv.token, "POST", "/join-admit", `peer:${drive.shareId}`, { ticketId: t1.ticketId })).status).toBe(403);
+    expect((await reqJson(srv.socketPath, srv.token, "POST", "/join-admit", `peer:${spectate.shareId}`, { ticketId: t1.ticketId })).status).toBe(403);
+    // A full peer whose share is in a DIFFERENT session cannot admit into S1.
+    expect((await reqJson(srv.socketPath, srv.token, "POST", "/join-admit", `peer:${otherSession.shareId}`, { ticketId: t1.ticketId })).status).toBe(403);
+    // Full peer in the SAME session succeeds (consumes t1).
+    expect((await reqJson(srv.socketPath, srv.token, "POST", "/join-admit", `peer:${full.shareId}`, { ticketId: t1.ticketId })).status).toBe(200);
+    // Host admits a fresh ticket.
+    const t2 = joins.createJoinTicket({ shareId: full.shareId, sessionId: "S1", peerName: "guest2" });
+    expect((await reqJson(srv.socketPath, srv.token, "POST", "/join-admit", "host", { ticketId: t2.ticketId })).status).toBe(200);
+  });
+
+  it("/join-deny: spectate peer rejected; full peer (same session) passes", async () => {
+    const { joins, full, spectate } = await setup();
+    const t1 = joins.createJoinTicket({ shareId: full.shareId, sessionId: "S1", peerName: "guest" });
+    expect((await reqJson(srv.socketPath, srv.token, "POST", "/join-deny", `peer:${spectate.shareId}`, { ticketId: t1.ticketId })).status).toBe(403);
+    expect((await reqJson(srv.socketPath, srv.token, "POST", "/join-deny", `peer:${full.shareId}`, { ticketId: t1.ticketId })).status).toBe(200);
+  });
+
+  it("/pending-joins: host + full peer allowed; drive/spectate rejected", async () => {
+    const { drive, spectate, full } = await setup();
+    expect((await reqJson(srv.socketPath, srv.token, "GET", "/pending-joins")).status).toBe(200);
+    expect((await reqJson(srv.socketPath, srv.token, "GET", "/pending-joins", `peer:${full.shareId}`)).status).toBe(200);
+    expect((await reqJson(srv.socketPath, srv.token, "GET", "/pending-joins", `peer:${drive.shareId}`)).status).toBe(403);
+    expect((await reqJson(srv.socketPath, srv.token, "GET", "/pending-joins", `peer:${spectate.shareId}`)).status).toBe(403);
+  });
+
+  it("/shares/:id/revoke: drive rejected; full peer (same session) passes; full peer denied cross-session", async () => {
+    const { shares, full, drive } = await setup();
+    // Fresh disposable targets in S1 (revoke consumes them).
+    const target1 = shares.createShare({ sessionId: "S1", publicHost: "h.example", capability: "spectate" });
+    const target2 = shares.createShare({ sessionId: "S1", publicHost: "h.example", capability: "spectate" });
+    const targetS2 = shares.createShare({ sessionId: "S2", publicHost: "h.example", capability: "spectate" });
+    // drive peer can't revoke.
+    expect((await reqJson(srv.socketPath, srv.token, "POST", `/shares/${target1.shareId}/revoke`, `peer:${drive.shareId}`)).status).toBe(403);
+    // full peer in S1 revokes a S1 share.
+    expect((await reqJson(srv.socketPath, srv.token, "POST", `/shares/${target1.shareId}/revoke`, `peer:${full.shareId}`)).status).toBe(200);
+    // full peer in S1 cannot revoke a share in S2.
+    expect((await reqJson(srv.socketPath, srv.token, "POST", `/shares/${targetS2.shareId}/revoke`, `peer:${full.shareId}`)).status).toBe(403);
+    // host revokes anything.
+    expect((await reqJson(srv.socketPath, srv.token, "POST", `/shares/${target2.shareId}/revoke`, "host")).status).toBe(200);
+  });
+
+  it("POST /shares (create): drive/spectate rejected; host + full peer (own session) pass; full peer denied cross-session", async () => {
+    const { full, drive, spectate } = await setup();
+    const body = { sessionId: "S1", publicHost: "h.example" };
+    expect((await reqJson(srv.socketPath, srv.token, "POST", "/shares", `peer:${drive.shareId}`, body)).status).toBe(403);
+    expect((await reqJson(srv.socketPath, srv.token, "POST", "/shares", `peer:${spectate.shareId}`, body)).status).toBe(403);
+    // A full peer in S1 cannot mint a link for S2.
+    expect((await reqJson(srv.socketPath, srv.token, "POST", "/shares", `peer:${full.shareId}`, { sessionId: "S2", publicHost: "h.example" })).status).toBe(403);
+    // Allowed callers clear the capability/scope guard (downstream 404 because the
+    // mocked session doesn't exist — the point is only that it's NOT a 403).
+    expect((await reqJson(srv.socketPath, srv.token, "POST", "/shares", `peer:${full.shareId}`, body)).status).not.toBe(403);
+    expect((await reqJson(srv.socketPath, srv.token, "POST", "/shares", "host", body)).status).not.toBe(403);
+  });
+
+  it("GET /shares: host + full peer allowed; spectate rejected", async () => {
+    const { full, spectate } = await setup();
+    expect((await reqJson(srv.socketPath, srv.token, "GET", "/shares")).status).toBe(200);
+    expect((await reqJson(srv.socketPath, srv.token, "GET", "/shares", `peer:${full.shareId}`)).status).toBe(200);
+    expect((await reqJson(srv.socketPath, srv.token, "GET", "/shares", `peer:${spectate.shareId}`)).status).toBe(403);
   });
 });
 

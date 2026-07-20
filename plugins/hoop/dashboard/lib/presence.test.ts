@@ -52,7 +52,7 @@ describe("presence registry", () => {
     // Still present well past the (short) idle/dim window.
     vi.setSystemTime(31_000);
     expect(mod.listPresence("s1")).toHaveLength(1);
-    // Evicted only past the long window (GONE_MS = 3 min).
+    // Silently evicted only past the long window (EVICT_MS = 3 min) — no marker.
     vi.setSystemTime(3 * 60_000 + 1_000);
     expect(mod.listPresence("s1")).toHaveLength(0);
   });
@@ -86,69 +86,36 @@ describe("presence registry", () => {
     });
   });
 
-  describe("peer 'left' signal (marker source)", () => {
+  describe("presence NEVER emits a 'left' marker (explicit-leave-only policy)", () => {
+    // The durable `PeerLeft` transcript marker now has exactly ONE source: the
+    // explicit "Leave session" route. The presence registry only tracks who's
+    // here (and dims the away/gone) — it must never emit a "left" signal from
+    // inactivity, tab-close beacons, or eviction. These guard that contract.
     function collectLefts() {
-      const lefts: Array<{ sessionId?: string; participantId?: string; name?: string | null }> = [];
-      mod.presenceBus().on("left", (p) => lefts.push(p as never));
+      const lefts: unknown[] = [];
+      mod.presenceBus().on("left", (p) => lefts.push(p));
       return lefts;
     }
 
-    it("does NOT emit 'left' for a merely backgrounded peer (the bug: no 42s drop)", () => {
+    it("does not emit 'left' for a backgrounded peer, however long it stays away", () => {
       vi.useFakeTimers();
       const lefts = collectLefts();
       mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer", active: false });
-      // Well past the old TTL+grace (42s) — must stay (dimmed), not leave.
-      vi.advanceTimersByTime(60_000);
+      // Far past any old TTL/watchdog window — must stay (dimmed), never "left".
+      vi.advanceTimersByTime(10 * 60_000);
       expect(lefts).toHaveLength(0);
-      expect(mod.listPresence("s1")).toHaveLength(1);
-    });
-
-    it("emits 'left' only after GONE_MS of inactivity", () => {
-      vi.useFakeTimers();
-      const lefts = collectLefts();
-      mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer" });
-      vi.advanceTimersByTime(3 * 60_000 - 1_000);
-      expect(lefts).toHaveLength(0);
-      vi.advanceTimersByTime(2_000);
-      expect(lefts).toEqual([{ sessionId: "s1", participantId: "peer:x", name: "X" }]);
-    });
-
-    it("an active beat pushes the gone-timer out (peer came back to the foreground)", () => {
-      vi.useFakeTimers(); // t=0
-      const lefts = collectLefts();
-      mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer" }); // arm fire@180s
-      // Background beats in between don't reset the countdown…
-      vi.advanceTimersByTime(60_000); // t=60s
-      mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer", active: false });
-      // …but a foreground beat does — re-arms fire@ t=120s+180s=300s.
-      vi.advanceTimersByTime(60_000); // t=120s
-      mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer", active: true });
-      // Past the ORIGINAL deadline (180s) → still here, because it was re-armed.
-      vi.advanceTimersByTime(61_000); // t=181s
-      expect(lefts).toHaveLength(0);
-      // Past the NEW deadline (300s).
-      vi.advanceTimersByTime(3 * 60_000); // t=361s
-      expect(lefts).toHaveLength(1);
-    });
-
-    it("silent leave drops presence WITHOUT emitting 'left' (explicit-leave path)", () => {
-      vi.useFakeTimers();
-      const lefts = collectLefts();
-      mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer" });
-      mod.leave("s1", "peer:x", { silent: true });
-      vi.advanceTimersByTime(5 * 60_000);
-      expect(lefts).toHaveLength(0);
+      // Eventually evicted from the roster (silently), still no marker.
       expect(mod.listPresence("s1")).toHaveLength(0);
     });
 
-    it("a beacon leave drops the roster entry but the gone-watchdog still resolves to 'left'", () => {
+    it("a beacon leave drops the roster entry silently — no 'left' emitted", () => {
       vi.useFakeTimers();
       const lefts = collectLefts();
       mod.heartbeat({ sessionId: "s1", participantId: "peer:x", name: "X", kind: "peer" });
       mod.leave("s1", "peer:x"); // tab-close beacon — roster only
       expect(mod.listPresence("s1")).toHaveLength(0);
-      vi.advanceTimersByTime(3 * 60_000 + 1_000);
-      expect(lefts).toEqual([{ sessionId: "s1", participantId: "peer:x", name: "X" }]);
+      vi.advanceTimersByTime(5 * 60_000);
+      expect(lefts).toHaveLength(0);
     });
 
     it("never emits 'left' for a host", () => {

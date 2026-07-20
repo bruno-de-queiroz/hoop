@@ -486,7 +486,7 @@ describe("/plan turn (plan-mode trigger)", () => {
     // via the set_permission_mode flip; the model is steered to submit_plan by
     // the session's appended system prompt (asserted in the spawn test), not by
     // text injected into this turn.
-    expect(user?.message?.content?.[0]?.text).toBe("implement the widget");
+    expect(user?.message?.content?.[0]?.text).toContain("implement the widget");
     expect(user?.message?.content?.[0]?.text).not.toContain("/plan");
     expect(user?.message?.content?.[0]?.text).not.toMatch(/ExitPlanMode/);
     // The steering must never leak into the visible turn text.
@@ -512,7 +512,7 @@ describe("/plan turn (plan-mode trigger)", () => {
     const { writes } = await primeSession("sid-normal");
     await mod.writeUserTurn("sid-normal", "just do the thing");
     expect(writes.join("")).not.toContain("set_permission_mode");
-    expect(frames(writes).find((f) => f.type === "user")?.message?.content?.[0]?.text).toBe("just do the thing");
+    expect(frames(writes).find((f) => f.type === "user")?.message?.content?.[0]?.text).toContain("just do the thing");
   });
 
   it("tags a /plan turn kind=command and preserves the original typed text for the transcript", async () => {
@@ -525,12 +525,14 @@ describe("/plan turn (plan-mode trigger)", () => {
     expect(meta.promptOverride).toBe("/plan implement the widget");
   });
 
-  it("does not tag or override a plain-text turn", async () => {
+  it("does not tag a plain-text turn as a command, but overrides the prompt so the attribution prefix stays out of the transcript", async () => {
     await primeSession("sid-plain-attr");
     await mod.writeUserTurn("sid-plain-attr", "just do the thing");
     const meta = mod.popPendingAuthor("sid-plain-attr");
     expect(meta.kind).toBeNull();
-    expect(meta.promptOverride).toBeNull();
+    // The model-facing text carries the "[Session context: …]" prefix, so the
+    // transcript-facing promptOverride restores exactly what the user typed.
+    expect(meta.promptOverride).toBe("just do the thing");
   });
 
   it("does not tag a message that merely starts with a slash but isn't a command", async () => {
@@ -538,27 +540,34 @@ describe("/plan turn (plan-mode trigger)", () => {
     await mod.writeUserTurn("sid-slashy", "/etc/hosts got clobbered, please check");
     const meta = mod.popPendingAuthor("sid-slashy");
     expect(meta.kind).toBeNull();
-    expect(meta.promptOverride).toBeNull();
+    expect(meta.promptOverride).toBe("/etc/hosts got clobbered, please check");
   });
 
   it("attaches image blocks (image first, then text) to a turn", async () => {
     const { writes } = await primeSession("sid-img");
-    await mod.writeUserTurn("sid-img", "what is this?", null, null, {
+    await mod.writeUserTurn("sid-img", "what is this?", "host", null, {
       images: [{ media_type: "image/png", data: "QUJD" }],
     });
     const content = frames(writes).find((f) => f.type === "user")?.message?.content;
     expect(content[0]).toMatchObject({ type: "image", source: { type: "base64", media_type: "image/png", data: "QUJD" } });
-    expect(content[1]).toMatchObject({ type: "text", text: "what is this?" });
+    // Every turn carries an authoritative-author attribution prefix in the
+    // model-facing text (the transcript still shows the raw typed text).
+    expect(content[1].type).toBe("text");
+    expect(content[1].text).toContain("what is this?");
+    expect(content[1].text).toContain("from the host");
   });
 
-  it("supports an image-only turn (no text block when text is empty)", async () => {
+  it("attributes an image-only turn with an author text block", async () => {
     const { writes } = await primeSession("sid-img2");
-    await mod.writeUserTurn("sid-img2", "", null, null, {
+    await mod.writeUserTurn("sid-img2", "", "host", null, {
       images: [{ media_type: "image/jpeg", data: "Zm9v" }],
     });
     const content = frames(writes).find((f) => f.type === "user")?.message?.content;
-    expect(content).toHaveLength(1);
     expect(content[0].type).toBe("image");
+    // Even with no typed text, the attribution line is sent so the model knows
+    // who shared the image.
+    expect(content[1]).toMatchObject({ type: "text" });
+    expect(content[1].text).toContain("from the host");
   });
 });
 

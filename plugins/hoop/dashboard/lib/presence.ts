@@ -23,39 +23,16 @@ export interface PresenceEntry {
   // backgrounded-but-connected peer sets this false → shown as `away` (dimmed
   // avatar), never as "left".
   active: boolean;
-  // Last time this participant was ACTIVE (foreground beat), ms epoch. The
-  // "genuinely gone" watchdog is measured from here, NOT from lastSeen: a
-  // backgrounded tab keeps beating (throttled) so lastSeen stays fresh, but
-  // lastActive freezes when it goes to the background — so a peer that has been
-  // away long enough still resolves to a durable "left". See GONE_MS.
-  lastActive: number;
   // When `typing` last went truthy (ms epoch), or 0 when not typing. Used to
   // auto-expire the typing flag independently of the whole-entry TTL — see
   // TYPING_TTL_MS. Not surfaced to clients (stripped in listPresence).
   typingSince: number;
 }
 
-/**
- * A pending "has this peer been gone long enough to mark left?" check. Only
- * peers get one (a host leaving isn't a transcript-worthy event). At most one
- * timer is outstanding per peer: it is (re)armed on every ACTIVE beat and left
- * to run down across background/inactive beats, and cleared outright on an
- * explicit "Leave session" (which emits its own marker) — see armLeaveTimer /
- * clearLeaveTimer / fireLeave.
- */
-interface LeaveTrack {
-  sessionId: string;
-  participantId: string;
-  name: string | null;
-  timer: ReturnType<typeof setTimeout>;
-}
-
 interface PresenceState {
   bus: EventEmitter;
   // sessionId -> participantId -> entry
   bySession: Map<string, Map<string, PresenceEntry>>;
-  // `${sessionId}\u0000${participantId}` -> pending leave check (peers only).
-  leaveTracks: Map<string, LeaveTrack>;
 }
 
 // A peer whose heartbeat hasn't been seen for this long (or who has reported
@@ -63,17 +40,12 @@ interface PresenceState {
 // couple of missed 10s beats (backgrounded tab throttling its interval) is
 // enough to dim; nothing durable happens.
 const IDLE_MS = 25_000;
-// The ONLY non-explicit trigger for a durable "left" marker: the peer has been
-// inactive (tab not in the foreground, or gone entirely) this long, measured
-// from its last ACTIVE beat. Deliberately long — a briefly-backgrounded peer
-// that is still connected and can still chat must NOT be marked left; only a
-// genuine, sustained absence is. (An explicit "Leave session" click is the
-// other trigger and fires immediately, via the leave route.)
-const GONE_MS = 3 * 60_000;
-// Roster eviction backstop for entries that stop beating entirely with no
-// watchdog to reap them (i.e. hosts). Peers are removed by the GONE_MS
-// watchdog; keep everyone visible (dimmed once idle) until then.
-const EVICT_MS = GONE_MS;
+// Roster eviction backstop: an entry that stops beating entirely is silently
+// dropped from the roster after this window (avatar disappears). This is NOT a
+// departure — no "left" marker is emitted. A durable "left" has exactly ONE
+// source: the explicit "Leave session" route. A merely backgrounded or
+// disconnected peer just dims and, eventually, drops from the roster silently.
+const EVICT_MS = 3 * 60_000;
 // The `typing` flag expires on its own, much sooner than the whole entry. A
 // client asserts typing:true on keystrokes and is supposed to send false when
 // idle — but a backgrounded tab or dropped request can lose that false, which
@@ -89,61 +61,13 @@ function state(): PresenceState {
   if (!g.__hoop_presence__) {
     const bus = new EventEmitter();
     bus.setMaxListeners(100);
-    g.__hoop_presence__ = { bus, bySession: new Map(), leaveTracks: new Map() };
+    g.__hoop_presence__ = { bus, bySession: new Map() };
   }
   return g.__hoop_presence__;
 }
 
 export function presenceBus(): EventEmitter {
   return state().bus;
-}
-
-function trackKey(sessionId: string, participantId: string): string {
-  return `${sessionId}\u0000${participantId}`;
-}
-
-/** (Re)arm the single pending leave-check for a peer, replacing any prior one. */
-function armLeaveTimer(
-  s: PresenceState,
-  sessionId: string,
-  participantId: string,
-  name: string | null,
-  delayMs: number,
-): void {
-  const key = trackKey(sessionId, participantId);
-  const existing = s.leaveTracks.get(key);
-  if (existing) clearTimeout(existing.timer);
-  const timer = setTimeout(() => fireLeave(s, key), delayMs);
-  // A pending leave check must never keep the process alive on its own (matters
-  // for graceful shutdown and for test runners).
-  if (typeof (timer as { unref?: () => void }).unref === "function") {
-    (timer as { unref: () => void }).unref();
-  }
-  s.leaveTracks.set(key, { sessionId, participantId, name, timer });
-}
-
-/** Cancel a peer's pending leave-check without emitting (e.g. explicit leave,
- * which emits its own marker, or a peer coming back). */
-function clearLeaveTimer(s: PresenceState, sessionId: string, participantId: string): void {
-  const key = trackKey(sessionId, participantId);
-  const t = s.leaveTracks.get(key);
-  if (t) {
-    clearTimeout(t.timer);
-    s.leaveTracks.delete(key);
-  }
-}
-
-/** A pending leave-check elapsed with no heartbeat cancelling it → the peer is
- * genuinely gone. Drop them from the roster (if not already evicted) and emit
- * the `left` signal that the leave-bridge turns into a durable transcript
- * marker. Fires at most once per track (the timer that ran is discarded). */
-function fireLeave(s: PresenceState, key: string): void {
-  const t = s.leaveTracks.get(key);
-  if (!t) return;
-  s.leaveTracks.delete(key);
-  const map = s.bySession.get(t.sessionId);
-  if (map?.delete(t.participantId)) s.bus.emit("change", { sessionId: t.sessionId });
-  s.bus.emit("left", { sessionId: t.sessionId, participantId: t.participantId, name: t.name });
 }
 
 function evictStale(map: Map<string, PresenceEntry>): void {
@@ -173,12 +97,6 @@ export function heartbeat(opts: {
   const now = Date.now();
   const typing = !!opts.typing;
   const active = opts.active !== false;
-  const prev = map.get(opts.participantId);
-  // lastActive advances only on ACTIVE beats; a backgrounded (inactive) beat
-  // keeps refreshing lastSeen (so the peer stays visible, merely dimmed) but
-  // freezes lastActive, so the GONE_MS watchdog keeps counting down toward a
-  // durable "left".
-  const lastActive = active ? now : prev?.lastActive ?? now;
   // Refresh typingSince on every truthy assertion. The client re-asserts
   // typing:true on a keepalive interval shorter than TYPING_TTL_MS while the
   // user is actively typing, so this stays fresh during a long burst and goes
@@ -191,51 +109,24 @@ export function heartbeat(opts: {
     typing,
     lastSeen: now,
     active,
-    lastActive,
     typingSince: typing ? now : 0,
   });
   evictStale(map);
-  // Peer "genuinely gone" watchdog. (Re)arm ONLY on active beats, for the full
-  // GONE_MS from now; inactive (backgrounded) beats leave the existing timer
-  // running so it fires GONE_MS after the LAST active beat. An active beat
-  // (peer came back to the foreground) pushes it out again, so it only ever
-  // fires after a sustained absence — never for a briefly-backgrounded peer.
-  if (opts.kind === "peer") {
-    const armed = s.leaveTracks.has(trackKey(opts.sessionId, opts.participantId));
-    if (active || !armed) {
-      const delay = active ? GONE_MS : Math.max(0, lastActive + GONE_MS - now);
-      armLeaveTimer(s, opts.sessionId, opts.participantId, opts.name, delay);
-    }
-  }
   s.bus.emit("change", { sessionId: opts.sessionId });
 }
 
 /**
  * Explicitly drop a participant from the roster (e.g. tab close / navigate
- * away) and notify. This is a ROSTER-only operation now — it never emits a
- * "left" marker. A durable "left" has exactly two sources: the GONE_MS
- * watchdog (sustained inactivity) and the explicit "Leave session" route.
- *
- *   - default (beacon on unmount): remove the entry so others see the avatar
- *     drop promptly, but leave the peer's GONE_MS watchdog running — if they've
- *     truly gone it will still resolve to "left" after the long window; if a
- *     second tab (peers share one participantId) is still active, its next beat
- *     re-adds the entry and re-arms the timer, so nothing durable happens.
- *   - `silent`: also cancel the pending watchdog. Used by the explicit "Leave
- *     session" flow, which emits its own marker immediately (and clears the
- *     peer's cookie), so the watchdog must not later double-fire.
+ * away) and notify. This is a ROSTER-only operation — it never emits a "left"
+ * marker. A durable "left" has exactly ONE source: the explicit "Leave session"
+ * route, which emits its own marker immediately (and clears the peer's cookie).
+ * A peer that merely closes a tab or backgrounds it just dims (away) and,
+ * eventually, drops from the roster silently — no transcript marker.
  */
-export function leave(
-  sessionId: string,
-  participantId: string,
-  opts?: { silent?: boolean },
-): void {
+export function leave(sessionId: string, participantId: string): void {
   const s = state();
   const map = s.bySession.get(sessionId);
   const removed = map?.delete(participantId) ?? false;
-  if (opts?.silent && participantId.startsWith("peer:")) {
-    clearLeaveTimer(s, sessionId, participantId);
-  }
   if (removed) s.bus.emit("change", { sessionId });
 }
 

@@ -3,27 +3,27 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { UserPlus } from "lucide-react";
 import { useSSE } from "../useSSE";
 import { useSessions } from "@/app/context/SessionsProvider";
-import { sessionDisplayLabel } from "../lib/format";
-import { isPeerClient, useMounted } from "../lib/participant";
+import { sessionDisplayLabel, countryLabel } from "../lib/format";
+import { canAdmitPeers, useMounted } from "../lib/participant";
 
-// Host-side peer admission popup (mockup). A redeemed share link creates a
-// PENDING join; the host must admit. Surfaced top-center as a single-row card
-// (avatar + "X wants to join" + session · capability + Deny/Admit) so a guest
-// can be let in from anywhere, without opening Settings. Deny revokes the share
-// (treated as hostile, same as the sandbox). Refetches on PeerJoin* SSE events
-// with a slow poll as a safety net; capability is cross-referenced from
-// /api/share (pending-joins doesn't carry it).
+// Peer admission popup. A redeemed share link creates a PENDING join that a
+// decider must admit. Shown to the host AND to full-capability peers (who can
+// admit another guest into the session they're in) — the sandbox scopes a peer
+// to their own session and re-checks capability. Surfaced top-center as a
+// single-row card (avatar + "X wants to join" + session · capability +
+// Deny/Admit) so a guest can be let in from anywhere, without opening Settings.
+// Deny revokes the share (treated as hostile, same as the sandbox). Refetches on
+// PeerJoin* SSE events with a slow poll as a safety net; capability now rides on
+// each pending-join row (no separate host-only /api/share call).
 
 interface PendingJoin {
   ticketId: string;
   shareId: string;
   sessionId: string;
   peerName: string | null;
+  peerIp?: string | null;
+  peerCountry?: string | null;
   createdAt: number;
-}
-
-interface ShareRecord {
-  shareId: string;
   capability?: string | null;
 }
 
@@ -48,28 +48,20 @@ function initials(s: string): string {
 export function ShellAdmissionToast() {
   const { sessions } = useSessions();
   const [joins, setJoins] = useState<PendingJoin[]>([]);
-  const [caps, setCaps] = useState<Record<string, string>>({});
   const [deciding, setDeciding] = useState<string | null>(null);
-  // Mount-gated: the server always reads as host, so calling isPeerClient()
+  // Mount-gated: the server always reads as host, so calling canAdmitPeers()
   // during render would mismatch on hydration for a peer. See useMounted.
   const mounted = useMounted();
-  const isPeer = mounted && isPeerClient();
+  const canAdmit = mounted && canAdmitPeers();
 
   const refresh = useCallback(async () => {
     try {
-      const [jr, sr] = await Promise.all([
-        fetch("/api/share/pending-joins"),
-        fetch("/api/share"),
-      ]);
+      const jr = await fetch("/api/share/pending-joins");
       if (jr.ok) {
         const d = (await jr.json()) as { joins?: PendingJoin[] };
         setJoins(Array.isArray(d.joins) ? d.joins : []);
-      }
-      if (sr.ok) {
-        const d = (await sr.json()) as { shares?: ShareRecord[] };
-        const map: Record<string, string> = {};
-        for (const s of d.shares ?? []) if (s.capability) map[s.shareId] = s.capability;
-        setCaps(map);
+      } else {
+        setJoins([]);
       }
     } catch {
       /* transient */
@@ -84,17 +76,18 @@ export function ShellAdmissionToast() {
   }, [refresh]);
 
   useEffect(() => {
-    if (isPeer) return;
+    if (!canAdmit) return;
     void refresh();
     const poll = setInterval(refresh, 5000);
     return () => {
       clearInterval(poll);
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [isPeer, refresh]);
+  }, [canAdmit, refresh]);
 
   useSSE({
     event: (raw: unknown) => {
+      if (!canAdmit) return;
       const e = raw as { hook_type?: string | null };
       if (e?.hook_type && e.hook_type.startsWith("PeerJoin")) schedule();
     },
@@ -115,7 +108,7 @@ export function ShellAdmissionToast() {
     [refresh],
   );
 
-  if (isPeer || joins.length === 0) return null;
+  if (!canAdmit || joins.length === 0) return null;
 
   const labelFor = (sid: string) => {
     const s = sessions.find((x) => x.sessionId === sid || (x.aliases ?? []).includes(sid));
@@ -127,7 +120,7 @@ export function ShellAdmissionToast() {
       {joins.map((j) => {
         const busy = deciding === j.ticketId;
         const name = j.peerName ?? "A guest";
-        const cap = caps[j.shareId];
+        const cap = j.capability ?? undefined;
         return (
           <div
             key={j.ticketId}
@@ -147,6 +140,14 @@ export function ShellAdmissionToast() {
                 {cap && (
                   <>
                     {" · "}capability <span className="font-mono text-sdk">{CAP_LABEL[cap] ?? cap}</span>
+                  </>
+                )}
+                {j.peerIp && (
+                  <>
+                    {" · "}from <span className="font-mono text-ink-soft">{j.peerIp}</span>
+                    {countryLabel(j.peerCountry) && (
+                      <span className="text-ink-soft"> ({countryLabel(j.peerCountry)})</span>
+                    )}
                   </>
                 )}
               </p>

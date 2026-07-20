@@ -164,29 +164,36 @@ export interface SandboxClient {
     capability?: "full" | "drive" | "spectate";
     expiresInMs?: number | null;
     peerName?: string | null;
-  }): Promise<ShareRecord>;
-  revokeShare(shareId: string): Promise<{ ok: boolean }>;
-  listShares(): Promise<{ shares: ShareRecord[] }>;
+  }, participant?: string): Promise<ShareRecord>;
+  /** Revoke a share. Host (any session) or a full-capability peer (only their
+   * own session); the sandbox re-validates capability + scope. */
+  revokeShare(shareId: string, participant?: string): Promise<{ ok: boolean }>;
+  /** List active shares. Host sees all; a full peer sees only their session's. */
+  listShares(participant?: string): Promise<{ shares: ShareRecord[] }>;
   /** Authoritative revocation/scope check (used to gate peer-context calls). */
   validateShare(shareId: string, opts: { host?: string; sessionId?: string }): Promise<ShareRecord | null>;
 
   // Host-admits-each-join gate.
   /** Register a pending join for a redeemed share. `name` is the peer's chosen
-   * nickname (overrides any host-suggested default). */
-  createJoinTicket(shareId: string, name?: string | null): Promise<{ ticketId: string; secret: string }>;
+   * nickname (overrides any host-suggested default); `peerIp`/`peerCountry` are
+   * the joiner's best-effort public IP + 2-letter country, shown to the decider
+   * in the admit prompt (info only). */
+  createJoinTicket(shareId: string, name?: string | null, peerIp?: string | null, peerCountry?: string | null): Promise<{ ticketId: string; secret: string }>;
   /** Poll a ticket's admission status. */
   joinStatus(ticketId: string): Promise<{ status: "pending" | "admitted" | "denied" | "expired" }>;
-  /** Host: admit a pending join. */
-  admitJoin(ticketId: string): Promise<{ ok: boolean }>;
-  /** Host: deny a pending join (revokes the share sandbox-side). */
-  denyJoin(ticketId: string): Promise<{ ok: boolean }>;
+  /** Admit a pending join. Host or a full-capability peer (scoped to their own
+   * session); the sandbox re-validates the caller's capability + scope. */
+  admitJoin(ticketId: string, participant?: string): Promise<{ ok: boolean }>;
+  /** Deny a pending join (revokes the share sandbox-side). Same gate as admit. */
+  denyJoin(ticketId: string, participant?: string): Promise<{ ok: boolean }>;
   /** Claim an admitted ticket (one-time); returns the grant to issue a cookie. */
   claimJoin(ticketId: string, secret: string): Promise<{ shareId: string; sessionId: string; peerName: string | null } | null>;
-  /** Host: list pending joins for the Admit/Deny UI. */
-  listPendingJoins(): Promise<{ joins: Array<{ ticketId: string; shareId: string; sessionId: string; peerName: string | null; createdAt: number }> }>;
+  /** List pending joins for the Admit/Deny UI. Host sees all; a full peer sees
+   * only their own session's. Each carries the share capability. */
+  listPendingJoins(participant?: string): Promise<{ joins: Array<{ ticketId: string; shareId: string; sessionId: string; peerName: string | null; peerIp?: string | null; peerCountry?: string | null; createdAt: number; capability?: "full" | "drive" | "spectate" | null }> }>;
   /** Record that a peer left a session (emits a `PeerLeft` transcript divider).
    * `name` is a cosmetic label for the marker. */
-  peerLeave(sessionId: string, name?: string | null): Promise<{ ok: boolean }>;
+  peerLeave(sessionId: string, name?: string | null, shareId?: string | null): Promise<{ ok: boolean }>;
 
   eventBus: EventEmitter;
   sessionsBus: EventEmitter;
@@ -531,10 +538,10 @@ export function createHttpClient(socketPath: string): SandboxClient {
     search: (q, type, limit, session) =>
       request("POST", "/search", { q, type, limit, ...(session ? { session } : {}) }),
 
-    createShare: (opts) => request("POST", "/shares", opts),
-    revokeShare: (shareId) =>
-      request("POST", `/shares/${encodeURIComponent(shareId)}/revoke`, {}),
-    listShares: () => request("GET", "/shares"),
+    createShare: (opts, participant) => request("POST", "/shares", opts, participantOpts(participant)),
+    revokeShare: (shareId, participant) =>
+      request("POST", `/shares/${encodeURIComponent(shareId)}/revoke`, {}, participantOpts(participant)),
+    listShares: (participant) => request("GET", "/shares", undefined, participantOpts(participant)),
     validateShare: async (shareId, opts) => {
       try {
         const qs = opts.host ? `?host=${encodeURIComponent(opts.host)}` : "";
@@ -545,10 +552,10 @@ export function createHttpClient(socketPath: string): SandboxClient {
       }
     },
 
-    createJoinTicket: (shareId, name) => request("POST", "/join-request", { shareId, name: name ?? null }),
+    createJoinTicket: (shareId, name, peerIp, peerCountry) => request("POST", "/join-request", { shareId, name: name ?? null, peerIp: peerIp ?? null, peerCountry: peerCountry ?? null }),
     joinStatus: (ticketId) => request("GET", `/join-status?ticket=${encodeURIComponent(ticketId)}`),
-    admitJoin: (ticketId) => request("POST", "/join-admit", { ticketId }),
-    denyJoin: (ticketId) => request("POST", "/join-deny", { ticketId }),
+    admitJoin: (ticketId, participant) => request("POST", "/join-admit", { ticketId }, participantOpts(participant)),
+    denyJoin: (ticketId, participant) => request("POST", "/join-deny", { ticketId }, participantOpts(participant)),
     claimJoin: async (ticketId, secret) => {
       try {
         return await request("POST", "/join-claim", { ticketId, secret });
@@ -557,8 +564,8 @@ export function createHttpClient(socketPath: string): SandboxClient {
         throw e;
       }
     },
-    listPendingJoins: () => request("GET", "/pending-joins"),
-    peerLeave: (sessionId, name) => request("POST", "/peer-leave", { sessionId, name: name ?? null }),
+    listPendingJoins: (participant) => request("GET", "/pending-joins", undefined, participantOpts(participant)),
+    peerLeave: (sessionId, name, shareId) => request("POST", "/peer-leave", { sessionId, name: name ?? null, shareId: shareId ?? null }),
 
     eventBus: localEventBus,
     sessionsBus: localSessionsBus,

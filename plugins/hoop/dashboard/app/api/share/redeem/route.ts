@@ -22,6 +22,32 @@ function normalizeHost(hostHeader: string | null): string {
   return h;
 }
 
+/** Best-effort public IP of the joining peer, for the host's admit prompt only.
+ * Cloudflare's edge sets `CF-Connecting-IP` (authoritative for a trycloudflare
+ * tunnel — it overwrites any client-supplied value); `X-Forwarded-For`'s first
+ * hop is the fallback. This is INFORMATIONAL: the peer may be behind a VPN /
+ * proxy / CGNAT, so it's a "does this look like who I expect" hint for the host,
+ * never an access-control input. Sanitized to a plausible IP shape and length. */
+function joiningPeerIp(req: Request): string | null {
+  const cf = req.headers.get("cf-connecting-ip");
+  const xff = req.headers.get("x-forwarded-for");
+  const raw = (cf?.trim() || xff?.split(",")[0]?.trim() || "").toLowerCase();
+  if (!raw || raw.length > 45) return null; // max IPv6 textual length
+  // Accept only IPv4/IPv6 characters — reject anything that could be a log/UI
+  // injection vector before it reaches the host's screen.
+  return /^[0-9a-f:.]+$/.test(raw) ? raw : null;
+}
+
+/** Two-letter country of the joiner, from Cloudflare's `CF-IPCountry` edge
+ * header (present by default on proxied traffic, incl. quick tunnels). Also
+ * informational. Cloudflare uses `XX` for "unknown" (dropped) and `T1` for Tor
+ * (kept — a meaningful signal). Anything not two ASCII letters is rejected. */
+function joiningPeerCountry(req: Request): string | null {
+  const raw = (req.headers.get("cf-ipcountry") ?? "").trim().toUpperCase();
+  if (!raw || raw === "XX") return null;
+  return /^[A-Z0-9]{2}$/.test(raw) ? raw : null;
+}
+
 /**
  * Redeem a share link: verify the signed token and bind it to this host, then
  * — instead of granting access — register a PENDING join the host must admit.
@@ -64,7 +90,7 @@ export async function POST(req: Request) {
   // back to any host-suggested default on the share record (sandbox-side).
   let ticket: { ticketId: string; secret: string };
   try {
-    ticket = await client.createJoinTicket(payload.sid, chosenName);
+    ticket = await client.createJoinTicket(payload.sid, chosenName, joiningPeerIp(req), joiningPeerCountry(req));
   } catch {
     return errorResponse("could not start join request", 502);
   }

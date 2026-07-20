@@ -91,6 +91,14 @@ export function canDecidePermissions(): boolean {
   return peerCapability() === "full";
 }
 
+/** May this viewer admit/deny pending peer joins? The host always can; a peer
+ * only with a "full" share (drive/spectate cannot). Mirrors the sandbox gate
+ * (authoritative — this only decides whether to SHOW the admission toast). */
+export function canAdmitPeers(): boolean {
+  if (participantKind() !== "peer") return true; // host / owner UI
+  return peerCapability() === "full";
+}
+
 /** May this viewer add plan-review comments/replies? The host always can; a
  * peer needs turn capability (full or drive) — a spectate share is view-only.
  * Mirrors the sandbox gate (checkParticipant "turn", authoritative). */

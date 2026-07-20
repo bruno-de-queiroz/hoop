@@ -278,6 +278,33 @@ export function useTranscript(
     setHasMore(raw.length === PAGE_LIMIT);
   }, []);
 
+  // Foreground backfill. Re-pull the latest page and MERGE it (never clear) so
+  // events that landed while the tab was backgrounded — when the socket was
+  // suspended and its live frames were dropped — are recovered without the
+  // clear-then-refetch flash of the sessionId-change path. Idempotent: rows
+  // already present are skipped by id in ingestRow, so a no-op refresh is cheap
+  // and invisible. Does NOT bump the gen counter (it isn't switching sessions),
+  // so an in-flight loadMore isn't invalidated.
+  const refetch = useCallback(async () => {
+    const sid = currentIdRef.current;
+    if (!sid) return;
+    const myGen = genRef.current;
+    let r: Response;
+    try {
+      r = await fetch(`/api/events?session=${encodeURIComponent(sid)}&limit=${INITIAL_LIMIT}`);
+    } catch { return; }
+    if (myGen !== genRef.current || sid !== currentIdRef.current || !r.ok) return;
+    const raw = (await r.json()) as EventRow[];
+    if (myGen !== genRef.current || sid !== currentIdRef.current) return;
+    const ordered = dedupeUserPrompts(raw.slice().reverse());
+    // Synchronous from here (no await): the snapshot can't drift under us, so
+    // building the merged array off `eventsRef` and setting it directly is safe.
+    const before = eventsRef.current;
+    let merged = before;
+    for (const row of ordered) merged = ingestRow(merged, row);
+    if (merged !== before) setEvents(merged);
+  }, []);
+
   const pushOptimistic = useCallback((text: string) => {
     const row = makeOptimistic(text);
     setEvents((prev) => [...prev, row]);
@@ -301,6 +328,9 @@ export function useTranscript(
       if (!isMine) return;
       setEvents((prev) => ingestRow(prev, row));
     },
+    // The tab returned to the foreground (or reconnected): backfill anything the
+    // suspended socket missed. See useSSE onForeground / refetch.
+    resync: () => { void refetch(); },
   });
 
   // Stable return identity: only re-creates when one of its visible

@@ -71,6 +71,49 @@ function scheduleReconnect() {
   backoff = Math.min(backoff * 2, 5000);
 }
 
+// Foreground resync. Mobile browsers suspend a backgrounded tab: its WebSocket
+// can be silently killed (or left a half-open zombie) and its JS timers frozen,
+// so the `onclose`→reconnect path may never run and live frames simply stop
+// arriving. When the tab returns to the foreground (or the window regains focus,
+// or the network comes back) we (a) force an immediate reconnect if the socket
+// isn't cleanly OPEN, and (b) tell consumers to backfill whatever they missed
+// during the gap via a synthetic `resync` frame (SSE only delivers events going
+// forward, so a reconnect alone can't recover the ones dropped while suspended).
+function onForeground(source: string) {
+  if (closedByUs || refCount <= 0) return;
+  const healthy = socket ? socket.readyState === WebSocket.OPEN : false;
+  if (!healthy) {
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    const dead = socket;
+    socket = null;
+    if (dead) { try { dead.close(); } catch { /* ignore */ } }
+    backoff = 250;
+    connect();
+  }
+  dispatch("resync", { source });
+}
+
+let foregroundBound = false;
+function onVisibility() { if (document.visibilityState === "visible") onForeground("visibility"); }
+function onFocus() { onForeground("focus"); }
+function onOnline() { onForeground("online"); }
+
+function bindForeground() {
+  if (foregroundBound || typeof window === "undefined") return;
+  foregroundBound = true;
+  document.addEventListener("visibilitychange", onVisibility);
+  window.addEventListener("focus", onFocus);
+  window.addEventListener("online", onOnline);
+}
+
+function unbindForeground() {
+  if (!foregroundBound || typeof window === "undefined") return;
+  foregroundBound = false;
+  document.removeEventListener("visibilitychange", onVisibility);
+  window.removeEventListener("focus", onFocus);
+  window.removeEventListener("online", onOnline);
+}
+
 function teardown() {
   closedByUs = true;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
@@ -78,6 +121,7 @@ function teardown() {
   socket = null;
   if (s) { try { s.close(); } catch { /* ignore */ } }
   handlersByType.clear();
+  unbindForeground();
 }
 
 function subscribe(type: string, h: Handler) {
@@ -106,6 +150,7 @@ export function useSSE(handlers: Handlers) {
     closedByUs = false;
     refCount += 1;
     connect();
+    bindForeground();
 
     const bound: Array<[string, Handler]> = [];
     for (const type of Object.keys(handlersRef.current)) {

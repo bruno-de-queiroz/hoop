@@ -196,7 +196,10 @@ export function DesktopShell({ isPeer, port }: { isPeer: boolean; port: string }
             isPeer={isPeer}
           />
 
-          {!isPeer && <ShellAdmissionToast />}
+          {/* Shown to the host and to full-capability peers (who can admit
+            * another guest into their session); the component self-gates via
+            * canAdmitPeers() and the sandbox enforces scope authoritatively. */}
+          <ShellAdmissionToast />
         </AppShell>
       </PlanReviewProvider>
     </CenterFullscreenContext.Provider>

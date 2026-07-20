@@ -12,6 +12,7 @@ import {
 } from "../active-session/eventText";
 import { Markdown } from "../Markdown";
 import { cn } from "../ui/cn";
+import { prettyToolName } from "../lib/format";
 
 // Center-pane transcript (Phase 3) — the signature surface. Mirrors the legacy
 // Transcript's event classification (PreToolUse/PostToolUse pairing, dedup of
@@ -305,8 +306,8 @@ const ToolCard = memo(function ToolCard({ pre, post }: { pre: EventRow; post?: E
         <div className="tool-card px-3 py-2 msg-wide">
           <div className="flex items-center gap-2 font-mono text-[11px]">
             <span className="shrink-0 text-wrap">●</span>
-            <span className="text-ink-soft">{toolName}</span>
-            {args && <span className="truncate text-ink-faint">{args}</span>}
+            <span className="min-w-0 truncate text-ink-soft" title={toolName}>{prettyToolName(toolName)}</span>
+            {args && <span className="min-w-0 truncate text-ink-faint">{args}</span>}
             <span className="ml-auto shrink-0 chip text-[9px] px-1.5 py-0.5 text-ink-faint">tool</span>
           </div>
           {hasResult && (

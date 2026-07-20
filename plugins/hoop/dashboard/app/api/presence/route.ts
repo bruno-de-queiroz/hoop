@@ -2,7 +2,6 @@ import { NextRequest } from "next/server";
 import { parseJsonBody, errorResponse, boundedString } from "@/lib/api-helpers";
 import { participantOf } from "@/lib/peer-auth";
 import { heartbeat, leave, listPresence } from "@/lib/presence";
-import { initPresenceLeaveBridge } from "@/lib/presence-leave-bridge";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,11 +22,6 @@ interface Body {
  * client (a peer's chosen name / the host label) — a cosmetic label only.
  */
 export async function POST(req: NextRequest) {
-  // Idempotent: attaches the presence→sandbox "left" listener once. Done here
-  // (rather than at import) because presence markers can only originate after a
-  // heartbeat/leave, which always flow through this route.
-  initPresenceLeaveBridge();
-
   const who = participantOf(req);
   if (who.kind === "none") return errorResponse("forbidden", 403);
 

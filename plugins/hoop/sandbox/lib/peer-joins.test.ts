@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   createJoinTicket,
   joinStatus,
+  getJoinTicket,
   admitJoin,
   denyJoin,
   claimJoin,
@@ -21,6 +22,18 @@ describe("peer-joins: host-admits-each-join gate", () => {
     expect(pending).toBeDefined();
     expect(pending!.peerName).toBe("Alice");
     expect((pending as Record<string, unknown>).secret).toBeUndefined();
+  });
+
+  it("carries the joiner IP + country through to the pending list (info for the decider)", () => {
+    const { ticketId } = createJoinTicket({ shareId: "share-ip", sessionId: "sess-ip", peerName: "Ivy", peerIp: "203.0.113.7", peerCountry: "US" });
+    const pending = listPendingJoins().find((j) => j.ticketId === ticketId);
+    expect(pending?.peerIp).toBe("203.0.113.7");
+    expect(pending?.peerCountry).toBe("US");
+    // Absent IP/country default to null rather than undefined.
+    const { ticketId: t2 } = createJoinTicket({ shareId: "share-noip", sessionId: "sess-noip", peerName: "Ivo" });
+    const p2 = listPendingJoins().find((j) => j.ticketId === t2);
+    expect(p2?.peerIp).toBeNull();
+    expect(p2?.peerCountry).toBeNull();
   });
 
   it("admit → status admitted; a matching-secret claim consumes it once", () => {
@@ -77,5 +90,15 @@ describe("peer-joins: host-admits-each-join gate", () => {
     expect(joinStatus("does-not-exist")).toBe("expired");
     expect(admitJoin("nope").ok).toBe(false);
     expect(claimJoin("nope", "x")).toBeNull();
+  });
+
+  it("getJoinTicket peeks session/share for the admit gate without consuming", () => {
+    const { ticketId } = mk("share-peek", "sess-peek", "Dana");
+    const t = getJoinTicket(ticketId);
+    expect(t).toEqual({ shareId: "share-peek", sessionId: "sess-peek", peerName: "Dana", status: "pending" });
+    // Non-consuming: still pending and still admittable afterwards.
+    expect(joinStatus(ticketId)).toBe("pending");
+    expect(admitJoin(ticketId).ok).toBe(true);
+    expect(getJoinTicket("does-not-exist")).toBeNull();
   });
 });

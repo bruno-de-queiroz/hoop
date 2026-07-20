@@ -247,10 +247,10 @@ const CASES: Case[] = [
   {
     name: "peerLeave",
     routes: { "POST /peer-leave": { status: 200, body: { ok: true } } },
-    invoke: () => client.peerLeave("s1", "Bob"),
+    invoke: () => client.peerLeave("s1", "Bob", "share-1"),
     expectMethod: "POST",
     expectPath: "/peer-leave",
-    expectBody: { sessionId: "s1", name: "Bob" },
+    expectBody: { sessionId: "s1", name: "Bob", shareId: "share-1" },
   },
 ];
 

@@ -165,14 +165,16 @@ interface LiveSlot {
   // FIFO of authors for turns written via writeUserTurn but whose
   // UserPromptSubmit hook event hasn't been ingested yet. Pushed in stdin
   // order (writeQueue serializes), popped on each real UserPromptSubmit so the
-  // transcript can attribute "who sent this" in a shared session. Best-effort:
-  // popped null (→ system/replay) when empty; bounded by max length + child
-  // close so a crash can't mis-attribute a later turn.
-  pendingAuthors: Array<{ author: string | null; shareId: string | null; at: number; thumbnails?: TurnImage[]; kind?: string | null; promptOverride?: string }>;
+  // transcript can attribute "who sent this" in a shared session. Every real
+  // turn has an author ("host" or a peer name) — never null; only a turn NOT
+  // sent via writeUserTurn (replay/compaction) has no queued author, surfaced as
+  // a null pop when the queue is empty. Bounded by max length + child close so a
+  // crash can't mis-attribute a later turn.
+  pendingAuthors: Array<{ author: string; shareId: string | null; at: number; thumbnails?: TurnImage[]; kind?: string | null; promptOverride?: string }>;
   // Who drove the turn currently executing (set when its UserPromptSubmit is
   // attributed, valid until the next turn). Lets a PreToolUse permission ask
   // — which fires later in the same turn — know which peer triggered it.
-  currentTurn: { author: string | null; shareId: string | null } | null;
+  currentTurn: { author: string; shareId: string | null } | null;
   // Share ids the host has granted session-scoped "allow all" to. In-memory
   // only (resets on sandbox restart / session end, by design). A PreToolUse
   // ask from a trusted peer auto-approves (except git push, which always
@@ -569,7 +571,7 @@ function skillIsKnown(name: string): boolean {
 export async function startSkillSession(
   skill: string,
   args?: string,
-  author: string | null = "host",
+  author: string = "host",
 ): Promise<{ sessionId: string }> {
   if (!isValidSkillName(skill)) throw new Error(`invalid skill name: ${skill}`);
   if (!skillIsKnown(skill)) throw new Error(`unknown skill or command: ${skill}`);
@@ -797,7 +799,7 @@ export interface TurnImage {
 export async function writeUserTurn(
   sessionId: string,
   text: string,
-  author: string | null = null,
+  author: string = "host",
   shareId: string | null = null,
   opts?: { mode?: "plan" | "bypassPermissions" | "default"; images?: TurnImage[]; thumbnails?: TurnImage[]; kind?: string | null; autoAllowRun?: boolean },
 ): Promise<{ sessionId: string }> {
@@ -865,21 +867,22 @@ export async function writeUserTurn(
   const turnKind = opts?.kind ?? (isCommandTurn ? "command" : null);
   let promptOverride = isCommandTurn ? text.trim() : undefined;
 
-  // Peer attribution: when a guest (not the host) drives the turn, the model
-  // should know WHO is asking — so it can address them by name and reason about
-  // the request in a shared session. We prepend a hidden context line to the
-  // text the MODEL receives (modelText) and keep the transcript showing exactly
-  // what the peer typed via promptOverride, so this steering never surfaces in
-  // anyone's UI. Host turns are unchanged (the host is the implicit default).
-  const isPeerTurn = author != null && author !== "host";
-  let modelText = turnText;
-  if (isPeerTurn) {
-    modelText =
-      `[Shared-session context: the following message is from "${author}", a peer ` +
-      `collaborator in this session (not the host). Address them by name when relevant.]\n\n` +
-      turnText;
-    if (promptOverride == null) promptOverride = text.trim();
-  }
+  // Turn attribution: every turn carries an authoritative author, resolved at
+  // the API boundary by checkParticipant — either "host" (the session operator)
+  // or a peer's display name. We ALWAYS prepend a short sender line to the text
+  // the MODEL receives so it knows WHO is asking on every turn: without it, after
+  // a run of peer turns the model keeps attributing later host turns to that peer
+  // (and vice-versa). This is a factual tag, not a directive — the model need not
+  // address anyone by name, just track who's speaking. The steering is prepended
+  // ONLY to modelText; the transcript keeps exactly what was typed via
+  // promptOverride, so it never surfaces in anyone's UI.
+  const isPeerTurn = author !== "host";
+  const sender = isPeerTurn
+    ? `"${author}", a peer collaborating in this shared session (not the host)`
+    : "the host (this session's operator)";
+  const modelText =
+    `[Session context: the following message is from ${sender}.]\n\n` + turnText;
+  if (promptOverride == null) promptOverride = text.trim();
 
   // Per-turn plan tracking. In plan mode the gate holds the session read-only
   // until the model calls submit_plan/ExitPlanMode — that call is what surfaces
@@ -2719,12 +2722,16 @@ export async function respondToPermission(
     // between-turns subprocess). Record the decision and return early — the
     // waiter path below only applies to real (blocking) asks.
     if (pending.synthetic) {
+      // Attribute the decision turn to whoever actually decided (host or a
+      // full-capability peer), so the transcript's PlanDecisionNotice shows the
+      // right name instead of always crediting the host.
+      const decider = answerAuthor ?? "host";
       if (decision === "allow") {
-        void writeUserTurn(canonicalSid, "The plan is approved — proceed with implementing it.", "host", null, { mode: "bypassPermissions", kind: "plan-approval", autoAllowRun: true })
+        void writeUserTurn(canonicalSid, "The plan is approved — proceed with implementing it.", decider, null, { mode: "bypassPermissions", kind: "plan-approval", autoAllowRun: true })
           .catch((e) => log.warn("active-sessions", "plan approve turn failed", { err: String((e as any)?.message ?? e) }));
       } else {
         const fb = reason?.trim() ? reason.trim() : "Please revise the plan.";
-        void writeUserTurn(canonicalSid, `The plan was rejected. Revise it based on this feedback:\n\n${fb}`, "host", null, { mode: "plan", kind: "plan-rejection" })
+        void writeUserTurn(canonicalSid, `The plan was rejected. Revise it based on this feedback:\n\n${fb}`, decider, null, { mode: "plan", kind: "plan-rejection" })
           .catch((e) => log.warn("active-sessions", "plan reject turn failed", { err: String((e as any)?.message ?? e) }));
       }
       try {
@@ -2805,7 +2812,7 @@ export async function respondToPermission(
     void writeUserTurn(
       canonicalSid,
       `${answer}\n\nThat is my answer to the question you just asked — please continue with the task using it.`,
-      answerAuthor,
+      answerAuthor ?? "host",
       null,
       relayOpts,
     ).catch((e) => log.warn("active-sessions", "askquestion follow-up turn failed", { err: String((e as any)?.message ?? e) }));

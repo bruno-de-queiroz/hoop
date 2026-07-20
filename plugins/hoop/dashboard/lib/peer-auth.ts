@@ -7,6 +7,9 @@
 
 const PARTICIPANT_HEADER = "x-hoop-participant";
 const PEER_SESSION_HEADER = "x-hoop-peer-session";
+const PEER_CAP_HEADER = "x-hoop-peer-capability";
+
+export type ShareCapability = "full" | "drive" | "spectate";
 
 export type Participant =
   | { kind: "host" }
@@ -50,4 +53,24 @@ export function canAccessSession(req: Request, sessionId: string): boolean {
  * undefined when absent (treated as host/no-op by the sandbox). */
 export function forwardedParticipant(req: Request): string | undefined {
   return req.headers.get(PARTICIPANT_HEADER) ?? undefined;
+}
+
+/** The peer's share capability from the trusted, middleware-injected header
+ * (null for host/none). UX/authz hint only — the sandbox re-validates against
+ * its durable share registry on every action. */
+export function peerCapabilityOf(req: Request): ShareCapability | null {
+  if (participantOf(req).kind !== "peer") return null;
+  const v = req.headers.get(PEER_CAP_HEADER);
+  return v === "full" || v === "drive" || v === "spectate" ? v : null;
+}
+
+/** May the caller admit/deny pending peer joins? The host always can; a peer
+ * only with a "full" share (drive/spectate cannot). This is the first-line
+ * gate; the sandbox enforces the same rule authoritatively (and additionally
+ * scopes a peer to admitting only into their own session). */
+export function canAdmitPeers(req: Request): boolean {
+  const p = participantOf(req);
+  if (p.kind === "host") return true;
+  if (p.kind === "peer") return peerCapabilityOf(req) === "full";
+  return false;
 }

@@ -106,6 +106,26 @@ async function authorizePage(req: NextRequest, rid: string): Promise<NextRespons
   // Peer path: a verified peer cookie bound to this (tunnel) host.
   const peer = await resolvePeer(req);
   if (peer && !isAllowedHost(host)) {
+    // A peer is locked to exactly one session. On the bare root:
+    //  - no session selected → redirect to their bound session (don't show the
+    //    host's create-session shell). The redirect carries the param, so it
+    //    falls through to normal passthrough (no loop).
+    //  - a session that ISN'T theirs → reject (403). A peer must never be able to
+    //    view another session by editing the URL; this is the page-level mirror
+    //    of the per-request canAccessSession scope enforced on the API.
+    if (req.nextUrl.pathname === "/") {
+      const requested = req.nextUrl.searchParams.get("session");
+      if (!requested) {
+        const url = req.nextUrl.clone();
+        url.searchParams.set("session", peer.ses);
+        const res = NextResponse.redirect(url);
+        res.headers.set("x-request-id", rid);
+        return res;
+      }
+      if (requested !== peer.ses) {
+        return jsonError(403, "out of session scope", rid);
+      }
+    }
     // Do NOT set the install cookie. Tell the layout to emit the peer token,
     // and pin the peer to their bound session.
     return passthrough(req, rid, `peer:${peer.sid}`, peer.ses, peer.cap);

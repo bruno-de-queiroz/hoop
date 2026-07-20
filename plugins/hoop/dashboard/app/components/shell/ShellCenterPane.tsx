@@ -12,7 +12,7 @@ import { ShellPlanReviewCard } from "./ShellPlanReviewCard";
 import { ShellAskQuestion } from "./ShellAskQuestion";
 import { ShellShareModal } from "./ShellShareModal";
 import { ShellNewSession } from "./ShellNewSession";
-import { myDisplayName } from "../lib/participant";
+import { myDisplayName, isPeerClient, useMounted } from "../lib/participant";
 
 // Center pane (Phase 3): the active session rendered as a chat thread + composer
 // (mockup's center). Reads everything from the providers — header, stats,
@@ -24,6 +24,9 @@ export function ShellCenterPane() {
   const { selectedId, setSelected } = useSelectedSession();
   const { participants, setTyping } = usePresence(selectedId);
   const [shareOpen, setShareOpen] = useState(false);
+  // Peers reach the share dialog in peerMode (no tunnel control; only full peers
+  // ever see the trigger). Mount-gated to keep hydration stable.
+  const peerMode = useMounted() && isPeerClient();
   // Stable so the memoized transcript isn't re-rendered by every presence beat.
   const onLoadMore = useCallback(() => void active.loadMore(), [active]);
 
@@ -83,7 +86,7 @@ export function ShellCenterPane() {
       <ShellAskQuestion />
       <ShellComposer setTyping={setTyping} />
 
-      <ShellShareModal open={shareOpen} sessionId={selectedId} onClose={() => setShareOpen(false)} />
+      <ShellShareModal open={shareOpen} sessionId={selectedId} onClose={() => setShareOpen(false)} peerMode={peerMode} />
     </div>
   );
 }

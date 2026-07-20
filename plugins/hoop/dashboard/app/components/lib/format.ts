@@ -2,6 +2,30 @@ export function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
+/** Display form of a tool name: strip the noisy `mcp__<server>__` prefix so the
+ * actual tool (the signal) survives truncation on narrow screens. E.g.
+ * `mcp__plugin_hoop_tools__enter_plan_mode` → `enter_plan_mode`,
+ * `mcp__playwright__browser_navigate` → `browser_navigate`. Non-MCP names
+ * (`Bash`, `Read`) pass through unchanged. Keep the full name for a title/tooltip. */
+export function prettyToolName(name: string): string {
+  const m = /^mcp__.+?__(.+)$/.exec(name);
+  return m ? m[1] : name;
+}
+
+/** Human label for a two-letter country code from the peer-join edge lookup.
+ * Real ISO codes render as a flag emoji + code (e.g. "🇺🇸 US"); Cloudflare's
+ * "T1" (Tor) is spelled out as a distinct signal; anything else is dropped. */
+export function countryLabel(code: string | null | undefined): string | null {
+  if (!code) return null;
+  const c = code.toUpperCase();
+  if (c === "T1") return "Tor";
+  if (!/^[A-Z]{2}$/.test(c)) return null;
+  const flag = String.fromCodePoint(
+    ...[...c].map((ch) => 0x1f1e6 + (ch.charCodeAt(0) - 65)),
+  );
+  return `${flag} ${c}`;
+}
+
 export function textOf(v: unknown): string {
   if (v == null) return "(empty)";
   if (typeof v === "string") return v;

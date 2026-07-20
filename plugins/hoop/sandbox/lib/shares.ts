@@ -249,10 +249,16 @@ export function validateShareById(
   return { ok: true, record: r };
 }
 
-/** Capability gate: does this capability permit the given action class? */
+/** Capability gate: does this capability permit the given action class?
+ *
+ * "admit" (admit/deny a pending peer join, and see the pending-join list) is a
+ * full-only action: it lets a trusted co-driver bring another peer into the
+ * SAME session, mirroring the host's admit gate. drive/spectate can never
+ * admit. Because "full" already permits every action, adding "admit" needs no
+ * per-case branch — it's spelled out in the union so callers are explicit. */
 export function capabilityAllows(
   capability: ShareCapability,
-  action: "turn" | "bash" | "permission",
+  action: "turn" | "bash" | "permission" | "admit",
 ): boolean {
   switch (capability) {
     case "full":

@@ -11,11 +11,12 @@ export const dynamic = "force-dynamic";
 /**
  * A peer deliberately leaves the shared session (the "Leave session" action).
  *
- * Unlike an accidental tab close (which the presence beacon + grace/watchdog
- * handle), this is unambiguous, so we act at once:
- *   1. emit the `PeerLeft` transcript marker immediately (no grace delay);
- *   2. drop the peer from presence SILENTLY, so the grace/watchdog path doesn't
- *      also emit — this call is the single source of the marker;
+ * This is the SINGLE source of a durable `PeerLeft` transcript marker: only an
+ * explicit leave produces one. (An accidental tab close or a backgrounded tab
+ * merely dims the avatar and, eventually, drops it from the roster silently —
+ * never a marker.) Being unambiguous, we act at once:
+ *   1. emit the `PeerLeft` transcript marker immediately;
+ *   2. drop the peer from the presence roster;
  *   3. clear the durable peer cookie, so returning requires the share link and
  *      the host's admit gate again (i.e. a real, gated rejoin — and a leaked
  *      link still faces a deny).
@@ -32,10 +33,10 @@ export async function POST(req: NextRequest) {
   const name = boundedString(body?.name, 80);
 
   if (sessionId) {
-    leave(sessionId, `peer:${who.shareId}`, { silent: true });
+    leave(sessionId, `peer:${who.shareId}`);
     // Best-effort audit marker; a sandbox blip must not block the peer's exit.
     try {
-      await client.peerLeave(sessionId, name);
+      await client.peerLeave(sessionId, name, who.shareId);
     } catch { /* non-fatal */ }
   }
 

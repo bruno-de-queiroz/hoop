@@ -25,6 +25,12 @@ interface JoinTicket {
   shareId: string;
   sessionId: string;
   peerName: string | null;
+  /** Best-effort public IP of the joiner (from the tunnel edge), shown to the
+   * decider in the admit prompt. Informational only — never an auth input. */
+  peerIp: string | null;
+  /** Two-letter country of the joiner's IP (Cloudflare CF-IPCountry), or "T1"
+   * for Tor. Informational, paired with peerIp. */
+  peerCountry: string | null;
   status: JoinStatus;
   createdAt: number;
 }
@@ -58,6 +64,8 @@ export function createJoinTicket(opts: {
   shareId: string;
   sessionId: string;
   peerName: string | null;
+  peerIp?: string | null;
+  peerCountry?: string | null;
 }): { ticketId: string; secret: string } {
   sweep();
   // Backstop: if we're at the cap, drop the oldest pending entry.
@@ -73,6 +81,8 @@ export function createJoinTicket(opts: {
     shareId: opts.shareId,
     sessionId: opts.sessionId,
     peerName: opts.peerName,
+    peerIp: opts.peerIp ?? null,
+    peerCountry: opts.peerCountry ?? null,
     status: "pending",
     createdAt: Date.now(),
   });
@@ -84,6 +94,19 @@ export function joinStatus(ticketId: string): JoinStatus | "expired" {
   sweep();
   const t = tickets.get(ticketId);
   return t ? t.status : "expired";
+}
+
+/** Non-consuming lookup used by the admit/deny authorization gate: resolve a
+ * ticket's session (and share) so the caller can scope a full-capability peer
+ * to admitting only joins for the session they're actually in. Returns null for
+ * unknown/expired tickets. */
+export function getJoinTicket(
+  ticketId: string,
+): { shareId: string; sessionId: string; peerName: string | null; status: JoinStatus } | null {
+  sweep();
+  const t = tickets.get(ticketId);
+  if (!t) return null;
+  return { shareId: t.shareId, sessionId: t.sessionId, peerName: t.peerName, status: t.status };
 }
 
 /** Host admits a pending join. No-op (false) if unknown/expired/not-pending. */
@@ -121,7 +144,7 @@ export function claimJoin(ticketId: string, secret: string): { shareId: string; 
 }
 
 /** Pending joins for the host's Admit/Deny UI (no secrets). */
-export function listPendingJoins(): Array<{ ticketId: string; shareId: string; sessionId: string; peerName: string | null; createdAt: number }> {
+export function listPendingJoins(): Array<{ ticketId: string; shareId: string; sessionId: string; peerName: string | null; peerIp: string | null; peerCountry: string | null; createdAt: number }> {
   sweep();
   return [...tickets.values()]
     .filter((t) => t.status === "pending")

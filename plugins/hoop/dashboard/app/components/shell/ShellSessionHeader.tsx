@@ -8,7 +8,7 @@ import { useSessions } from "@/app/context/SessionsProvider";
 import { useSharingLive } from "@/app/context/hooks/useSharingLive";
 import { useCenterFullscreen } from "./ShellChrome";
 import { sessionDisplayLabel } from "../lib/format";
-import { isHostClient, isPeerClient, useMounted } from "../lib/participant";
+import { isHostClient, isPeerClient, canAdmitPeers, useMounted } from "../lib/participant";
 import { cn } from "../ui/cn";
 
 // Center-pane header (Phase 3): lifecycle dot, session name (click to rename),
@@ -55,6 +55,9 @@ export function ShellSessionHeader({
   const mounted = useMounted();
   const isHost = mounted ? isHostClient() : true;
   const isPeer = mounted && isPeerClient();
+  // Host OR a full-capability peer (co-host) may open the Share dialog to
+  // mint/manage links. Defaults to true pre-mount (server renders as host).
+  const canShare = mounted ? canAdmitPeers() : true;
   // For a peer, name the host from the presence roster ("shared by X").
   const hostName = participants.find((p) => p.kind === "host")?.name ?? null;
   const { fullscreen, toggle: toggleFullscreen } = useCenterFullscreen();
@@ -240,7 +243,7 @@ export function ShellSessionHeader({
             <span className="w-1.5 h-1.5 rounded-full bg-wrap motion-safe:animate-pulse" /> live
           </span>
         )}
-        {isHost && session && (
+        {canShare && session && (
           <button className="icon-btn w-8 h-8" title="Share" onClick={onShare}>
             <Share2 className="w-4 h-4" />
           </button>

@@ -455,6 +455,37 @@ describe("proxy — peer (share) path", () => {
     expect(setCookie).not.toContain("hoop_token=");
   });
 
+  it("peer landing on bare root is redirected to their bound session", async () => {
+    const t = await mkPeerToken(); // ses: "sess-1"
+    const res = await mod.proxy(new NextRequest(`https://${TUNNEL_HOST}/`, {
+      method: "GET",
+      headers: { host: TUNNEL_HOST, origin: `https://${TUNNEL_HOST}`, cookie: `hoop_peer=${t}` },
+    }));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe(`https://${TUNNEL_HOST}/?session=sess-1`);
+  });
+
+  it("peer on root WITH their bound session param passes through (no redirect)", async () => {
+    const t = await mkPeerToken();
+    const res = await mod.proxy(new NextRequest(`https://${TUNNEL_HOST}/?session=sess-1`, {
+      method: "GET",
+      headers: { host: TUNNEL_HOST, origin: `https://${TUNNEL_HOST}`, cookie: `hoop_peer=${t}` },
+    }));
+    expect(res.status).not.toBe(307);
+    expect(res.headers.get("x-middleware-request-x-hoop-participant")).toBe("peer:share-1");
+  });
+
+  it("peer on root with a DIFFERENT session id is rejected 403 (page-level scope)", async () => {
+    const t = await mkPeerToken(); // bound to ses: "sess-1"
+    const res = await mod.proxy(new NextRequest(`https://${TUNNEL_HOST}/?session=sess-OTHER`, {
+      method: "GET",
+      headers: { host: TUNNEL_HOST, origin: `https://${TUNNEL_HOST}`, cookie: `hoop_peer=${t}` },
+    }));
+    expect(res.status).toBe(403);
+    // Must not have rendered as a peer for the wrong session.
+    expect(res.headers.get("x-middleware-request-x-hoop-participant")).toBeNull();
+  });
+
   it("redeem + join endpoints are reachable without a cookie", async () => {
     const redeem = await mod.proxy(new NextRequest(`https://${TUNNEL_HOST}/api/share/redeem`, {
       method: "POST",

@@ -78,6 +78,10 @@ describe("shares registry", () => {
     expect(mod.capabilityAllows("drive", "turn")).toBe(true);
     expect(mod.capabilityAllows("drive", "bash")).toBe(false);
     expect(mod.capabilityAllows("spectate", "turn")).toBe(false);
+    // "admit" (bring another peer into the session) is full-only.
+    expect(mod.capabilityAllows("full", "admit")).toBe(true);
+    expect(mod.capabilityAllows("drive", "admit")).toBe(false);
+    expect(mod.capabilityAllows("spectate", "admit")).toBe(false);
   });
 
   it("discards shares on reload (no dangling links across a restart)", async () => {
