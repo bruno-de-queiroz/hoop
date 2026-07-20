@@ -74,6 +74,8 @@ function _shortlist() {
   if [[ -f "${MODULES_DIR}/${module}.sh" ]]; then
     all=("${all[@]:1}")
     "${MODULES_DIR}/${module}.sh" shortlist "${all[@]}"
+  elif [[ "$module" == "logs" ]]; then
+	echo ""
   elif [[ "$module" == "help" ]]; then
     _default_shortlist "$@"
     [[ -z "${all[1]}" ]] && echo "$LIFECYCLE_VERBS $MODULES"
