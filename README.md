@@ -1,7 +1,5 @@
 <p align="center">
-  <video src="https://github.com/bruno-de-queiroz/hoop/releases/download/demo-assets/hoop-showcase.mp4" autoplay loop muted playsinline width="900">
-    <img src="docs/logo.svg" alt="hoop" width="224" height="88">
-  </video>
+  <img src="docs/logo.svg" alt="hoop" width="224" height="88">
 </p>
 
 # hoop
