@@ -1,5 +1,7 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="hoop" width="224" height="88">
+  <video src="https://github.com/user-attachments/assets/fb83fe08-1ee2-4dca-b4d2-bf8800300f70" autoplay loop muted playsinline width="900">
+    <img src="docs/logo.svg" alt="hoop" width="224" height="88">
+  </video>
 </p>
 
 # hoop
