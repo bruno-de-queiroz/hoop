@@ -6,9 +6,10 @@ import { useSSE } from "./useSSE";
 /**
  * Sticky banner at the top of the dashboard when the sandbox claude has
  * returned an auth failure (stderr matched `401|unauthorized|invalid
- * auth|claude login`). The user runs `claude login` on host; the
- * hoop Stop hook re-seeds the sandbox; the next successful turn
- * (`sessions` SSE refresh or any normal `event` SSE) clears the banner.
+ * auth|claude login`). The user runs `hoop login`, which re-authenticates the
+ * sandbox's OWN Claude account (paste-code flow inside the container); the next
+ * successful turn (`sessions` SSE refresh or any normal `event` SSE) clears the
+ * banner. The host's Claude credentials are never involved.
  *
  * Why a banner instead of an inline error: auth failure spans every
  * future turn, not just the one that emitted it. Putting the message
@@ -26,7 +27,7 @@ export function AuthBanner() {
   const dismiss = useCallback(() => setShown(false), []);
   const copy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText("claude login");
+      await navigator.clipboard.writeText("hoop login");
       setCopied(true);
       // Brief visual confirmation, then revert so the icon stays clickable
       // if the user copies again (e.g. they pasted in the wrong window).
@@ -63,14 +64,14 @@ export function AuthBanner() {
         <div className="text-xs text-ink-mute mt-0.5">
           Run{" "}
           <code className="px-1.5 py-0.5 rounded bg-sunken border border-divider font-mono text-ink">
-            claude login
+            hoop login
           </code>{" "}
-          in any host terminal. The sandbox auto-syncs on the next host claude turn.
+          in your terminal to re-authenticate the sandbox. It signs in with its own Claude account.
         </div>
       </div>
       <button
         onClick={copy}
-        title={copied ? "Copied!" : "Copy `claude login` to clipboard"}
+        title={copied ? "Copied!" : "Copy `hoop login` to clipboard"}
         className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-control border border-fail/40 text-ink-soft hover:bg-fail/15 hover:text-ink text-xs transition-colors"
       >
         {copied ? <Check size={12} /> : <Copy size={12} />}

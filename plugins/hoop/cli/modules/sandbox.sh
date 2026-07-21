@@ -30,11 +30,14 @@ function rebuild() {
 function update() {
   _hs_require_host || return $?
   _hs_preflight_common || return 1
-  _requires npm
   local version="$SANDBOX_CLAUDE_VERSION"
   if [[ -z "$version" ]]; then
-    version="$(npm view @anthropic-ai/claude-code version 2>/dev/null)"
-    [[ -n "$version" ]] || _die "could not resolve latest @anthropic-ai/claude-code version from npm"
+    # Resolve the latest version WITHOUT host npm — run npm inside the sandbox
+    # image (Node is baked in), keeping the host Docker-only.
+    docker image inspect "$HS_IMAGE_SANDBOX" >/dev/null 2>&1 \
+      || _die "sandbox image not built yet — run 'hoop start' first, or pass -c <version>"
+    version="$(docker run --rm --entrypoint npm "$HS_IMAGE_SANDBOX" view @anthropic-ai/claude-code version 2>/dev/null | tr -d '[:space:]')"
+    [[ -n "$version" ]] || _die "could not resolve latest @anthropic-ai/claude-code version (need network + the sandbox image; or pass -c <version>)"
   fi
   _info "pinning claude-code ${version} into the sandbox image"
   # Run the same host-side preflight as start/rebuild so the recreated container

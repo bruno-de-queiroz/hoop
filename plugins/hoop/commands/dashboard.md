@@ -45,8 +45,8 @@ Argument (default: `start`). These operate on the **whole stack** (both `agent-s
 ## First-launch notes (relay to user verbatim if asked)
 
 - First start builds the images (~1-2 min). Subsequent starts are seconds because `start` no longer forces a rebuild — run `rebuild` (optionally `rebuild dashboard` / `rebuild sandbox`) after changing code.
-- The container mounts `~/.claude/` (auth, hoop state) and the plugin source (read-only) so skills and bridges are visible.
-- Skill "Run" triggers spawn `claude -p '/skill-name'` **inside the dashboard container** so your host process tree stays clean.
+- The **agent-sandbox** container bind-mounts only the sandbox Claude profile (`~/.claude/hoop/sandbox/profile`) — never your host `~/.claude`. The hoop plugin is baked into the image at `/opt/hoop`, so no host repo or host Claude Code is required. The **dashboard** is claude-less and talks to the sandbox over a shared Unix socket.
+- Skill "Run" triggers spawn `claude -p '/skill-name'` **inside the agent-sandbox container** (the dashboard has no claude) so your host process tree stays clean.
 
 ---
 

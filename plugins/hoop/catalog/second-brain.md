@@ -122,12 +122,7 @@ cat ~/.claude/installed_plugins.json | grep -i notion
 claude mcp add --scope user --transport http notion https://mcp.notion.com/mcp
 ```
 
-Then in Claude Code:
-```
-/mcp
-```
-
-Follow the OAuth flow.
+**Authenticate (end of setup, in the sandbox):** `hoop install setup` runs `claude mcp login notion --no-browser` at the end — open the printed URL, approve, paste the redirect URL back. (Or run `/mcp` inside a session.)
 
 **Verify:**
 ```bash

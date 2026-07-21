@@ -71,6 +71,38 @@ chmod 0770 "$RUN_DIR"
 # canonical paths.
 export HOME="$HOME_DIR"
 
+# --- Seed the sandbox Claude profile (idempotent, runs as `agent`) -----------
+# Ports the former host-side jq wiring (onboarding bypass, hoop plugin
+# install+enable, sandbox-only hook wiring, playwright deny) INTO the container.
+# Node is baked into this image; jq is not — so this is what lets the HOST run
+# `hoop start` with nothing but Docker. Merge-safe: never clobbers a logged-in
+# identity (oauthAccount / mcpServers preserved).
+if [ -f /usr/local/lib/hoop/seed-profile.mjs ]; then
+  gosu agent env HOME="$HOME_DIR" node /usr/local/lib/hoop/seed-profile.mjs \
+    || echo "[entrypoint] WARNING: profile seeding failed"
+fi
+
+# --- Docker Model Runner (Compose `models:`) endpoint shim -------------------
+# When `hoop install setup` wires DMR via Compose's `models:` element, Compose
+# injects HOOP_MODEL_ENDPOINT / HOOP_MODEL_NAME into this container. Map them to
+# the EMBEDDING_* vars the embedder reads (sandbox/lib/embeddings.ts uses the
+# OpenAI SDK with baseURL = EMBEDDING_BASE_URL, so the base must be an
+# OpenAI-compatible root). An explicit endpoint (Ollama/OpenAI/custom, forwarded
+# from hoop.env) always wins — only fill in when nothing else is configured.
+if [ -z "${EMBEDDING_BASE_URL:-}" ] && [ -z "${OPENAI_API_KEY:-}" ] && [ -n "${HOOP_MODEL_ENDPOINT:-}" ]; then
+  _ep="${HOOP_MODEL_ENDPOINT%/}"
+  # Normalize to an OpenAI-compatible base: DMR may inject a bare host:port or a
+  # full engines path. If it's neither an engines path nor a `/v1` root, append
+  # the DMR OpenAI base so the SDK's `${base}/embeddings` resolves correctly.
+  case "$_ep" in
+    */engines/*|*/v1) : ;;
+    *) _ep="$_ep/engines/v1" ;;
+  esac
+  export EMBEDDING_BASE_URL="$_ep"
+  [ -n "${EMBEDDING_MODEL:-}" ] || export EMBEDDING_MODEL="${HOOP_MODEL_NAME:-ai/nomic-embed-text-v1.5}"
+  echo "[entrypoint] embeddings: Compose model runner -> ${EMBEDDING_BASE_URL} (${EMBEDDING_MODEL})"
+fi
+
 # --- Telemetry isolation (opt-in, configured via /hoop:setup → hoop.env) ---
 #
 # One master switch, off by default so the shipped image and the open-source

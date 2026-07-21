@@ -40,18 +40,22 @@ The recommendation is shown next to the option in the menu, but the user picks f
 
 **Prereqs:** `uv` package manager (`pip install uv` or `brew install uv`). Python 3.13.
 
-**Install (auto-runnable):**
+**Install (auto-runnable, two steps):**
 ```bash
-uv tool install -p 3.13 serena-agent@latest --prerelease=allow
+# 1. Install the Serena CLI (uv is baked into the sandbox image).
+uv tool install -p 3.13 serena-agent
+# 2. Register the launch command with Claude Code (user scope).
+claude mcp add --scope user serena -- serena start-mcp-server --context claude-code --project-from-cwd
 ```
 
-Then per Serena's docs, configure your Claude Code client. The exact configuration step is client-specific; the setup wizard prints the relevant docs URL and waits for the user to confirm completion before continuing.
+`hoop install setup` runs both steps automatically inside the sandbox.
 
-**Important:** Serena's README explicitly says **do not** install via plain `claude mcp add` or plugin marketplace; their commands there are outdated. Use the `uv tool install` path above.
+**Important:** Serena's README warns against installing **Serena itself** via a plugin/marketplace entry (those snippets are outdated). It does **not** warn against `claude mcp add` — registering the `serena start-mcp-server` launch command as above is Serena's own documented Claude Code setup. Note the `--context claude-code` flag: the deprecated `--context ide-assistant` and the `uvx --from git+https://github.com/oraios/serena …` variant still work but are slower/older.
 
 **Verify:**
 ```bash
-which serena-agent
+which serena          # installed CLI on PATH
+claude mcp list        # serena listed; also /mcp inside a session
 ```
 
 **Notes:** First symbol indexing per project is slow. Subsequent queries are fast.

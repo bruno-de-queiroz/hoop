@@ -35,15 +35,12 @@ services:
         source: hoop-run
         target: /var/run/hoop
 
-      # Plugin source (read-only) so the sandbox can enumerate installed
-      # plugins for `--plugin-dir` resolution. Mounted under /opt where only
-      # root has access — the model running as `agent` cannot reach it,
-      # cannot tamper with hook scripts, and cannot confuse the read-only
-      # plugin tree with its own writable workdir.
-      - type: bind
-        source: ${HOOP_PLUGIN_ROOT:-..}
-        target: /opt/hoop
-        read_only: true
+      # NOTE: the hoop plugin surface (.mcp.json, hooks/scripts, commands,
+      # agents) is now BAKED into the image at /opt/hoop (see sandbox/Dockerfile),
+      # root-owned so the `agent` user can't tamper with hook scripts. No host
+      # bind-mount needed — the image is self-contained. For live-editing plugin
+      # source in development, set HOOP_PLUGIN_DEV=1: the hoop CLI generates an
+      # override that overlays the host repo back onto /opt/hoop (read-only).
 
     environment:
       HOOP_PLUGIN_ROOT: /opt/hoop
@@ -76,9 +73,17 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       HOOP_EMBED_HOSTED_CONSENT: ${HOOP_EMBED_HOSTED_CONSENT:-}
-      # GitHub CLI auth for the sandbox agent — the launcher forwards the token
-      # for the host gh account chosen in /hoop:setup. Absent → gh unauthenticated.
+      # GitHub CLI auth for the sandbox agent. Primary path: `hoop install setup`
+      # runs `gh auth login` (device flow) INSIDE the sandbox, so the token lives
+      # in the mounted profile (~/.config/gh) and no host gh is needed. GH_TOKEN
+      # stays as an optional legacy fallback — set only if HOOP_GH_ACCOUNT is
+      # configured and host gh is present. Absent → gh uses the profile login.
       GH_TOKEN: ${GH_TOKEN:-}
+      # Google Workspace (gws) credentials. gws has no headless browser-callback
+      # flow, so `hoop install setup` wires a GCP service-account key: it copies
+      # the key into the mounted profile and points gws at it here. The gws CLI is
+      # baked into the image; absent → gws unconfigured. (Container-side path.)
+      GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: ${GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE:-}
     # (Browser automation runs fully in-container via @playwright/mcp; the
     # browser path + MCP CLI path are baked into the image as ENV in
     # sandbox/Dockerfile — no compose env needed here.)

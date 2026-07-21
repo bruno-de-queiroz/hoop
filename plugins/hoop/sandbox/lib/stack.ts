@@ -49,9 +49,10 @@ function readInstalledPlugins(): InstalledPlugin[] {
   }
 }
 
+// claude-mem is hoop's only supported memory backend (the sole store the
+// dashboard Summary rail reads), so detection targets it specifically.
 function pickMemoryPlugin(plugins: InstalledPlugin[]) {
-  const memoryNames = new Set(["claude-mem", "mem0", "mcp-memory-service", "mempalace"]);
-  const hit = plugins.find((p) => memoryNames.has(p.name.toLowerCase()));
+  const hit = plugins.find((p) => p.name.toLowerCase() === "claude-mem");
   return hit ? { plugin: hit.name, version: hit.version } : null;
 }
 

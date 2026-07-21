@@ -3,8 +3,13 @@
 // vector and inserts it into events_vec with a BigInt rowid.
 //
 // Usage (inside the sandbox container, where better-sqlite3/sqlite-vec are the
-// linux builds and the embedding env is present):
-//   node /opt/hoop/sandbox/scripts/backfill-embeddings.mjs
+// linux builds and the embedding env is present). The plugin is baked into the
+// image but the sandbox/ source tree is not, so pass this file in — either copy
+// it in first:
+//   docker cp plugins/hoop/sandbox/scripts/backfill-embeddings.mjs hoop-agent-sandbox-1:/tmp/ \
+//     && docker exec hoop-agent-sandbox-1 node /tmp/backfill-embeddings.mjs
+// or run with the dev overlay (HOOP_PLUGIN_DEV=1), which mounts the repo at
+// /opt/hoop, then: node /opt/hoop/sandbox/scripts/backfill-embeddings.mjs
 //
 // Env: EMBEDDING_BASE_URL, EMBEDDING_MODEL (same vars the app uses).
 

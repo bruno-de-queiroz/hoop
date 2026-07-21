@@ -152,6 +152,11 @@ ENV HOOP_SANDBOX_SOCKET=/var/run/hoop/sandbox.sock
 COPY sandbox/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Node profile-seeder run by the entrypoint on every boot (idempotent). Ports
+# the former host-side jq wiring into the container so the HOST needs no jq —
+# see sandbox/seed-profile.mjs. Stable layer alongside the entrypoint.
+COPY sandbox/seed-profile.mjs /usr/local/lib/hoop/seed-profile.mjs
+
 WORKDIR /app
 
 # Production deps only; build deps stay in the build stage. Rare to change
@@ -168,6 +173,33 @@ RUN --mount=type=cache,target=/root/.npm npm install --omit=dev --no-audit --no-
 # the dist COPY below — not bun, gh, uv, or the deps compile. Cache-mounted so
 # the download is reused even when the layer busts.
 RUN --mount=type=cache,target=/root/.npm npm install -g @anthropic-ai/claude-code @googleworkspace/cli
+
+# --- hoop plugin surface, BAKED IN (self-contained; no host bind-mount) ------
+# The sandbox loads /opt/hoop as a claude `--plugin-dir` (HOOP_PLUGIN_ROOT):
+# it supplies the .mcp.json "tools" server (mcp/tools-server.mjs) and the
+# event/permission hook scripts the seeded settings.json points at
+# (hooks/scripts/*.sh). Baking it — vs. the old read-only bind-mount of the host
+# repo — makes the image runnable on a host that has neither the repo at a fixed
+# path nor Claude Code installed.
+#
+# We bake ONLY what the in-sandbox claude actually consumes: the plugin manifest,
+# the tools MCP server, and the hooks. Deliberately NOT baked:
+#   - commands/  — the hoop slash commands (setup/dashboard/add/mount) drive the
+#                  host stack; inside the sandbox they're meaningless (and would
+#                  be surfaced by the dashboard's command browser). `/plan` is a
+#                  sandbox builtin (see lib/commands.ts), not the plugin command.
+#   - agents/    — stack-doctor diagnoses the HOST install; no use in-sandbox.
+#   - catalog/, templates/ — read only by `hoop install setup`, which runs on the
+#                  HOST from HOOP_PLUGIN_ROOT (the plugin package), never here.
+# (HOOP_PLUGIN_DEV=1 still overlays the full host repo for live plugin dev.)
+#
+# Left root-owned (no --chown): the agent user (uid 1100) can't modify the hook
+# scripts — the same posture `read_only: true` gave — while the files stay
+# world-readable/executable so the agent can read the plugin and exec the hooks.
+COPY .claude-plugin /opt/hoop/.claude-plugin
+COPY .mcp.json      /opt/hoop/.mcp.json
+COPY hooks          /opt/hoop/hooks
+COPY mcp            /opt/hoop/mcp
 
 # Compiled server bundle — changes on every source edit, so it's the last
 # content layer. --chown lands it as agent:hoop without a recursive re-chown.

@@ -19,6 +19,7 @@ function _hs_recreate_sandbox() {
 function add() {
   _hs_require_host || return $?
   _requires docker
+  _requires awk
   [ -n "$MOUNT_PATH" ] || _die "usage: hoop mount add -p <host-path> [-n <name>]"
   local host; host="$(cd "$MOUNT_PATH" 2>/dev/null && pwd)" || _die "not a directory: $MOUNT_PATH"
   [ -d "$host" ] || _die "not a directory: $MOUNT_PATH"
@@ -54,6 +55,7 @@ function list() {
 #@public ~ remove a previously mounted folder by name (recreates the container)
 function remove() {
   _hs_require_host || return $?
+  _requires awk
   local name="${1:-}"
   [ -n "$name" ] || _die "usage: hoop mount remove <name>"
   [ -s "$HS_SANDBOX_MOUNTS_LIST" ] || _die "no mounts configured"
