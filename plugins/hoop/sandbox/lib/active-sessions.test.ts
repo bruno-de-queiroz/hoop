@@ -1846,7 +1846,7 @@ describe("stderr parser: auth failure detection", () => {
 
     const auth = errors.find((e) => e.kind === "auth");
     expect(auth).toBeDefined();
-    expect(auth.message).toMatch(/claude login/i);
+    expect(auth.message).toMatch(/hoop login/i);
   });
 
   it("matches `claude login` recommendation text from claude itself", async () => {

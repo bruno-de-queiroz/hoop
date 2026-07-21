@@ -1939,7 +1939,7 @@ async function spawnControllable(opts: SpawnOpts): Promise<{ sessionId: string; 
       activeSessionsBus.emit("error", {
         sessionId,
         kind: "auth",
-        message: "sandbox authentication failed — run `claude login` on host",
+        message: "sandbox authentication failed — run `hoop login`",
       });
       log.warn("active-sessions", "auth failure detected from claude stderr", {
         sessionId,

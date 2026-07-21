@@ -38,7 +38,7 @@ describe("AuthBanner", () => {
     expect(screen.getByText(/sandbox lost authentication/i)).toBeInTheDocument();
     // The recovery command is rendered inline so the user can read it
     // without copying.
-    expect(screen.getByText("claude login")).toBeInTheDocument();
+    expect(screen.getByText("hoop login")).toBeInTheDocument();
   });
 
   it("ignores session-error events whose kind is NOT auth (e.g. spawn failures)", () => {
@@ -70,11 +70,11 @@ describe("AuthBanner", () => {
     expect(screen.queryByTestId("auth-banner")).toBeNull();
   });
 
-  it("Copy button writes `claude login` to the clipboard", async () => {
+  it("Copy button writes `hoop login` to the clipboard", async () => {
     render(<AuthBanner />);
     act(() => handlers["session-error"]({ kind: "auth" }));
     fireEvent.click(screen.getByRole("button", { name: /copy/i }));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("claude login");
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("hoop login");
   });
 
   it("Dismiss button hides the banner without a successful event", () => {
