@@ -189,7 +189,7 @@ RUN --mount=type=cache,target=/root/.npm npm install -g @anthropic-ai/claude-cod
 #                  be surfaced by the dashboard's command browser). `/plan` is a
 #                  sandbox builtin (see lib/commands.ts), not the plugin command.
 #   - agents/    — stack-doctor diagnoses the HOST install; no use in-sandbox.
-#   - catalog/, templates/ — read only by `hoop install setup`, which runs on the
+#   - catalog/, templates/ — read only by `hoop setup`, which runs on the
 #                  HOST from HOOP_PLUGIN_ROOT (the plugin package), never here.
 # (HOOP_PLUGIN_DEV=1 still overlays the full host repo for live plugin dev.)
 #

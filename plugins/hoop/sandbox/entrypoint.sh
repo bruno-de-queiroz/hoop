@@ -83,7 +83,7 @@ if [ -f /usr/local/lib/hoop/seed-profile.mjs ]; then
 fi
 
 # --- Docker Model Runner (Compose `models:`) endpoint shim -------------------
-# When `hoop install setup` wires DMR via Compose's `models:` element, Compose
+# When `hoop setup` wires DMR via Compose's `models:` element, Compose
 # injects HOOP_MODEL_ENDPOINT / HOOP_MODEL_NAME into this container. Map them to
 # the EMBEDDING_* vars the embedder reads (sandbox/lib/embeddings.ts uses the
 # OpenAI SDK with baseURL = EMBEDDING_BASE_URL, so the base must be an

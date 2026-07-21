@@ -48,7 +48,7 @@ uv tool install -p 3.13 serena-agent
 claude mcp add --scope user serena -- serena start-mcp-server --context claude-code --project-from-cwd
 ```
 
-`hoop install setup` runs both steps automatically inside the sandbox.
+`hoop setup` runs both steps automatically inside the sandbox.
 
 **Important:** Serena's README warns against installing **Serena itself** via a plugin/marketplace entry (those snippets are outdated). It does **not** warn against `claude mcp add` — registering the `serena start-mcp-server` launch command as above is Serena's own documented Claude Code setup. Note the `--context claude-code` flag: the deprecated `--context ide-assistant` and the `uvx --from git+https://github.com/oraios/serena …` variant still work but are slower/older.
 

@@ -8,6 +8,7 @@
 #   dashboard   control only the dashboard UI container
 #   sandbox     control only the agent-sandbox container (+ update)
 #   open        launch an interactive claude sandbox in the current directory
+#   setup       interactive wizard: configure the sandbox stack (native /hoop:setup)
 #
 # HOOP_DIR is always resolved from this script's own location (see below), so
 # the CLI works straight from the repo (./plugins/hoop/cli/hoop.sh ...) with no

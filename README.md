@@ -144,10 +144,11 @@ Two levels: **top-level verbs** act on the whole stack; **modules** scope a sing
 | `mount` | `add` · `list` · `remove` | Bind-mounts host folders into the sandbox workspace at `/home/agent/workspace/<name>`. `add -p\|--path <host-dir> [-n\|--name <name>]` adds one (the `-p` path tab-completes directories), `list` shows the configured mounts, `remove <name>` drops one. Mounts persist via a generated compose override; each `add`/`remove` **recreates the `agent-sandbox` container**. |
 | `install` | *(default)* | Bare `hoop install` symlinks `hoop` onto PATH + wires shell completion (`-f\|--force` reinstalls over an existing symlink). The repo itself is never modified; `hoop uninstall` removes the symlink and shell wiring. |
 | `setup` | *(default)* | Runs the **interactive stack wizard** (the native port of `/hoop:setup`): boots the sandbox, then walks memory / code-graph / automation / platform MCPs / docs RAG / semantic search / observability / design / second-brain / telemetry, installing each pick into the sandbox profile. Auto/secret MCPs run via `claude mcp add`; OAuth/plugin/host-CLI sign-ins complete at the end inside the sandbox. Needs a TTY (refuses head-less), runs before `hoop login`, writes `profile.md` + `install-log.md`. `--reset-first` wipes all sandbox state for a blank slate first. |
+| `doctor` | *(default)* | **Read-only health check** of the host + stack through a Docker-only-standalone lens: verifies Docker + Compose v2, reports which optional subcommand tools (`jq`/`curl`/`awk`) are present, checks the sandbox image/containers, Claude auth, and the semantic-search backend (incl. the DMR Compose `models:` override + reachability). Fails only on truly blocking problems; everything else is advisory. |
 
 ```bash
 hoop start                    # bring up the whole stack at http://localhost:7842/
-hoop setup            # interactive wizard: configure the sandbox stack (no host Claude Code needed)
+hoop setup                    # interactive wizard: configure the sandbox stack (no host Claude Code needed)
 hoop login                    # one-time: authenticate the sandbox with its own Claude account
 hoop dashboard rebuild        # rebuild + recreate ONLY the dashboard container
 hoop sandbox rebuild          # rebuild + recreate ONLY the agent-sandbox container
@@ -264,7 +265,7 @@ hoop/
       oo.sh                              oosh framework engine
       hoop.sh                            entry point (+ hoop.comp.sh / hoop.zcomp.sh)
       lib/stack.sh                       the two-service runtime engine (preflight + compose)
-      modules/                           dashboard, sandbox, open, login, logout, add, mount, install, uninstall
+      modules/                           dashboard, sandbox, open, login, logout, add, mount, setup, doctor, install, uninstall
   README.md
   LICENSE
 ```

@@ -73,14 +73,14 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       HOOP_EMBED_HOSTED_CONSENT: ${HOOP_EMBED_HOSTED_CONSENT:-}
-      # GitHub CLI auth for the sandbox agent. Primary path: `hoop install setup`
+      # GitHub CLI auth for the sandbox agent. Primary path: `hoop setup`
       # runs `gh auth login` (device flow) INSIDE the sandbox, so the token lives
       # in the mounted profile (~/.config/gh) and no host gh is needed. GH_TOKEN
       # stays as an optional legacy fallback — set only if HOOP_GH_ACCOUNT is
       # configured and host gh is present. Absent → gh uses the profile login.
       GH_TOKEN: ${GH_TOKEN:-}
       # Google Workspace (gws) credentials. gws has no headless browser-callback
-      # flow, so `hoop install setup` wires a GCP service-account key: it copies
+      # flow, so `hoop setup` wires a GCP service-account key: it copies
       # the key into the mounted profile and points gws at it here. The gws CLI is
       # baked into the image; absent → gws unconfigured. (Container-side path.)
       GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: ${GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE:-}

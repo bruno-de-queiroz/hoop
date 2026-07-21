@@ -23,7 +23,7 @@ claude mcp add --scope user --transport http atlassian https://mcp.atlassian.com
 
 Endpoint choice matters: the legacy `/v1/sse` lost support after 30 June 2026, and `/v1/mcp/authv2` currently fails the Claude Code OAuth flow with "Invalid context provided" (anthropics/claude-code #69035). `/v1/mcp` with `--transport http` is the working endpoint.
 
-**Authenticate (end of setup, in the sandbox):** OAuth 2.1. `hoop install setup` runs `claude mcp login atlassian --no-browser` at the end — it prints an auth URL; open it in your browser, approve, and (since the localhost redirect can't reach the container) paste the address-bar redirect URL back at the prompt.
+**Authenticate (end of setup, in the sandbox):** OAuth 2.1. `hoop setup` runs `claude mcp login atlassian --no-browser` at the end — it prints an auth URL; open it in your browser, approve, and (since the localhost redirect can't reach the container) paste the address-bar redirect URL back at the prompt.
 
 **Verify:** Ask Claude `Find my open Jira tickets`. A non-empty list means it's connected.
 
@@ -39,7 +39,7 @@ Endpoint choice matters: the legacy `/v1/sse` lost support after 30 June 2026, a
 
 **Install:** nothing to install — `@googleworkspace/cli` is baked into the sandbox image (`sandbox/Dockerfile`). The host stays docker-only.
 
-**Auth model (why service-account, not `gws auth login`):** the current `gws` release (v0.22.x) only supports a localhost browser-callback OAuth flow — it starts a callback server on a *random* localhost port and blocks for the redirect. There is no `--no-browser`/device/paste flow and no way to pin the port (upstream issue #210). That callback can't round-trip to a headless container on Docker Desktop, so `hoop install setup` wires a **GCP service-account key** instead (gws's documented headless path via `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE`).
+**Auth model (why service-account, not `gws auth login`):** the current `gws` release (v0.22.x) only supports a localhost browser-callback OAuth flow — it starts a callback server on a *random* localhost port and blocks for the redirect. There is no `--no-browser`/device/paste flow and no way to pin the port (upstream issue #210). That callback can't round-trip to a headless container on Docker Desktop, so `hoop setup` wires a **GCP service-account key** instead (gws's documented headless path via `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE`).
 
 **Configure (auto-runnable):** the wizard prompts for a path to a service-account JSON key, copies it into the sandbox profile (`~/.claude/hoop/sandbox/profile/.config/gws/service-account.json`, mode 0600), and sets:
 
@@ -67,7 +67,7 @@ gws calendar events list --params '{"calendarId": "primary", "maxResults": 3}'
 
 **Install:** nothing on the host — `gh` is baked into the sandbox image.
 
-**Authenticate (sandbox device flow, at the end of setup):** `hoop install setup` runs, inside the sandbox:
+**Authenticate (sandbox device flow, at the end of setup):** `hoop setup` runs, inside the sandbox:
 
 ```bash
 gh auth login --hostname github.com --git-protocol https --web
@@ -94,7 +94,7 @@ gh repo list <your-org> --limit 5
 claude mcp add --scope user incident-io --transport http https://mcp.incident.io/mcp
 ```
 
-**Authenticate (end of setup, in the sandbox):** `hoop install setup` runs `claude mcp login incident-io --no-browser` at the end — open the printed URL, approve, paste the redirect URL back. No deferring to first tool use.
+**Authenticate (end of setup, in the sandbox):** `hoop setup` runs `claude mcp login incident-io --no-browser` at the end — open the printed URL, approve, paste the redirect URL back. No deferring to first tool use.
 
 **Verify:**
 ```bash
@@ -112,6 +112,6 @@ claude mcp add --scope user incident-io --transport http https://mcp.incident.io
 claude mcp add --scope user --transport http slack https://slack.com/mcp
 ```
 
-**Authenticate (end of setup, in the sandbox):** `hoop install setup` runs `claude mcp login slack --no-browser` at the end — open the printed URL, approve, paste the redirect URL back.
+**Authenticate (end of setup, in the sandbox):** `hoop setup` runs `claude mcp login slack --no-browser` at the end — open the printed URL, approve, paste the redirect URL back.
 
 **Verify:** Ask Claude `What's the latest in <a channel you're in>?` and confirm it can read.

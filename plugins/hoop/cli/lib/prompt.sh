@@ -2,7 +2,7 @@
 # prompt.sh — tiny interactive TTY helpers for the hoop CLI.
 #
 # oo.sh (the CLI framework) intentionally has no interactive primitives — it's a
-# flag/dispatch parser. The `hoop install setup` wizard needs menus, confirms,
+# flag/dispatch parser. The `hoop setup` wizard needs menus, confirms,
 # and secret reads, so those live here as a small sourced library.
 #
 # Contract: sourcing has NO side effects (only function defs + color fallbacks),
@@ -19,7 +19,7 @@
 # head-less (e.g. from Claude's Bash tool). Callers do `_p_require_tty || return`.
 _p_require_tty() {
   if [ ! -t 0 ]; then
-    printf '  %s✘%s  this is an interactive wizard — run `hoop install setup` in a terminal.\n' "$_RD" "$_RST" >&2
+    printf '  %s✘%s  this is an interactive wizard — run `hoop setup` in a terminal.\n' "$_RD" "$_RST" >&2
     return 1
   fi
 }

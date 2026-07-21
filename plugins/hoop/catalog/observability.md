@@ -23,7 +23,7 @@ This installs the MCP server AND a subagent that Claude auto-delegates to for Se
 claude mcp add --scope user sentry --transport http https://mcp.sentry.dev/mcp
 ```
 
-`hoop install setup` authenticates it at the end via `claude mcp login sentry --no-browser` (open the printed URL, approve, paste the redirect URL back) — no deferring to first tool use.
+`hoop setup` authenticates it at the end via `claude mcp login sentry --no-browser` (open the printed URL, approve, paste the redirect URL back) — no deferring to first tool use.
 
 **Install path C (self-hosted via stdio):**
 ```bash

@@ -1,6 +1,6 @@
 # Catalog: memory backend
 
-`hoop install setup` installs **claude-mem** unconditionally — there is no menu.
+`hoop setup` installs **claude-mem** unconditionally — there is no menu.
 It is the only supported memory backend because it is the sole store the
 dashboard Summary rail reads: `~/.claude-mem/claude-mem.db` (tables
 `session_summaries` + `sdk_sessions`). Other keepers (Mem0, mcp-memory-service,

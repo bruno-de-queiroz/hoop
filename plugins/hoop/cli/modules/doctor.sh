@@ -29,7 +29,7 @@ function _doctor() {
   else _d_fail "docker compose v2 missing — hoop needs the Compose v2 plugin (\`docker compose\`)"; fi
   # Beyond Docker, `hoop start` needs nothing (profile seeding runs in the sandbox;
   # the health wait falls back to /dev/tcp). The rest are per-subcommand tools with
-  # different tiers: jq is REQUIRED by `hoop install setup` + `hoop logout` (and used
+  # different tiers: jq is REQUIRED by `hoop setup` + `hoop logout` (and used
   # by `open`), awk is REQUIRED by `hoop mount`, curl is an optional nicety (DMR probe
   # + health wait, both degrade). Report compactly instead of a per-tool checklist.
   local dep missing_opt=""
@@ -80,7 +80,7 @@ function _doctor() {
   base="$(grep '^EMBEDDING_BASE_URL=' "$HS_ENV_FILE" 2>/dev/null | cut -d= -f2-)"
   if [ -f "$HS_SANDBOX_DMR_OVERRIDE" ]; then
     if ! _hs_compose_supports_models; then
-      _d_warn "Docker Model Runner wired via Compose 'models:' but docker compose < v2.38 can't parse it — 'hoop start' ignores the override and falls back to BM25 (upgrade Compose, or re-run 'hoop install setup')"
+      _d_warn "Docker Model Runner wired via Compose 'models:' but docker compose < v2.38 can't parse it — 'hoop start' ignores the override and falls back to BM25 (upgrade Compose, or re-run 'hoop setup')"
     elif _d_have curl && ! curl -fsS --connect-timeout 1 "$HS_DMR_PROBE_URL" >/dev/null 2>&1; then
       _d_warn "Docker Model Runner wired via Compose 'models:' but not reachable on :12434 — 'hoop start' will fall back to BM25 until DMR is enabled"
     else
@@ -91,7 +91,7 @@ function _doctor() {
   elif [ -n "$base" ]; then
     _d_pass "custom/Ollama embeddings configured ${_DIM}($base)${_RST}"
   else
-    _d_warn "no embedder detected — semantic search is BM25-only ('hoop install setup' to add DMR/OpenAI/Ollama)"
+    _d_warn "no embedder detected — semantic search is BM25-only ('hoop setup' to add DMR/OpenAI/Ollama)"
   fi
 
   # --- Verdict -------------------------------------------------------------
