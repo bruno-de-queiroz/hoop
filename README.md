@@ -122,7 +122,7 @@ Each run appends to the sandbox profile's `~/.claude/hoop/sandbox/profile/.claud
 
 ## Dashboard
 
-`/hoop:dashboard` (or `start | stop | restart | rebuild | status | logs`) runs the dashboard **inside a container**. Your host only needs Docker Desktop — no Node, no `npm install`, no Next.js build pollution. Each verb takes an optional service target (`all` (default) · `sandbox` · `dashboard`); `start` builds lazily (only when an image is missing) while `rebuild` always rebuilds.
+`hoop start` — plus `stop | restart | rebuild | status | logs` (or `/hoop:dashboard` from inside Claude Code) — runs the dashboard **inside a container**. Your host only needs Docker — no Node, no `npm install`, no Next.js build pollution. Each verb takes an optional service target (`all` (default) · `sandbox` · `dashboard`); `start` builds lazily (only when an image is missing) while `rebuild` always rebuilds.
 
 Pairing (inviting a teammate to co-drive a session) uses **`cloudflared`** to expose the local dashboard over a public tunnel — it's **baked into the dashboard image**, so nothing to install on the host. The dashboard runs fine without pairing; only share links start a tunnel.
 
@@ -132,7 +132,7 @@ Five panels:
 - **Skills** — every skill on disk (user + plugin), filterable, with a one-click "Run" that spawns `claude -p '/<name>'` inside the dashboard container and streams stdout back to the panel.
 - **Sub-agents** — nested tree reconstructed from PreToolUse / PostToolUse events on the `Agent` tool. Click a node to see its prompt, tool calls, and final output.
 - **Events** — chronological live tail via Server-Sent Events. Hooks push each event to the sandbox's `/ingest` over the Unix domain socket; the dashboard tails the resulting stream with zero polling.
-- **Search** — opens with ⌘K. BM25 (FTS5) always works; semantic search (sqlite-vec, 768-dim embeddings) activates when an embedding backend is configured. Set one up via `hoop setup` / `/hoop:setup` — recommended is **Docker Model Runner** (added to the compose stack via Compose's `models:` element and pulled on `hoop start`), with Ollama (`nomic-embed-text`), OpenAI, or any custom OpenAI-compatible endpoint as alternatives. Hybrid fuses BM25 + semantic via Reciprocal Rank Fusion.
+- **Search** — opens with ⌘K. BM25 (FTS5) always works; semantic search (sqlite-vec, 768-dim embeddings) activates when an embedding backend is configured. Set one up via `hoop setup` — recommended is **Docker Model Runner** (added to the compose stack via Compose's `models:` element and pulled on `hoop start`), with Ollama (`nomic-embed-text`), OpenAI, or any custom OpenAI-compatible endpoint as alternatives. Hybrid fuses BM25 + semantic via Reciprocal Rank Fusion.
 
 The dashboard is single-user and localhost-only by design; access is gated by a per-install token (see [Architecture](#architecture) below).
 
