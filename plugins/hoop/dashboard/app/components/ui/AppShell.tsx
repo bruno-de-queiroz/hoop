@@ -1,6 +1,7 @@
 "use client";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "./cn";
+import { useVisualViewportHeight } from "./useVisualViewportHeight";
 
 // The desktop-app window and its regions. Composition:
 //   <AppShell>
@@ -14,12 +15,17 @@ import { cn } from "./cn";
 // consumer (Phase 2) — no data logic lives here.
 
 export function AppShell({ className, children, ...rest }: React.HTMLAttributes<HTMLDivElement>) {
+  // Track the visual viewport so the composer isn't hidden behind the mobile
+  // on-screen keyboard (see the hook for why `100dvh` alone isn't enough).
+  useVisualViewportHeight();
   return (
     // Edge-to-edge on phones (no window padding/rounding) so the chat frame gets
     // the full viewport; the framed desktop-app window returns at `sm`.
-    // `100dvh` tracks the *dynamic* viewport so the composer isn't hidden behind
-    // mobile browser chrome (Safari/Chrome address bar) the way `100vh` would.
-    <div className={cn("h-[100dvh] w-screen bg-bg p-0 sm:p-3", className)} {...rest}>
+    // Height comes from `--app-height` (the live visualViewport height, set by
+    // the hook above) and falls back to `100dvh` before JS runs / on browsers
+    // without visualViewport. `100dvh` already handles the address bar; the var
+    // additionally shrinks the shell when the keyboard opens.
+    <div className={cn("h-[var(--app-height,100dvh)] w-screen bg-bg p-0 sm:p-3", className)} {...rest}>
       <div className="h-full w-full flex flex-col bg-window overflow-hidden rounded-none sm:rounded-window sm:shadow-card">
         {children}
       </div>

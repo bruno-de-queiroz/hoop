@@ -26,7 +26,22 @@ export function ShellCenterPane() {
   const [shareOpen, setShareOpen] = useState(false);
   // Peers reach the share dialog in peerMode (no tunnel control; only full peers
   // ever see the trigger). Mount-gated to keep hydration stable.
-  const peerMode = useMounted() && isPeerClient();
+  const mounted = useMounted();
+  const peerMode = mounted && isPeerClient();
+
+  // Viewer identity for viewer-relative bubble color (my turns green, everyone
+  // else blue). Mount-gated: the participant readers are browser-only, so the
+  // first client render must match the server's host default (see participant.ts).
+  const viewerKind: "host" | "peer" = peerMode ? "peer" : "host";
+  const viewerName = mounted ? myDisplayName() : "Host";
+
+  // OTHER participants currently composing → the `...` peer bubble in the
+  // transcript (replaces the header "typing…" text). Exclude self by identity so
+  // my own typing never shows as a bubble to me.
+  const typingLabel = participants
+    .filter((p) => p.typing && !(p.kind === viewerKind && p.name === viewerName))
+    .map((p) => p.name)
+    .join(", ");
   // Stable so the memoized transcript isn't re-rendered by every presence beat.
   const onLoadMore = useCallback(() => void active.loadMore(), [active]);
 
@@ -80,6 +95,9 @@ export function ShellCenterPane() {
         hasMore={active.hasMore}
         onLoadMore={onLoadMore}
         isWaiting={active.isWaiting}
+        viewerKind={viewerKind}
+        viewerName={viewerName}
+        typingLabel={typingLabel}
       />
       <ShellPlanReviewCard />
       <ShellPermissions />

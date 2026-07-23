@@ -77,7 +77,7 @@ Image-only messages should render with no text block — just the image,
 matching how `HostBubble` already handles a genuinely-empty `text` (see
 the `{text && (...)}` guard at `ShellTranscript.tsx:137`).
 
-## Suggested fix
+## Fix (implemented — dashboard-only)
 In `userPromptText()`, only fall back to `row.text` when the row is
 *unstructured*. For a structured row where `prompt=` is genuinely absent,
 return `""` instead of the raw wrapper:
@@ -86,10 +86,31 @@ return `""` instead of the raw wrapper:
 export function userPromptText(row: EventRow): string {
   if (!row.text) return "";
   if (row.id < 0 || !isStructured(row.text)) return row.text;
-  return extractEventField(row.text, "prompt") ?? "";
+  return extractEventField(row.text, "prompt") ?? "";   // was: ?? row.text
 }
 ```
 
-Add a regression test alongside the existing `userPromptText` suite in
-`eventText.test.ts` for a structured row with no `prompt=` field at all
-(e.g. `text: "[UserPromptSubmit]"`), asserting it returns `""`.
+This one change fixes the bug for **both existing and new** sessions, because
+it acts at render time on whatever `text` is served. It covers both
+`[UserPromptSubmit]` and `[Chat]` (both flow through `HostBubble`), and also
+cleans the ↑-history in `ShellComposer.tsx:96`, which uses the same helper.
+
+### Why no sandbox / DB change
+The sandbox's `deriveText` (`plugins/hoop/sandbox/lib/ingestor.ts:197`) runs
+only at ingest time and freezes its output into the `events.text` column. The
+read path (`listEvents` / `getEvent` in
+`plugins/hoop/sandbox/lib/events-query.ts`) returns that column **verbatim** and
+never re-derives from `payload`. So changing `deriveText` would fix new rows
+only and leave every already-stored image-only turn broken — whereas the
+renderer fix corrects all rows. No `deriveText` change and no DB backfill were
+made (deliberate scope decision).
+
+## Tests (added)
+- `eventText.test.ts`: `userPromptText` returns `""` for a bare
+  `"[UserPromptSubmit]"` and a bare `"[Chat]"` structured row.
+- `ShellTranscript.test.tsx`: a stored image-only turn
+  (`text: "[UserPromptSubmit]"`, with an image) renders the thumbnail and does
+  **not** surface the literal `[UserPromptSubmit]`.
+
+Verified: `npx vitest run app/components/active-session/eventText.test.ts
+app/components/shell/ShellTranscript.test.tsx` → 2 files, 42 tests passing.

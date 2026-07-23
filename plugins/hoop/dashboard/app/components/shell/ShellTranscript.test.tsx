@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import type { EventRow } from "@/lib/sandbox-types";
 import { ShellTranscript } from "./ShellTranscript";
 
@@ -22,6 +22,13 @@ function renderTranscript(events: EventRow[]) {
   return render(
     <ShellTranscript events={events} hasMore={false} onLoadMore={() => {}} isWaiting={false} />,
   );
+}
+
+function tool(id: number, hook: "PreToolUse" | "PostToolUse", name: string): EventRow {
+  return ev({ id, hook_type: hook, tool_name: name });
+}
+function stopText(id: number, text: string): EventRow {
+  return ev({ id, hook_type: "Stop", text: `[Stop] | last_assistant_message=${text}` });
 }
 
 describe("ShellTranscript author attribution", () => {
@@ -82,6 +89,20 @@ describe("ShellTranscript author attribution", () => {
       },
     ]);
     expect(screen.getByAltText("attached image")).toBeInTheDocument();
+  });
+
+  it("does not leak the bare wrapper as text for a stored image-only turn", () => {
+    // An image-only turn is stored as just "[UserPromptSubmit]" (the sandbox's
+    // deriveText drops the empty prompt). The bubble must render the image and
+    // NOT the raw wrapper string. Same path covers a bare "[Chat]" message.
+    renderTranscript([
+      {
+        ...ev({ id: 13, hook_type: "UserPromptSubmit", author: "host", text: "[UserPromptSubmit]" }),
+        images: [{ media_type: "image/jpeg", data: "CCCC" }],
+      },
+    ]);
+    expect(screen.getByAltText("attached image")).toBeInTheDocument();
+    expect(screen.queryByText("[UserPromptSubmit]")).toBeNull();
   });
 
   it("renders a plan-approval turn as an approval notice, not a host bubble", () => {
@@ -237,5 +258,174 @@ describe("ShellTranscript author attribution", () => {
     ]);
     expect(screen.getByText("ralph left")).toBeInTheDocument();
     expect(screen.queryByText("peerleft")).toBeNull();
+  });
+});
+
+describe("ShellTranscript tool clustering", () => {
+  it("clusters consecutive tool calls under ONE avatar", () => {
+    renderTranscript([
+      tool(1, "PreToolUse", "Read"),
+      tool(2, "PostToolUse", "Read"),
+      tool(3, "PreToolUse", "Grep"),
+      tool(4, "PostToolUse", "Grep"),
+    ]);
+    expect(screen.getAllByTestId("tool-cluster")).toHaveLength(1);
+  });
+
+  it("splits into a new cluster when the model emits a visible text turn between tools", () => {
+    renderTranscript([
+      tool(1, "PreToolUse", "Read"),
+      tool(2, "PostToolUse", "Read"),
+      stopText(3, "here is what I found"),
+      tool(4, "PreToolUse", "Grep"),
+      tool(5, "PostToolUse", "Grep"),
+    ]);
+    // Cluster → assistant text → cluster.
+    expect(screen.getAllByTestId("tool-cluster")).toHaveLength(2);
+    expect(screen.getByText("here is what I found")).toBeInTheDocument();
+  });
+
+  it("does NOT split a cluster on an empty Stop (invisible turn boundary)", () => {
+    renderTranscript([
+      tool(1, "PreToolUse", "Read"),
+      tool(2, "PostToolUse", "Read"),
+      ev({ id: 3, hook_type: "Stop", text: "" }),
+      tool(4, "PreToolUse", "Grep"),
+      tool(5, "PostToolUse", "Grep"),
+    ]);
+    expect(screen.getAllByTestId("tool-cluster")).toHaveLength(1);
+  });
+
+  it("keeps a 2-call cluster fully expanded (no collapse summary)", () => {
+    renderTranscript([
+      tool(1, "PreToolUse", "Read"),
+      tool(2, "PostToolUse", "Read"),
+      tool(3, "PreToolUse", "Grep"),
+      tool(4, "PostToolUse", "Grep"),
+    ]);
+    expect(screen.queryByTestId("tool-cluster-collapsed")).toBeNull();
+    // Two cards → two "tool" chips.
+    expect(screen.getAllByText("tool")).toHaveLength(2);
+  });
+
+  it("auto-collapses a cluster with more than 2 calls into a count + token summary", () => {
+    renderTranscript([
+      tool(1, "PreToolUse", "Read"),
+      tool(2, "PostToolUse", "Read"),
+      tool(3, "PreToolUse", "Grep"),
+      tool(4, "PostToolUse", "Grep"),
+      tool(5, "PreToolUse", "Bash"),
+      tool(6, "PostToolUse", "Bash"),
+    ]);
+    expect(screen.getByTestId("tool-cluster-collapsed")).toBeInTheDocument();
+    expect(screen.getByText(/3 tool calls/)).toBeInTheDocument();
+    expect(screen.getByText(/tokens/)).toBeInTheDocument();
+    // Cards are hidden until expanded — no "tool" chips visible.
+    expect(screen.queryAllByText("tool")).toHaveLength(0);
+  });
+
+  it("expands the collapsed cluster on 'show all' and can collapse again", () => {
+    renderTranscript([
+      tool(1, "PreToolUse", "Read"),
+      tool(2, "PostToolUse", "Read"),
+      tool(3, "PreToolUse", "Grep"),
+      tool(4, "PostToolUse", "Grep"),
+      tool(5, "PreToolUse", "Bash"),
+      tool(6, "PostToolUse", "Bash"),
+    ]);
+    fireEvent.click(screen.getByText("show all"));
+    // Three cards now visible.
+    expect(screen.getAllByText("tool")).toHaveLength(3);
+    expect(screen.queryByTestId("tool-cluster-collapsed")).toBeNull();
+
+    // And it collapses back.
+    fireEvent.click(screen.getByText("show less"));
+    expect(screen.getByTestId("tool-cluster-collapsed")).toBeInTheDocument();
+  });
+});
+
+describe("ShellTranscript viewer-relative bubble color", () => {
+  function renderAs(viewer: { kind: "host" | "peer"; name: string }, events: EventRow[]) {
+    return render(
+      <ShellTranscript
+        events={events}
+        hasMore={false}
+        onLoadMore={() => {}}
+        isWaiting={false}
+        viewerKind={viewer.kind}
+        viewerName={viewer.name}
+      />,
+    );
+  }
+
+  it("as a PEER viewer: my own turn is green (host bubble), the host is blue (peer bubble)", () => {
+    renderAs({ kind: "peer", name: "Ralph" }, [
+      ev({ id: 1, hook_type: "UserPromptSubmit", author: null, text: "from the host" }),
+      ev({ id: 2, hook_type: "UserPromptSubmit", author: "Ralph", text: "from me" }),
+    ]);
+    // My own (Ralph) message → green host bubble.
+    expect(screen.getByText("from me").closest(".bubble")!.className).toMatch(/bubble-host/);
+    // The host, from my peer perspective → blue peer bubble.
+    expect(screen.getByText("from the host").closest(".bubble")!.className).toMatch(/bubble-peer/);
+  });
+
+  it("another peer's turn is blue for a peer viewer (everyone-but-me is blue)", () => {
+    renderAs({ kind: "peer", name: "Ralph" }, [
+      ev({ id: 1, hook_type: "UserPromptSubmit", author: "Sam", text: "from sam" }),
+    ]);
+    expect(screen.getByText("from sam").closest(".bubble")!.className).toMatch(/bubble-peer/);
+  });
+});
+
+describe("ShellTranscript horizontal overflow (mobile wrap)", () => {
+  // A long unbroken token (no spaces) — the shape that fails to wrap under a
+  // bare `whitespace-pre-wrap` and pushes the card wider than the viewport.
+  const LONG = "x".repeat(400);
+
+  function bashWithStdout(id: number, stdout: string): EventRow {
+    const resp = {
+      run_id: null, status: null, exit_code: 0, signal: null,
+      duration_ms: 1, timed_out: false, stdout, stderr: "",
+    };
+    return ev({
+      id,
+      hook_type: "BashShortcut",
+      text: `[BashShortcut] | tool=BashShortcut | tool_input=echo x | tool_response=${JSON.stringify(resp)}`,
+    });
+  }
+
+  it("clips the transcript's x-axis so stray overflow can't create a horizontal bar", () => {
+    renderTranscript([ev({ id: 1, hook_type: "UserPromptSubmit", author: "host", text: "hi" })]);
+    expect(screen.getByTestId("shell-transcript").className).toContain("overflow-x-hidden");
+  });
+
+  it("wraps long unbroken bash output instead of overflowing", () => {
+    renderTranscript([bashWithStdout(1, LONG)]);
+    const out = screen.getByText(LONG);
+    expect(out.className).toContain("[overflow-wrap:anywhere]");
+  });
+});
+
+describe("ShellTranscript peer typing bubble", () => {
+  it("renders a blue peer typing bubble with the name when typingLabel is set", () => {
+    render(
+      <ShellTranscript
+        events={[]}
+        hasMore={false}
+        onLoadMore={() => {}}
+        isWaiting={false}
+        typingLabel="Ralph"
+      />,
+    );
+    const bubble = screen.getByTestId("peer-typing");
+    expect(bubble.querySelector(".bubble-peer")).not.toBeNull();
+    expect(screen.getByText("Ralph")).toBeInTheDocument();
+  });
+
+  it("renders no typing bubble when typingLabel is empty (e.g. only self is typing)", () => {
+    render(
+      <ShellTranscript events={[]} hasMore={false} onLoadMore={() => {}} isWaiting={false} typingLabel="" />,
+    );
+    expect(screen.queryByTestId("peer-typing")).toBeNull();
   });
 });

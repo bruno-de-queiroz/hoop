@@ -83,6 +83,19 @@ describe("userPromptText", () => {
     const r = row({ text: null });
     expect(userPromptText(r)).toBe("");
   });
+
+  it("returns '' for a structured row with no prompt= field (image-only turn)", () => {
+    // The sandbox's deriveText drops the empty prompt of an image-only turn,
+    // leaving just the bare wrapper. The old `?? row.text` fallback leaked
+    // "[UserPromptSubmit]" into the bubble as message text.
+    const r = row({ id: 7, hook_type: "UserPromptSubmit", text: "[UserPromptSubmit]" });
+    expect(userPromptText(r)).toBe("");
+  });
+
+  it("returns '' for a bare [Chat] wrapper (image-only chat message)", () => {
+    const r = row({ id: 8, hook_type: "Chat", text: "[Chat]" });
+    expect(userPromptText(r)).toBe("");
+  });
 });
 
 describe("assistantText", () => {

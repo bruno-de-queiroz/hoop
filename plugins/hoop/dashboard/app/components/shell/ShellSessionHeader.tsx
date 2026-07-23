@@ -99,8 +99,6 @@ export function ShellSessionHeader({
     (s) => s.sessionId && ["dormant", "ended"].includes(s.lifecycle ?? "alive"),
   );
 
-  const typing = participants.filter((p) => p.typing);
-
   function commitRename() {
     const name = draft.trim();
     setRenaming(false);
@@ -222,9 +220,6 @@ export function ShellSessionHeader({
               </span>
             ))}
           </div>
-          {typing.length > 0 && (
-            <span className="text-[11px] font-medium text-wrap">typing…</span>
-          )}
         </div>
       )}
 

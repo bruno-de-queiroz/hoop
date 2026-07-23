@@ -69,7 +69,11 @@ export function userPromptText(row: EventRow): string {
   // "prompt=foo" would extract "foo" by accident — guard by id sign AND
   // by checking the wrapper shape.
   if (row.id < 0 || !isStructured(row.text)) return row.text;
-  return extractEventField(row.text, "prompt") ?? row.text;
+  // A structured row with no `prompt=` field carries no user text — an
+  // image-only turn, whose empty prompt was dropped by the sandbox's
+  // deriveText, leaving just the bare `[UserPromptSubmit]`/`[Chat]` wrapper.
+  // Return "" (not the raw wrapper) so it renders as an image-only message.
+  return extractEventField(row.text, "prompt") ?? "";
 }
 
 /**

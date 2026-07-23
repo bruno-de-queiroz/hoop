@@ -94,7 +94,7 @@ const COMPONENTS: Components = {
   ol: ({ children }) => (
     <ol className="list-decimal pl-4 my-1 space-y-0.5 marker:text-ink-hush">{children}</ol>
   ),
-  li: ({ children }) => <li>{children}</li>,
+  li: ({ children }) => <li className="break-words [overflow-wrap:anywhere]">{children}</li>,
   blockquote: ({ children }) => (
     <blockquote className="border-l-2 border-divider pl-2 my-1 text-ink-mute italic">
       {children}
