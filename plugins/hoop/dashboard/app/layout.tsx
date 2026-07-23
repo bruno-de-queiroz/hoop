@@ -94,7 +94,11 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         {peerSession ? <meta name="x-hoop-peer-session" content={peerSession} /> : null}
         {peerCapability ? <meta name="x-hoop-peer-capability" content={peerCapability} /> : null}
       </head>
-      <body>
+      {/* suppressHydrationWarning: browser extensions (Grammarly, password
+          managers, etc.) inject attributes onto <body> before React hydrates
+          (e.g. data-gr-ext-installed), which would otherwise trip a dev-only
+          hydration mismatch. Same rationale as the <html> tag above. */}
+      <body suppressHydrationWarning>
         <AuthBootstrap />
         {children}
       </body>
