@@ -5,6 +5,8 @@
 .claude/paste-cache/
 .claude/history.jsonl
 
+.serena/
+
 # OS noise
 .DS_Store
 Thumbs.db
