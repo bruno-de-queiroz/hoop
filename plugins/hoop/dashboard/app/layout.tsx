@@ -29,10 +29,16 @@ export const metadata: Metadata = {
 // width) and let content extend under the notch/home indicator — the shell
 // goes edge-to-edge below `sm`. `maximumScale` is intentionally left default so
 // pinch-zoom stays available (accessibility).
+//
+// `interactiveWidget: "resizes-content"` makes the on-screen keyboard shrink the
+// *layout* viewport (and `dvh`) on Chromium, so a `100dvh` shell sits exactly
+// above the keyboard — no black gap, no JS. Browsers that ignore it (iOS Safari)
+// fall back to the visualViewport hook in AppShell.
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  interactiveWidget: "resizes-content",
 };
 
 // Read HOOP_DASHBOARD_TOKEN at request time, not build time. The

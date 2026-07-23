@@ -318,24 +318,31 @@ export const ShellComposer = memo(function ShellComposer({
           </div>
         )}
 
-        {/* items-center keeps a single-line draft vertically centered in the
-          * field (the mockup's composer). */}
-        <div className="flex items-center gap-2">
+        {/* items-end pins the avatar and action buttons to the bottom of the
+          * textarea so they hold their on-screen position as a multi-line draft
+          * grows upward (rather than drifting with a centered row). A single-line
+          * draft still reads centered since every child shares the bottom edge. */}
+        <div className="flex items-end gap-2">
           {/* Avatar doubles as the mode indicator: your initials normally, the
-            * op glyph (tinted red/green) while typing a `!` bash or `>` chat. */}
-          <span
-            className={cn(
-              "avatar w-7 h-7 text-[10px] shrink-0 transition-colors",
-              mode === "bash" ? "avatar-fail" : mode === "chat" ? "avatar-wrap" : "text-ink",
-            )}
-          >
-            {mode === "bash" ? (
-              <Terminal className="w-3.5 h-3.5" />
-            ) : mode === "chat" ? (
-              <MessageCircle className="w-3.5 h-3.5" />
-            ) : (
-              me
-            )}
+            * op glyph (tinted red/green) while typing a `!` bash or `>` chat.
+            * Wrapped in a send-button-height (h-9) box, centered, so the row's
+            * items-end pins it to the bottom line while its center still lines up
+            * with the action buttons (the 28px avatar alone would sit low). */}
+          <span className="flex h-9 items-center shrink-0">
+            <span
+              className={cn(
+                "avatar w-7 h-7 text-[10px] transition-colors",
+                mode === "bash" ? "avatar-fail" : mode === "chat" ? "avatar-wrap" : "text-ink",
+              )}
+            >
+              {mode === "bash" ? (
+                <Terminal className="w-3.5 h-3.5" />
+              ) : mode === "chat" ? (
+                <MessageCircle className="w-3.5 h-3.5" />
+              ) : (
+                me
+              )}
+            </span>
           </span>
           <textarea
             ref={taRef}
@@ -351,7 +358,12 @@ export const ShellComposer = memo(function ShellComposer({
             placeholder={
               mode === "bash" ? "bash command…" : mode === "chat" ? "message to participants…" : "type a message…"
             }
-            className="flex-1 bg-transparent border-0 outline-none resize-none text-[13px] text-ink placeholder:text-ink-hush leading-relaxed py-1"
+            // self-center: a single-line draft centers vertically with the
+            // avatar/buttons instead of sticking to the row's bottom edge (the
+            // row is items-end for the multiline case). Once the textarea grows
+            // past the control height it becomes the tallest item and fills the
+            // row, so the controls still pin to the last line.
+            className="flex-1 self-center bg-transparent border-0 outline-none resize-none text-[13px] text-ink placeholder:text-ink-hush leading-relaxed py-1"
           />
           <input
             ref={fileRef}
