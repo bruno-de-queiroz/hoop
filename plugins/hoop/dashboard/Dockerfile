@@ -42,6 +42,43 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # only speeds the build.
 RUN --mount=type=cache,target=/build/dashboard/.next/cache npm run build
 
+# ---- dev (HMR live-edit) ----
+# Used ONLY when HOOP_DASHBOARD_DEV=1, via the compose override the hoop CLI
+# generates (cli/lib/stack.sh). That override bind-mounts the host `dashboard/`
+# + `shared/` over this stage's copies and keeps the container's own
+# node_modules/.next as anonymous volumes, then runs the SAME front process
+# (server.mjs) — which, seeing HOOP_DASHBOARD_DEV, spawns `next dev` (webpack
+# HMR) instead of the standalone prod server. So UI edits are live without an
+# image rebuild. Not referenced by the prod runtime below; it exists purely as a
+# build `target`. It deliberately mirrors the builder's deps+source steps but
+# STOPS before `npm run build`.
+FROM node:24-bookworm-slim AS dev
+WORKDIR /build/dashboard
+COPY dashboard/package.json dashboard/package-lock.json* ./
+RUN --mount=type=cache,target=/root/.npm npm install --no-audit --no-fund
+WORKDIR /build
+COPY shared ./shared
+COPY dashboard ./dashboard
+WORKDIR /build/dashboard
+ENV NODE_ENV=development \
+    NEXT_TELEMETRY_DISABLED=1 \
+    HOOP_DASHBOARD_DEV=1 \
+    PORT=7842 \
+    HOSTNAME=0.0.0.0 \
+    # Bind-mounted source may arrive over a filesystem that delivers no inotify
+    # events (Docker Desktop's virtiofs, or an sshfs/remote docker host), so the
+    # webpack watcher would never see edits. Poll instead — the reliable choice
+    # for a dev container. WATCHPACK_POLLING is honored by `next dev --webpack`.
+    WATCHPACK_POLLING=true \
+    HOOP_SANDBOX_SOCKET=/var/run/hoop/sandbox.sock \
+    HOOP_SANDBOX_TOKEN_FILE=/var/run/hoop/sandbox.token \
+    HOOP_DASHBOARD_TOKEN_FILE=/var/lib/hoop/dashboard/dashboard.token
+EXPOSE 7842
+# Runs as root (node image default): simplest way to read the 0640 sandbox token
+# and connect() the 0660 UDS in the shared hoop-run volume without the gid dance
+# the slim prod image does. Fine for a local dev container.
+CMD ["node", "server.mjs"]
+
 # ---- runtime ----
 FROM node:24-bookworm-slim AS runtime
 

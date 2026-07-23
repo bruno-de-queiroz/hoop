@@ -23,10 +23,17 @@
 
 import { createServer, request as httpRequest } from "node:http";
 import { spawn } from "node:child_process";
+import { connect as netConnect } from "node:net";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { request as udsRequest } from "node:http";
 import { readFileSync } from "node:fs";
 import { WebSocketServer } from "ws";
+
+// Dev mode (HMR): when the CLI's HOOP_DASHBOARD_DEV override is active, run the
+// full `next dev` server on the internal port instead of the baked standalone
+// `server.js`, and proxy Next's own HMR websocket (/_next/webpack-hmr) through
+// this front process. Off by default → the prod path is byte-identical.
+const DEV = /^(1|true|yes|on)$/i.test(process.env.HOOP_DASHBOARD_DEV ?? "");
 
 const PUBLIC_PORT = parseInt(process.env.HOOP_PORT ?? "", 10) || 7842;
 const PUBLIC_HOST = process.env.HOSTNAME || "0.0.0.0";
@@ -89,11 +96,20 @@ function revokeAllSharesInSandbox() {
   });
 }
 
-// ── 1. Spawn the unchanged Next standalone server on the internal port ───────
-const next = spawn("node", ["server.js"], {
-  env: { ...process.env, PORT: String(INTERNAL_PORT), HOSTNAME: INTERNAL_HOST },
-  stdio: "inherit",
-});
+// ── 1. Spawn the Next server on the internal port ────────────────────────────
+// Prod: the traced standalone `server.js`. Dev: `next dev` (webpack HMR) from
+// the bind-mounted source, so edits are live without an image rebuild.
+const next = DEV
+  ? spawn(
+      "./node_modules/.bin/next",
+      ["dev", "--webpack", "-p", String(INTERNAL_PORT), "-H", INTERNAL_HOST],
+      { env: { ...process.env }, stdio: "inherit" },
+    )
+  : spawn("node", ["server.js"], {
+      env: { ...process.env, PORT: String(INTERNAL_PORT), HOSTNAME: INTERNAL_HOST },
+      stdio: "inherit",
+    });
+if (DEV) log(`dev mode: next dev (webpack HMR) on ${INTERNAL_HOST}:${INTERNAL_PORT}`);
 next.on("exit", (code) => { log("next exited", code); process.exit(code ?? 1); });
 process.on("SIGTERM", () => next.kill("SIGTERM"));
 process.on("SIGINT", () => next.kill("SIGINT"));
@@ -426,9 +442,35 @@ const server = createServer((creq, cres) => {
   creq.pipe(preq);
 });
 
+// Raw upgrade proxy → internal Next server. Only used in dev, to carry Next's
+// HMR websocket (/_next/webpack-hmr) through this front process. Reconstructs
+// the upgrade request line + headers, replays any buffered `head`, then pipes
+// bidirectionally.
+function proxyUpgrade(req, socket, head) {
+  const up = netConnect(INTERNAL_PORT, INTERNAL_HOST, () => {
+    const lines = [`${req.method} ${req.url} HTTP/1.1`];
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+    }
+    lines.push("", "");
+    up.write(lines.join("\r\n"));
+    if (head && head.length) up.write(head);
+    socket.pipe(up);
+    up.pipe(socket);
+  });
+  up.on("error", () => { try { socket.destroy(); } catch { /* ignore */ } });
+  socket.on("error", () => { try { up.destroy(); } catch { /* ignore */ } });
+}
+
 server.on("upgrade", (req, socket, head) => {
   const url = req.url || "";
-  if (!url.startsWith("/api/ws")) { socket.destroy(); return; }
+  if (!url.startsWith("/api/ws")) {
+    // Dev: forward Next's HMR (and any other) upgrade to the internal server.
+    // Prod: no such upgrades exist, so reject exactly as before.
+    if (DEV) return proxyUpgrade(req, socket, head);
+    socket.destroy();
+    return;
+  }
   const scope = authUpgrade(req);
   if (!scope) {
     socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
@@ -477,20 +519,31 @@ setInterval(async () => {
 }, 5000);
 
 // ── boot: wait for Next, then listen + start the upstream relay ──────────────
+// `ready` makes this a one-shot: once Next answers 200 we listen exactly once
+// and stop polling. Without it, a keep-alive health socket (next dev keeps the
+// connection open) fires a late `timeout` after success → a stray retry →
+// onNextReady twice → ERR_SERVER_ALREADY_LISTEN. `Connection: close` also keeps
+// each probe from lingering.
+let ready = false;
 function waitForNext(attempt = 0) {
+  if (ready) return;
   const r = httpRequest(
-    { host: INTERNAL_HOST, port: INTERNAL_PORT, path: "/api/health", method: "GET", timeout: 1000 },
+    { host: INTERNAL_HOST, port: INTERNAL_PORT, path: "/api/health", method: "GET",
+      headers: { connection: "close" }, timeout: 1000 },
     (res) => { res.resume(); res.statusCode === 200 ? onNextReady() : retry(); },
   );
   r.on("error", retry);
   r.on("timeout", () => { r.destroy(); retry(); });
   r.end();
   function retry() {
+    if (ready) return;
     if (attempt > 600) { log("next never became ready"); process.exit(1); }
     setTimeout(() => waitForNext(attempt + 1), 250);
   }
 }
 function onNextReady() {
+  if (ready) return;
+  ready = true;
   server.listen(PUBLIC_PORT, PUBLIC_HOST, () => {
     log(`listening on ${PUBLIC_HOST}:${PUBLIC_PORT} → next on ${INTERNAL_HOST}:${INTERNAL_PORT}; ws at /api/ws`);
     startUpstream();

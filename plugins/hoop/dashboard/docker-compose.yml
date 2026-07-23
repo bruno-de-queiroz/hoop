@@ -107,6 +107,10 @@ services:
       # Parent context so the Dockerfile can COPY shared/ alongside dashboard/.
       context: ..
       dockerfile: dashboard/Dockerfile
+      # For live-editing the UI without an image rebuild, set HOOP_DASHBOARD_DEV=1:
+      # the hoop CLI generates an override that builds the Dockerfile `dev` target
+      # (as hoop-dashboard-dev), bind-mounts the host dashboard/ + shared/ source,
+      # and runs `next dev` (HMR) via the same front process (server.mjs).
 
     depends_on:
       agent-sandbox:
