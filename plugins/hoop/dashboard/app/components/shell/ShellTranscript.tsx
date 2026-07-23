@@ -107,6 +107,88 @@ function AssistantAvatar({ tone = "accent" }: { tone?: "accent" | "fail" | "erro
   );
 }
 
+// Attached images in a message bubble. 1–3 render as free-flowing thumbnails.
+// 4+ collapse into a 2×2 square grid: the first THREE corners show images and
+// the bottom-right corner is a "+N" overflow badge (N = total − 3, the images
+// not shown), laid over the next image as a dimmed backdrop. Any tile opens the
+// session-wide lightbox at that image (the lightbox still carries every image,
+// so the overflow ones are reachable by paging). `onOpenImage` omitted →
+// non-interactive (standalone renders / tests).
+type MessageImage = { media_type: string; data: string };
+function MessageImages({
+  images,
+  rowId,
+  onOpenImage,
+}: {
+  images: MessageImage[];
+  rowId: number | string;
+  onOpenImage?: (key: string) => void;
+}) {
+  const srcOf = (img: MessageImage) => `data:${img.media_type};base64,${img.data}`;
+
+  // One clickable tile. `imgClass` shapes the thumbnail; `overlay` is the
+  // bottom-right count badge in grid mode.
+  const tile = (i: number, wrapClass: string, imgClass: string, overlay?: React.ReactNode) => {
+    const el = (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={srcOf(images[i])} alt="attached image" className={imgClass} />
+    );
+    const common = "relative block overflow-hidden";
+    return onOpenImage ? (
+      <button
+        key={i}
+        type="button"
+        onClick={() => onOpenImage(`${rowId}:${i}`)}
+        aria-label="Open image"
+        className={cn(
+          common,
+          wrapClass,
+          "cursor-pointer transition hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+        )}
+      >
+        {el}
+        {overlay}
+      </button>
+    ) : (
+      <span key={i} className={cn(common, wrapClass)}>
+        {el}
+        {overlay}
+      </span>
+    );
+  };
+
+  if (images.length >= 4) {
+    // Three image corners + a "+N" overflow badge in the fourth. N counts every
+    // image past the three shown (the badge sits over image index 3 as a
+    // backdrop, so opening it lands on the first hidden image).
+    const overflow = images.length - 3;
+    return (
+      <div className="grid grid-cols-2 gap-1 w-full max-w-[16rem]">
+        {[0, 1, 2, 3].map((i) =>
+          tile(
+            i,
+            "rounded-md aspect-square",
+            "h-full w-full object-cover",
+            i === 3 ? (
+              <span className="absolute inset-0 flex items-center justify-center bg-black/70 text-white font-semibold text-lg">
+                +{overflow}
+              </span>
+            ) : undefined,
+          ),
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {images.map((_, i) =>
+        tile(i, "rounded-lg", "max-h-48 max-w-[14rem] object-contain border border-white/20"),
+      )}
+    </div>
+  );
+}
+
 // Every row renderer is memoized on its (stable) EventRow. When a new event
 // arrives the parent rebuilds the item list, but React reuses each prior item's
 // element by key — memo keeps those from re-rendering, so old bubbles never
@@ -170,30 +252,8 @@ const HostBubble = memo(function HostBubble({
           </div>
         )}
         {images.length > 0 && (
-          <div className={cn("flex flex-wrap gap-1.5", text && "mt-2")}>
-            {images.map((img, i) => {
-              const el = (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={`data:${img.media_type};base64,${img.data}`}
-                  alt="attached image"
-                  className="max-h-48 max-w-[14rem] rounded-lg object-contain border border-white/20"
-                />
-              );
-              return onOpenImage ? (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => onOpenImage(`${row.id}:${i}`)}
-                  aria-label="Open image"
-                  className="block rounded-lg cursor-pointer transition hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                >
-                  {el}
-                </button>
-              ) : (
-                <span key={i}>{el}</span>
-              );
-            })}
+          <div className={cn(text && "mt-2")}>
+            <MessageImages images={images} rowId={row.id} onOpenImage={onOpenImage} />
           </div>
         )}
       </div>

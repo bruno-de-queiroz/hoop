@@ -474,3 +474,37 @@ describe("ShellTranscript image lightbox", () => {
     expect(screen.queryByRole("dialog", { name: "Image viewer" })).toBeNull();
   });
 });
+
+describe("ShellTranscript image grid (4+ in one bubble)", () => {
+  const manyImgEvent = (id: number, n: number): EventRow => ({
+    ...ev({ id, hook_type: "UserPromptSubmit", author: "host", text: "" }),
+    images: Array.from({ length: n }, (_, i) => ({ media_type: "image/png", data: `D${i}` })),
+  });
+
+  it("keeps 1–3 images as free thumbnails (no collapse)", () => {
+    renderTranscript([manyImgEvent(1, 3)]);
+    expect(screen.getAllByAltText("attached image")).toHaveLength(3);
+  });
+
+  it("collapses 4 images into a 2×2 grid with a +1 overflow badge (3 shown)", () => {
+    renderTranscript([manyImgEvent(1, 4)]);
+    // Four tiles are rendered, but only three are 'shown' — the fourth corner is
+    // the +N badge (N = total - 3), so 4 images → +1.
+    expect(screen.getAllByAltText("attached image")).toHaveLength(4);
+    expect(screen.getByText("+1")).toBeInTheDocument();
+  });
+
+  it("shows a +N overflow badge counting every image past the three shown", () => {
+    renderTranscript([manyImgEvent(1, 7)]);
+    expect(screen.getAllByAltText("attached image")).toHaveLength(4);
+    expect(screen.getByText("+4")).toBeInTheDocument(); // 7 - 3
+  });
+
+  it("opens the lightbox from a grid tile", () => {
+    renderTranscript([manyImgEvent(1, 6)]);
+    fireEvent.click(screen.getAllByLabelText("Open image")[0]);
+    expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
+    // Carousel still carries all six.
+    expect(screen.getByLabelText("Image 6")).toBeInTheDocument();
+  });
+});
