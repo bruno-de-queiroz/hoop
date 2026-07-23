@@ -50,6 +50,8 @@ claude mcp add --scope user serena -- serena start-mcp-server --context claude-c
 
 `hoop setup` runs both steps automatically inside the sandbox.
 
+**Hooks:** hoop also wires Serena's own recommended Claude Code hooks (`serena-hooks activate`/`remind`/`cleanup`) automatically inside the sandbox, self-healing on every boot whenever the `serena-hooks` binary is present — no separate step needed. Serena's fourth hook, `auto-approve` (which would auto-approve `mcp__serena__*` tool calls), is deliberately never wired: `permission-gate.sh` remains the sole thing that can grant/approve a tool call in the sandbox (it backs `/plan`'s read-only enforcement and the pairing/plan-review flow), and auto-approve would let Serena calls bypass that gate.
+
 **Important:** Serena's README warns against installing **Serena itself** via a plugin/marketplace entry (those snippets are outdated). It does **not** warn against `claude mcp add` — registering the `serena start-mcp-server` launch command as above is Serena's own documented Claude Code setup. Note the `--context claude-code` flag: the deprecated `--context ide-assistant` and the `uvx --from git+https://github.com/oraios/serena …` variant still work but are slower/older.
 
 **Verify:**

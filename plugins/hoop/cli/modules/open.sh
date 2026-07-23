@@ -13,11 +13,14 @@
 #
 # Differences from the dashboard's agent-sandbox, by design:
 #   - Telemetry is fully isolated (HOOP_DISABLE_TELEMETRY=1) unless --telemetry.
-#   - The dashboard-only hooks (permission-gate/emit-event) and the hoop plugin
-#     are stripped from a throwaway settings.json overlay: they need the sandbox
-#     HTTP socket that doesn't exist here, and claude code's own hooks/permission
-#     prompts cover an interactive session. Setup MCPs, skills, other plugins,
-#     and credentials from the mounted profile are kept.
+#   - hoop's OWN dashboard-coupled hook commands (permission-gate.sh/emit-event.sh)
+#     and the hoop plugin are stripped from a throwaway settings.json overlay:
+#     they need the sandbox HTTP socket that doesn't exist here, and claude code's
+#     own hooks/permission prompts cover an interactive session. Other hooks any
+#     other tool wired into the profile (e.g. Serena's self-contained
+#     serena-hooks, which need no socket) are left in place — only hoop's own
+#     two commands are filtered out, not the whole `hooks` key. Setup MCPs,
+#     skills, other plugins, and credentials from the mounted profile are kept.
 #
 # docker run is interactive (-it) so claude code's TUI gets a real tty.
 
@@ -59,16 +62,27 @@ function _launch() {
   local iso_env=(-e "HOOP_DISABLE_TELEMETRY=1")
   [[ "$OPEN_TELEMETRY" == true ]] && iso_env=()
 
-  # Strip the dashboard-only hooks + the hoop plugin from a throwaway copy of the
-  # profile's settings.json, then overlay it read-only over just that one file.
-  # Keeps credentials, setup MCPs (in .claude.json), skills, and other plugins;
-  # drops emit-event/permission-gate (need a socket absent here) and hoop@workspace.
+  # Strip hoop's own dashboard-coupled hook commands + the hoop plugin from a
+  # throwaway copy of the profile's settings.json, then overlay it read-only
+  # over just that one file. Keeps credentials, setup MCPs (in .claude.json),
+  # skills, other plugins, and any OTHER tool's hooks (e.g. Serena's
+  # self-contained serena-hooks); drops only emit-event.sh/permission-gate.sh
+  # (need a socket absent here) and hoop@workspace.
   local settings_overlay=() tmp_settings=""
   local prof_settings="${OPEN_PROFILE}/.claude/settings.json"
   if [[ -f "$prof_settings" ]]; then
     if command -v jq >/dev/null 2>&1; then
       tmp_settings="$(mktemp -t hoop-open-settings.XXXXXX)"
-      if jq 'del(.hooks)
+      if jq '.hooks |= ((. // {})
+               | with_entries(
+                   .value |= (
+                     map(.hooks |= map(select(((.command // "") | startswith("/opt/hoop/hooks/scripts/")) | not)))
+                     | map(select((.hooks | length) > 0))
+                   )
+                 )
+               | with_entries(select((.value | length) > 0))
+             )
+             | if (.hooks | length) == 0 then del(.hooks) else . end
              | if (.enabledPlugins | type) == "object" then .enabledPlugins |= del(.["hoop@workspace"]) else . end' \
              "$prof_settings" > "$tmp_settings" 2>/dev/null; then
         # 0644 so the in-container agent (uid 1100) can read it on a Linux bind mount.

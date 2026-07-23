@@ -172,6 +172,7 @@ _setup_codegraph() {
            _hs_exec_sandbox uv tool install -p 3.13 serena-agent; then
         _setup_mcp serena -- serena start-mcp-server --context claude-code --project-from-cwd
         _setup_note "Serena: installed via uv + registered (--scope user, --context claude-code). First launch resolves the language server (can be slow); verify with /mcp."
+        _setup_note "Serena hooks (activate/remind/cleanup) wire automatically inside the sandbox on next boot — auto-approve is intentionally not installed."
       else
         _setup_note "Serena: 'uv tool install serena-agent' failed in the sandbox — check egress/network and re-run 'hoop setup'."
       fi ;;
