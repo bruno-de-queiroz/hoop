@@ -196,25 +196,6 @@ Two deliberate hardening choices:
 
 Run a turn with `/plan <task>` and the sandbox forces the agent **read-only**: it investigates, then submits a plan that opens in a **review panel**. The host and any full-capability peer can drop **inline comments** anchored to the exact passage — synced live across everyone — then **Approve** or **Request changes**. A rejection feeds the comments back and the agent revises the plan.
 
-### The host's flow, end to end
-
-|  |  |
-|:--|:--|
-| <img src="docs/img/flow/flow-1-chat.png" width="100%"><br><sub>**1 · Chat** — a peer joins and both sides chat in-thread (`>` prefix); no model turn is spent.</sub> | <img src="docs/img/flow/flow-2-prompt.png" width="100%"><br><sub>**2 · Prompt** — the host sends a normal turn to the model.</sub> |
-| <img src="docs/img/flow/flow-3-clarify.png" width="100%"><br><sub>**3 · Clarify** — the agent asks structured questions before planning.</sub> | <img src="docs/img/flow/flow-4-events.png" width="100%"><br><sub>**4 · Observe** — every hook event streams into the live Events panel.</sub> |
-| <img src="docs/img/flow/flow-5-plan.png" width="100%"><br><sub>**5 · Plan** — `/plan` forces the agent read-only; it drafts a plan instead of acting.</sub> | <img src="docs/img/flow/flow-6-review.png" width="100%"><br><sub>**6 · Review** — the plan opens for inline comments, then Approve / Request changes.</sub> |
-
-<p align="center">
-  <img src="docs/img/flow/flow-7-iterate.png" width="100%"><br>
-  <sub><b>7 · Iterate</b> — “Request changes” feeds the comments back; the agent revises read-only and resubmits, and once the host approves the session leaves plan mode and implements it.</sub>
-</p>
-
-Peers co-drive the same session from anywhere — here's “Rafael” reviewing the plan from his phone:
-
-<p align="center">
-  <img src="docs/img/peer-mobile.png" alt="Peer on mobile — co-driving the plan review" height="460">
-</p>
-
 ## Architecture
 
 The runtime is split across **two containers** so a compromise of the web layer can't reach your credentials:
