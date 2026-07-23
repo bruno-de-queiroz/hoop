@@ -429,3 +429,48 @@ describe("ShellTranscript peer typing bubble", () => {
     expect(screen.queryByTestId("peer-typing")).toBeNull();
   });
 });
+
+describe("ShellTranscript image lightbox", () => {
+  const imgEvent = (id: number, data: string): EventRow => ({
+    ...ev({ id, hook_type: "UserPromptSubmit", author: "host", text: "" }),
+    images: [{ media_type: "image/png", data }],
+  });
+
+  it("is closed until a thumbnail is clicked", () => {
+    renderTranscript([imgEvent(1, "AAAA")]);
+    expect(screen.queryByRole("dialog", { name: "Image viewer" })).toBeNull();
+    fireEvent.click(screen.getByLabelText("Open image"));
+    expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
+  });
+
+  it("gathers every session image into the carousel and selects the clicked one", () => {
+    renderTranscript([imgEvent(1, "AAAA"), imgEvent(2, "BBBB")]);
+    // Open the SECOND image; both thumbnails should exist in the strip and the
+    // second should be the active one.
+    fireEvent.click(screen.getAllByLabelText("Open image")[1]);
+    expect(screen.getByLabelText("Image 1").getAttribute("aria-current")).toBe("false");
+    expect(screen.getByLabelText("Image 2").getAttribute("aria-current")).toBe("true");
+  });
+
+  it("pages to the next image with the next control", () => {
+    renderTranscript([imgEvent(1, "AAAA"), imgEvent(2, "BBBB")]);
+    fireEvent.click(screen.getAllByLabelText("Open image")[0]);
+    expect(screen.getByLabelText("Image 1").getAttribute("aria-current")).toBe("true");
+    fireEvent.click(screen.getByLabelText("Next image"));
+    expect(screen.getByLabelText("Image 2").getAttribute("aria-current")).toBe("true");
+  });
+
+  it("shows no nav controls for a single image", () => {
+    renderTranscript([imgEvent(1, "AAAA")]);
+    fireEvent.click(screen.getByLabelText("Open image"));
+    expect(screen.queryByLabelText("Next image")).toBeNull();
+    expect(screen.queryByLabelText("Previous image")).toBeNull();
+  });
+
+  it("closes on the ✕ button", () => {
+    renderTranscript([imgEvent(1, "AAAA")]);
+    fireEvent.click(screen.getByLabelText("Open image"));
+    fireEvent.click(screen.getByLabelText("Close"));
+    expect(screen.queryByRole("dialog", { name: "Image viewer" })).toBeNull();
+  });
+});

@@ -462,3 +462,19 @@ select.field {
 [data-theme="light"] .hljs-strong {
   font-weight: 700;
 }
+
+/* Typing indicator dots: lift + fade. Dots dim to 0.4 at rest and rise to
+ * full while bouncing; stagger the three via animation-delay. Used by the
+ * peer typing bubble (and available to any 3-dot indicator). */
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-6px);
+    opacity: 1;
+  }
+}

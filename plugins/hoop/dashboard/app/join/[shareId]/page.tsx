@@ -177,7 +177,7 @@ export default function JoinPage() {
           </div>
         ) : phase === "waiting" ? (
           <div className="flex flex-col items-center text-center py-4">
-            <Loader2 className="w-7 h-7 animate-spin text-live" aria-hidden />
+            <Loader2 className="w-7 h-7 animate-spin text-accent" aria-hidden />
             <p className="mt-3 text-[13px] text-ink">Waiting for the host to let you in…</p>
             <p className="mt-1 text-[11px] text-ink-mute">Keep this tab open.</p>
           </div>

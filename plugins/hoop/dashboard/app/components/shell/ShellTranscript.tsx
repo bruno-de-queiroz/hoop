@@ -1,6 +1,7 @@
 "use client";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { Sparkles, Terminal, ArrowUp, MessageCircle, CheckCircle2, PencilLine, AlertTriangle, Copy, Check } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Sparkles, Terminal, ArrowUp, MessageCircle, CheckCircle2, PencilLine, AlertTriangle, Copy, Check, ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { EventRow } from "@/lib/sandbox-client";
 import {
   userPromptText,
@@ -114,6 +115,7 @@ const HostBubble = memo(function HostBubble({
   row,
   mine,
   chat = false,
+  onOpenImage,
 }: {
   row: EventRow;
   // `mine` drives color only: my own turns are green (host bubble), everyone
@@ -123,6 +125,10 @@ const HostBubble = memo(function HostBubble({
   // model — a side conversation. Marked with a subtle chat glyph + a softer
   // bubble so it reads as aside chatter, not a turn the agent acts on.
   chat?: boolean;
+  // Open the session-wide image lightbox at this image (keyed `${row.id}:${i}`).
+  // Stable identity from the parent so memo isn't defeated. Omitted → thumbnails
+  // are non-interactive (standalone renders / tests).
+  onOpenImage?: (key: string) => void;
 }) {
   const text = userPromptText(row);
   const images = Array.isArray(row.images) ? row.images : [];
@@ -165,15 +171,29 @@ const HostBubble = memo(function HostBubble({
         )}
         {images.length > 0 && (
           <div className={cn("flex flex-wrap gap-1.5", text && "mt-2")}>
-            {images.map((img, i) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                key={i}
-                src={`data:${img.media_type};base64,${img.data}`}
-                alt="attached image"
-                className="max-h-48 max-w-[14rem] rounded-lg object-contain border border-white/20"
-              />
-            ))}
+            {images.map((img, i) => {
+              const el = (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={`data:${img.media_type};base64,${img.data}`}
+                  alt="attached image"
+                  className="max-h-48 max-w-[14rem] rounded-lg object-contain border border-white/20"
+                />
+              );
+              return onOpenImage ? (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => onOpenImage(`${row.id}:${i}`)}
+                  aria-label="Open image"
+                  className="block rounded-lg cursor-pointer transition hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  {el}
+                </button>
+              ) : (
+                <span key={i}>{el}</span>
+              );
+            })}
           </div>
         )}
       </div>
@@ -324,8 +344,17 @@ const ToolCardBody = memo(function ToolCardBody({ pre, post }: { pre: EventRow; 
     <div className="tool-card px-3 py-2 msg-wide">
       <div className="flex items-center gap-2 font-mono text-[11px]">
         <span className="shrink-0 text-wrap">●</span>
-        <span className="min-w-0 truncate text-ink-soft" title={toolName}>{prettyToolName(toolName)}</span>
-        {args && <span className="min-w-0 truncate text-ink-faint">{args}</span>}
+        <span
+          className="shrink-0 truncate max-w-[60%] font-medium text-ink"
+          title={toolName}
+        >
+          {prettyToolName(toolName)}
+        </span>
+        {args && (
+          <span className="min-w-0 flex-1 truncate text-ink-faint" title={args}>
+            {args}
+          </span>
+        )}
         <span className="ml-auto shrink-0 chip text-[9px] px-1.5 py-0.5 text-ink-faint">tool</span>
       </div>
       {hasResult && (
@@ -482,9 +511,9 @@ function Waiting() {
     <div className="flex items-end gap-2.5" data-testid="waiting-indicator">
       <AssistantAvatar />
       <div className="bubble bubble-assistant px-4 py-3 flex items-center gap-1.5">
-        <span className="w-1.5 h-1.5 rounded-full bg-live motion-safe:animate-pulse" />
-        <span className="w-1.5 h-1.5 rounded-full bg-live motion-safe:animate-pulse [animation-delay:200ms]" />
-        <span className="w-1.5 h-1.5 rounded-full bg-live motion-safe:animate-pulse [animation-delay:400ms]" />
+        <span className="w-1.5 h-1.5 rounded-full bg-accent motion-safe:animate-[typing-bounce_1.3s_ease-in-out_0ms_infinite]" />
+        <span className="w-1.5 h-1.5 rounded-full bg-accent motion-safe:animate-[typing-bounce_1.3s_ease-in-out_180ms_infinite]" />
+        <span className="w-1.5 h-1.5 rounded-full bg-accent motion-safe:animate-[typing-bounce_1.3s_ease-in-out_360ms_infinite]" />
       </div>
     </div>
   );
@@ -498,11 +527,183 @@ function PeerTypingBubble({ label }: { label: string }) {
     <div className="flex flex-col items-end gap-1" data-testid="peer-typing">
       <span className="text-[10px] uppercase tracking-wide text-sdk pr-1">{label}</span>
       <div className="bubble bubble-peer px-4 py-3 flex items-center gap-1.5">
-        <span className="w-1.5 h-1.5 rounded-full bg-white/70 motion-safe:animate-pulse" />
-        <span className="w-1.5 h-1.5 rounded-full bg-white/70 motion-safe:animate-pulse [animation-delay:200ms]" />
-        <span className="w-1.5 h-1.5 rounded-full bg-white/70 motion-safe:animate-pulse [animation-delay:400ms]" />
+        <span className="w-1.5 h-1.5 rounded-full bg-white/70 motion-safe:animate-[typing-bounce_1.3s_ease-in-out_0ms_infinite]" />
+        <span className="w-1.5 h-1.5 rounded-full bg-white/70 motion-safe:animate-[typing-bounce_1.3s_ease-in-out_180ms_infinite]" />
+        <span className="w-1.5 h-1.5 rounded-full bg-white/70 motion-safe:animate-[typing-bounce_1.3s_ease-in-out_360ms_infinite]" />
       </div>
     </div>
+  );
+}
+
+// A session-wide image lightbox: click any thumbnail to open the clicked image
+// full size, then page through every image in the session with the arrows, a
+// thumbnail strip, or ←/→. Images are the sandbox's ≤512² base64 thumbnails —
+// "full size" here means the thumbnail shown unshrunk, capped to the viewport.
+// Portals to <body> so the theme vars (on <html>) still cascade in, and so the
+// scroll container's overflow/stacking never clips it. Esc / backdrop click /
+// the ✕ all close.
+type LightboxImage = { key: string; src: string };
+function ImageLightbox({
+  images,
+  openKey,
+  onClose,
+  onSelect,
+}: {
+  images: LightboxImage[];
+  openKey: string | null;
+  onClose: () => void;
+  onSelect: (key: string) => void;
+}) {
+  const idx = openKey == null ? -1 : images.findIndex((im) => im.key === openKey);
+  const open = idx >= 0;
+  const count = images.length;
+  const activeThumbRef = useRef<HTMLButtonElement>(null);
+
+  const go = useCallback(
+    (delta: number) => {
+      if (count === 0) return;
+      const next = (idx + delta + count) % count;
+      onSelect(images[next].key);
+    },
+    [idx, count, images, onSelect],
+  );
+
+  // Esc closes; ←/→ page. Bound while open so it doesn't shadow the composer's
+  // own keys the rest of the time.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        go(-1);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        go(1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, go, onClose]);
+
+  // Lock body scroll while open; keep the active thumbnail in view.
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const thumb = activeThumbRef.current;
+    // jsdom (tests) doesn't implement scrollIntoView; guard so the effect can't throw.
+    if (thumb && typeof thumb.scrollIntoView === "function") {
+      try {
+        thumb.scrollIntoView({ block: "nearest", inline: "center" });
+      } catch {
+        /* non-fatal: keeping the active thumbnail centered is best-effort */
+      }
+    }
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open, openKey]);
+
+  if (!open || typeof document === "undefined") return null;
+  const current = images[idx];
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[95] flex flex-col bg-black/85 motion-safe:animate-fade-in"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Image viewer"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      {/* Top bar: position + close. */}
+      <div
+        className="flex items-center justify-between px-4 py-3 text-white/80"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <span className="font-mono text-[12px] tabular-nums">
+          {idx + 1} / {count}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="rounded-md p-1.5 text-white/70 hover:text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          autoFocus
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+
+      {/* Stage: the current image, plus prev/next when there's more than one. */}
+      <div
+        className="relative flex min-h-0 flex-1 items-center justify-center px-4"
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) onClose();
+        }}
+      >
+        {count > 1 && (
+          <button
+            type="button"
+            onClick={() => go(-1)}
+            aria-label="Previous image"
+            className="absolute left-2 sm:left-4 z-10 rounded-full p-2 bg-black/40 text-white/80 hover:bg-black/60 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+        )}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={current.src}
+          alt="attached image"
+          className="max-h-full max-w-full rounded-lg object-contain shadow-overlay select-none"
+          onMouseDown={(e) => e.stopPropagation()}
+        />
+        {count > 1 && (
+          <button
+            type="button"
+            onClick={() => go(1)}
+            aria-label="Next image"
+            className="absolute right-2 sm:right-4 z-10 rounded-full p-2 bg-black/40 text-white/80 hover:bg-black/60 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <ChevronRight className="w-6 h-6" />
+          </button>
+        )}
+      </div>
+
+      {/* Thumbnail strip — the carousel. Active one ringed in accent. */}
+      {count > 1 && (
+        <div
+          className="flex gap-2 overflow-x-auto px-4 py-3"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {images.map((im, i) => (
+            <button
+              key={im.key}
+              ref={i === idx ? activeThumbRef : undefined}
+              type="button"
+              onClick={() => onSelect(im.key)}
+              aria-label={`Image ${i + 1}`}
+              aria-current={i === idx}
+              className={cn(
+                "shrink-0 rounded-md overflow-hidden border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                i === idx
+                  ? "border-accent ring-2 ring-accent"
+                  : "border-white/20 opacity-60 hover:opacity-100",
+              )}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={im.src} alt="" className="h-14 w-14 object-cover" />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>,
+    document.body,
   );
 }
 
@@ -529,6 +730,25 @@ export const ShellTranscript = memo(function ShellTranscript({
   typingLabel?: string;
 }) {
   const viewer: Viewer = { kind: viewerKind, name: viewerName };
+
+  // Every image in the session, in event order, so a click on any thumbnail can
+  // open a lightbox that pages through all of them. Keyed `${row.id}:${i}` to
+  // match the per-image key HostBubble emits. `openImage` is stable so it never
+  // defeats HostBubble's memo.
+  const allImages = useMemo(() => {
+    const out: LightboxImage[] = [];
+    for (const e of events) {
+      if (e.agent_id) continue; // mirror the transcript's own subagent filter
+      const imgs = Array.isArray(e.images) ? e.images : [];
+      imgs.forEach((img, i) =>
+        out.push({ key: `${e.id}:${i}`, src: `data:${img.media_type};base64,${img.data}` }),
+      );
+    }
+    return out;
+  }, [events]);
+  const [openImageKey, setOpenImageKey] = useState<string | null>(null);
+  const openImage = useCallback((key: string) => setOpenImageKey(key), []);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
   const prevLenRef = useRef(0);
@@ -619,7 +839,7 @@ export const ShellTranscript = memo(function ShellTranscript({
         } else if (e.kind === "command") {
           pushNode(`u-${e.id}`, <CommandCard row={e} />);
         } else {
-          pushNode(`u-${e.id}`, <HostBubble row={e} mine={isMine(e, viewer)} />);
+          pushNode(`u-${e.id}`, <HostBubble row={e} mine={isMine(e, viewer)} onOpenImage={openImage} />);
         }
         break;
       case "Stop":
@@ -666,7 +886,7 @@ export const ShellTranscript = memo(function ShellTranscript({
         break;
       }
       case "Chat":
-        pushNode(`c-${e.id}`, <HostBubble row={e} mine={isMine(e, viewer)} chat />);
+        pushNode(`c-${e.id}`, <HostBubble row={e} mine={isMine(e, viewer)} chat onOpenImage={openImage} />);
         break;
       case "PermissionRequest":
       case "PermissionResponse":
@@ -682,6 +902,7 @@ export const ShellTranscript = memo(function ShellTranscript({
   flushTools();
 
   return (
+    <>
     <div
       ref={scrollRef}
       onScroll={handleScroll}
@@ -709,5 +930,12 @@ export const ShellTranscript = memo(function ShellTranscript({
         </>
       )}
     </div>
+    <ImageLightbox
+      images={allImages}
+      openKey={openImageKey}
+      onClose={() => setOpenImageKey(null)}
+      onSelect={setOpenImageKey}
+    />
+    </>
   );
 });
