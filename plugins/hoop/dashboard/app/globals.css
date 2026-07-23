@@ -56,8 +56,8 @@
   --ink-faint: 107 100 91;     /* #6b645b  section titles / chips */
   --ink-hush: 76 70 62;        /* #4c463e  placeholders / disabled */
 
-  --accent: 255 74 28;         /* #ff4a1c  rationed brand accent */
-  --accent-press: 226 62 20;   /* #e23e14  accent :active */
+  --accent: 226 102 167;       /* #e266a7  rationed brand accent */
+  --accent-press: 199 90 147;  /* #c75a93  accent :active */
   --live: 245 181 68;          /* #f5b544  amber — running / attention */
   --wrap: 62 207 142;          /* #3ecf8e  green — wrapper / success */
   --sdk: 90 162 240;           /* #5aa2f0  blue — SDK / info */
@@ -97,8 +97,8 @@
   --ink-faint: 130 138 150;    /* #828a96 */
   --ink-hush: 169 175 186;     /* #a9afba */
 
-  --accent: 255 74 28;         /* #ff4a1c */
-  --accent-press: 226 62 20;   /* #e23e14 */
+  --accent: 226 102 167;       /* #e266a7 */
+  --accent-press: 199 90 147;  /* #c75a93 */
   --live: 180 83 9;            /* #b45309 */
   --wrap: 23 151 106;          /* #17976a */
   --sdk: 59 118 207;           /* #3b76cf */

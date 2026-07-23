@@ -186,6 +186,14 @@ export function ShellSearch() {
                 className="flex-1 bg-transparent border-0 outline-none text-[14px] text-ink placeholder:text-ink-hush"
               />
               <div className="flex items-center gap-1 text-[10px]">
+                {/* Fixed-size slot so the tabs never shift when loading toggles
+                    on each keystroke — only the icon inside appears/disappears. */}
+                <span
+                  className="w-3.5 h-3.5 flex items-center justify-center shrink-0"
+                  aria-hidden={!loading}
+                >
+                  {loading && <Loader2 className="w-3.5 h-3.5 animate-spin text-ink-mute" />}
+                </span>
                 {(["bm25", "semantic", "hybrid"] as SearchType[]).map((t) => {
                   const blocked =
                     (t === "semantic" || t === "hybrid") && Boolean(meta?.semantic_unavailable);
@@ -201,7 +209,6 @@ export function ShellSearch() {
                   );
                 })}
               </div>
-              {loading && <Loader2 className="w-3.5 h-3.5 animate-spin text-ink-mute" />}
               <button
                 onClick={() => setOpen(false)}
                 className="icon-btn w-8 h-8"

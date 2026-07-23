@@ -169,6 +169,95 @@ describe("SessionsProvider", () => {
     expect(fetchScript.calls.filter((c) => c.url === "/api/sessions").length).toBe(1);
   });
 
+  it("bounces a ?session that resolves to no known session back to the create flow", async () => {
+    setMockUrl("http://localhost/?session=ghost-id");
+    await loadProviders();
+
+    render(
+      <DashboardProviders>
+        <div />
+      </DashboardProviders>,
+    );
+    await act(async () => {
+      await flush();
+    });
+
+    // Still within the grace window — no bounce yet.
+    mockRouterReplace.mockClear();
+
+    // Let the grace window elapse; the id never lands, so we clear the param.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 2700));
+    });
+
+    const last = mockRouterReplace.mock.calls.at(-1)?.[0] as string | undefined;
+    expect(last).toBeDefined();
+    expect(last).not.toMatch(/session=/);
+  });
+
+  it("does NOT bounce when the unknown id lands in the list within the grace window", async () => {
+    const withLate = [
+      ...defaultSessions,
+      {
+        id: "late-id",
+        path: "",
+        mtime: "2026-05-19T11:00:00Z",
+        size: 0,
+        sessionId: "late-id",
+        displayName: null,
+        cwd: "/workspace",
+        lifecycle: "alive",
+        aliases: [],
+      },
+    ];
+    let listCall = 0;
+    fetchScript = installMockFetch({
+      routes: [
+        (url, method) => {
+          if (url === "/api/sessions" && method === "GET") {
+            listCall += 1;
+            return { json: listCall === 1 ? defaultSessions : withLate };
+          }
+          if (url.startsWith("/api/events?")) return { json: [] };
+          if (url.match(/\/api\/sessions\/[^/]+\/(model|summary)$/))
+            return { json: { model: null, summary: null } };
+          if (url.startsWith("/api/commands") || url.startsWith("/api/skills")) return { json: [] };
+          return null;
+        },
+      ],
+    });
+    setMockUrl("http://localhost/?session=late-id");
+    await loadProviders();
+
+    render(
+      <DashboardProviders>
+        <div />
+      </DashboardProviders>,
+    );
+    await act(async () => {
+      await flush();
+    });
+    mockRouterReplace.mockClear();
+
+    // The row lands via an SSE-driven refresh before the grace elapses.
+    fireSse("sessions", { changed: true });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+      await flush();
+    });
+
+    // Now let the grace window fully elapse — the timer must see the row and
+    // NOT clear the selection.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 2600));
+    });
+
+    const clearedSelection = mockRouterReplace.mock.calls
+      .map((c) => c[0] as string)
+      .some((u) => !/session=/.test(u));
+    expect(clearedSelection).toBe(false);
+  });
+
   it("deleteSession() clears the URL when the deleted session is selected", async () => {
     setMockUrl("http://localhost/?session=sess-a");
     await loadProviders();

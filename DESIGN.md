@@ -20,8 +20,8 @@ ink:
   ink-faint: "#6b645b"   # section titles / chips
   ink-hush: "#4c463e"    # placeholders / disabled
 cues:
-  accent: "#ff4a1c"       # brand — rationed, primary actions only
-  accent-press: "#e23e14" # accent :active
+  accent: "#e266a7"       # brand — rationed, primary actions only
+  accent-press: "#c75a93" # accent :active
   live: "#f5b544"         # amber — running / attention
   wrap: "#3ecf8e"         # green — wrapper / resolved
   sdk: "#5aa2f0"          # blue — SDK / background
@@ -130,7 +130,7 @@ The window is built from a warm-neutral staircase, each step half a tone above t
 
 ### Cues (six meanings, state only)
 
-- **`accent`** (`#ff4a1c`, orange) — the brand. The single primary action per context (Send, the active tab/row tint, focus ring). Rationed hard: if two things on screen are accent, one is wrong.
+- **`accent`** (`#e266a7`, pink) — the brand. The single primary action per context (Send, the active tab/row tint, focus ring). Rationed hard: if two things on screen are accent, one is wrong.
 - **`live`** (amber) — "currently running." Busy session dot, the `?` of AskUserQuestion, in-flight spinners, the running-agent pulse.
 - **`wrap`** (green) — "resolved." Completed run dots, tool-call bullets, OK exit codes. A state that *finished*, never a "submit" affordance.
 - **`sdk`** (blue) — "background, not a person." Marks SDK/CLI sessions so a glance separates automation from humans.

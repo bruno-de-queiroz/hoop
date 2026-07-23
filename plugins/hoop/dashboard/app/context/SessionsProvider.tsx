@@ -97,12 +97,23 @@ function shallowEqual(a: SessionInfo[], b: SessionInfo[]): boolean {
 // regressing to a null-displayName transient during the resume id-swap.
 const WAKE_SETTLE_MS = 1500;
 
+// Grace window before treating a `?session=<id>` that matches no known session
+// as dead and bouncing back to the create-session flow. A freshly-spawned
+// session is selected by its (real) id the instant `createSession` /
+// `startSkillRun` resolves — a beat before it lands in the `/api/sessions`
+// list — so we can't redirect on a single missing read. We wait, and the
+// timer callback re-checks the freshest list: if the row arrived (SSE refresh),
+// no redirect; if it never shows, the id is stale/nonexistent → clear it.
+const MISSING_SESSION_GRACE_MS = 2500;
+
 export function SessionsProvider({ children }: { children: React.ReactNode }) {
   const { selectedId, setSelected } = useSelectedSession();
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const sessionsRef = useRef<SessionInfo[]>([]);
   sessionsRef.current = sessions;
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Wake-settle: when the user selects a dormant session, `claude --resume`
@@ -190,6 +201,41 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
   useSSE({
     sessions: () => refreshDebounced(),
   });
+
+  // Dead-session guard: if the URL points at a `?session=<id>` that resolves to
+  // no known session, bounce to the create-session flow (`setSelected(null)`
+  // clears the param → ShellCenterPane renders ShellNewSession). Peers are
+  // untouched — `setSelected` is a no-op under a peer lock.
+  //
+  // Race-safety: this arms a single grace timer per selection (deps are the
+  // selection + load state only, never `sessions`, so an SSE refresh storm
+  // can't keep resetting it). The callback re-reads the freshest list and
+  // selection through refs, so a session that lands mid-grace (freshly created
+  // / skill-spawned) cancels the bounce naturally. If the list hasn't finished
+  // its first load when the timer fires we bail; the `loading` dep re-arms a
+  // fresh window once it settles.
+  const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (redirectTimerRef.current) {
+      clearTimeout(redirectTimerRef.current);
+      redirectTimerRef.current = null;
+    }
+    if (!selectedId) return;
+    redirectTimerRef.current = setTimeout(() => {
+      redirectTimerRef.current = null;
+      if (loadingRef.current) return; // list not authoritative yet
+      const sel = selectedIdRef.current;
+      if (!sel) return;
+      const exists = sessionsRef.current.some((s) => matchesSelected(s, sel));
+      if (!exists) setSelected(null);
+    }, MISSING_SESSION_GRACE_MS);
+    return () => {
+      if (redirectTimerRef.current) {
+        clearTimeout(redirectTimerRef.current);
+        redirectTimerRef.current = null;
+      }
+    };
+  }, [selectedId, loading, matchesSelected, setSelected]);
 
   const deleteSession = useCallback(
     async (sessionId: string) => {
