@@ -8,6 +8,7 @@
 # side-effect-free to source, so completion stays fast.
 . ${MODULES_DIR}/../lib/stack.sh
 . ${MODULES_DIR}/../lib/prompt.sh
+. ${MODULES_DIR}/../lib/progress.sh
 
 # =============================================================================
 # hoop setup — the interactive stack wizard (native port of /hoop:setup)
@@ -39,19 +40,21 @@ _setup_sandbox_running() {
 # True if `claude mcp list` (cached) already shows a server matching $1.
 _setup_has_mcp() { printf '%s' "$SETUP_MCP_LIST" | grep -qi "$1"; }
 
-# _setup_exec "safe-label" cmd args…  — run a command inside the sandbox, print
-# and log it by its SAFE label (never the raw args, which may hold secrets).
+# _setup_exec "safe-label" cmd args…  — run a command inside the sandbox under
+# the progress spinner, logging it by its SAFE label (never the raw args, which
+# may hold secrets). _prog_run owns the on-screen rendering (spinner + ✔/✘ + log
+# tail on failure); here we only keep the audit bookkeeping. When called inside
+# an outer _prog_run step (the default stack path) it runs inline and stays
+# silent; standalone (the wizard) it gets its own spinner line.
 _setup_exec() {
   local label="$1"; shift
-  _info "+ $label"
-  if "$@"; then
+  if _prog_run "$label" "$@"; then
     SETUP_CMDLOG+="- \`${label}\` -> exit 0"$'\n'
     return 0
   fi
   local rc=$?
   SETUP_CMDLOG+="- \`${label}\` -> exit ${rc} (FAILED)"$'\n'
   SETUP_ERRORS+="- ${label} (exit ${rc})"$'\n'
-  _error "failed (exit $rc): ${label}"
   return $rc
 }
 
@@ -92,8 +95,8 @@ EOF
 
 _setup_bootstrap() {
   if ! _setup_sandbox_running; then
-    _info "the hoop sandbox isn't running — starting it (first run builds the image, ~2-3 min)…"
-    hoop_stack_start sandbox || { _error "failed to start the sandbox"; return 1; }
+    _prog_run "Building the sandbox image (first run ~2-3 min)" \
+      hoop_stack_start sandbox || { _error "failed to start the sandbox"; return 1; }
   fi
   _setup_sandbox_running || { _error "sandbox still not running — inspect: hoop logs"; return 1; }
   SETUP_MCP_LIST="$(_hs_exec_sandbox claude mcp list 2>/dev/null || true)"
@@ -127,7 +130,38 @@ _setup_memory() {
     return 0
   fi
   _info "installing claude-mem (powers the dashboard session summaries)…"
-  _setup_exec "npx -y claude-mem install" _hs_exec_sandbox npx -y claude-mem install
+  # Non-interactive: every claude-mem installer prompt (IDE multi-select,
+  # provider, runtime, and the end telemetry ask) is guarded by `isInteractive`
+  # (== `process.stdin.isTTY`). _hs_exec_sandbox allocates a TTY whenever the
+  # caller has one, so the reliable way to skip ALL prompts is to feed the exec
+  # a non-TTY stdin (`</dev/null` → _hs_exec_sandbox passes `-T`); the installer
+  # then defaults to the Claude Code IDE + worker runtime with no prompts. We
+  # deliberately DON'T pass `--ide claude-code`: that flag path runs a detection
+  # check and `process.exit(1)`s on a miss, whereas the non-interactive default
+  # selects claude-code unconditionally. `--provider claude --runtime worker
+  # --no-auto-start` pin the rest, and CLAUDE_MEM_TELEMETRY=0 forces telemetry
+  # off (belt-and-suspenders on top of the non-interactive skip).
+  _setup_exec "npx -y claude-mem install (non-interactive)" \
+    _hs_exec_sandbox env CLAUDE_MEM_TELEMETRY=0 \
+    npx -y claude-mem install --provider claude --runtime worker --no-auto-start </dev/null
+}
+
+# Serena is uv-managed (uv is baked into the sandbox image). Install the CLI,
+# then register its launch command with Claude Code. Serena's README only warns
+# against installing Serena *itself* via a plugin/marketplace entry — the
+# documented Claude Code wiring IS this `claude mcp add` +
+# `serena start-mcp-server --context claude-code` form. The older
+# `--context ide-assistant` / `uvx --from git+…` variants are deprecated.
+# Shared by the wizard's code-graph menu and the non-interactive default stack.
+_setup_serena() {
+  if _setup_exec "uv tool install serena-agent" \
+       _hs_exec_sandbox uv tool install -p 3.13 serena-agent; then
+    _setup_mcp serena -- serena start-mcp-server --context claude-code --project-from-cwd
+    _setup_note "Serena: installed via uv + registered (--scope user, --context claude-code). First launch resolves the language server (can be slow); verify with /mcp."
+    _setup_note "Serena hooks (activate/remind/cleanup) wire automatically inside the sandbox on next boot — auto-approve is intentionally not installed."
+  else
+    _setup_note "Serena: 'uv tool install serena-agent' failed in the sandbox — check egress/network and re-run 'hoop setup'."
+  fi
 }
 
 # Deterministic port of the code-graph recommendation logic.
@@ -162,20 +196,7 @@ _setup_codegraph() {
         -e OPENAI_API_KEY="$key" -e MILVUS_ADDRESS="$milvus" -e MILVUS_TOKEN="$token" \
         -- npx -y @zilliz/claude-context-mcp@latest ;;
     Serena)
-      # Serena is uv-managed (uv is baked into the sandbox image). Install the
-      # CLI, then register its launch command with Claude Code. Serena's README
-      # only warns against installing Serena *itself* via a plugin/marketplace
-      # entry — the documented Claude Code wiring IS this `claude mcp add` +
-      # `serena start-mcp-server --context claude-code` form. The older
-      # `--context ide-assistant` / `uvx --from git+…` variants are deprecated.
-      if _setup_exec "uv tool install serena-agent" \
-           _hs_exec_sandbox uv tool install -p 3.13 serena-agent; then
-        _setup_mcp serena -- serena start-mcp-server --context claude-code --project-from-cwd
-        _setup_note "Serena: installed via uv + registered (--scope user, --context claude-code). First launch resolves the language server (can be slow); verify with /mcp."
-        _setup_note "Serena hooks (activate/remind/cleanup) wire automatically inside the sandbox on next boot — auto-approve is intentionally not installed."
-      else
-        _setup_note "Serena: 'uv tool install serena-agent' failed in the sandbox — check egress/network and re-run 'hoop setup'."
-      fi ;;
+      _setup_serena ;;
     Cognee)
       _setup_guided "Cognee has no simple 'claude mcp add' — add this to ~/.claude/config.json:" \
         '{ "mcpServers": { "cognee": { "command": "uv", "args": ["--directory","/path/to/cognee-mcp","run","cognee-mcp"] } } }'
@@ -629,11 +650,18 @@ _setup_write_profile() {
   github="${gh_login:+@${gh_login}}"; github="${github:-not signed in}"
   # When there's no Claude/gh login to derive identity from (e.g. setup ran
   # without signing in), the fields above are empty — ask so profile.md isn't
-  # left blank. Only the ones login didn't already fill are prompted.
-  [ -z "$name" ]    && name="$(_p_input 'Your name for the profile (optional):')"
-  [ -z "$email" ]   && email="$(_p_input 'Your work email for the profile (optional):')"
-  [ -z "$company" ] && company="$(_p_input 'Your company / org for the profile (optional):')"
-  role="$(_p_input 'Your role for the profile (e.g. Staff Engineer):' 'IC')"
+  # left blank. Only the ones login didn't already fill are prompted. Guarded by
+  # a TTY check: the non-interactive default path can run head-less (e.g. from
+  # `hoop install` in CI), where a blocking `read` would hang — fall back to the
+  # "(not provided)" markers below instead.
+  if [ -t 0 ]; then
+    [ -z "$name" ]    && name="$(_p_input 'Your name for the profile (optional):')"
+    [ -z "$email" ]   && email="$(_p_input 'Your work email for the profile (optional):')"
+    [ -z "$company" ] && company="$(_p_input 'Your company / org for the profile (optional):')"
+  fi
+  # Neither gh nor Claude expose a job title/role, so we never ask for one —
+  # default to a neutral marker.
+  role="Human"
   # Never render a blank value — fall back to an explicit marker.
   name="${name:-(not provided)}"; email="${email:-(not provided)}"; company="${company:-(not provided)}"
   local langs="${PICK_LANGS:-(not asked)}"
@@ -707,10 +735,221 @@ EOF
   fi
   printf '\n  Restart so new MCPs load:  hoop sandbox restart\n' >&2
   if _p_confirm "Launch the dashboard now (http://localhost:$HS_PORT/)?" y; then
-    hoop_stack_start all
+    _prog_run "Building the dashboard + starting the stack" hoop_stack_start all
+    _setup_handoff_banner
   else
     printf '  Run `hoop start` any time.\n' >&2
   fi
+}
+
+# =============================================================================
+# Non-interactive default stack (`hoop setup` with no flags / positionals).
+#
+# The one-liner path: `hoop install` chains straight into this. It installs an
+# opinionated default set with ZERO menus — claude-mem, Serena, Context7 (free),
+# semantic search via Docker Model Runner, the GitHub CLI, and telemetry
+# isolation — then (if a TTY is present) runs the sign-ins and starts the stack.
+# Everything else (n8n, other platform MCPs, observability, design, second-brain)
+# stays off; reach it with `hoop setup --wizard` or `hoop setup <section>`.
+# =============================================================================
+
+# Code-graph default: Serena (no language questionnaire).
+_setup_defaults_codegraph() {
+  PICK_CODEGRAPH="Serena"; PICK_LANGS="(default)"
+  _setup_serena
+}
+
+# Docs RAG default: Context7 anonymous free tier (no API key).
+_setup_defaults_docsrag() {
+  PICK_DOCSRAG="Context7 (free tier)"
+  _setup_mcp context7 -- npx -y @upstash/context7-mcp@latest
+}
+
+# Semantic-search default: Docker Model Runner, wired non-interactively. Never
+# blocks — if DMR is already serving with the model pulled we use it as-is; else
+# we try to enable it (Docker Desktop) and defer the model pull to `hoop start`
+# via the compose `models:` override; if DMR can't be brought up we fall back to
+# BM25 with a note. Mirrors _setup_semantic's DMR branch minus the prompts.
+_setup_defaults_semantic() {
+  if curl -fsS --connect-timeout 1 "$HS_DMR_PROBE_URL" >/dev/null 2>&1 \
+     && docker model ls 2>/dev/null | grep -q 'nomic-embed-text-v1.5'; then
+    hoop_stack_unset_env EMBEDDING_BASE_URL EMBEDDING_MODEL OPENAI_API_KEY HOOP_EMBED_HOSTED_CONSENT
+    hoop_stack_set_env EMBED_DIM 768
+    hoop_stack_write_dmr_model "ai/nomic-embed-text-v1.5"
+    PICK_SEMANTIC="Docker Model Runner"
+    _info "Docker Model Runner ready — added ai/nomic-embed-text-v1.5 to the compose stack; semantic search auto-enables."
+    return 0
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    curl -fsS --connect-timeout 1 "$HS_DMR_PROBE_URL" >/dev/null 2>&1 \
+      || docker desktop enable model-runner --tcp 12434 >/dev/null 2>&1 || true
+    if curl -fsS --connect-timeout 1 "$HS_DMR_PROBE_URL" >/dev/null 2>&1; then
+      hoop_stack_unset_env EMBEDDING_BASE_URL EMBEDDING_MODEL OPENAI_API_KEY HOOP_EMBED_HOSTED_CONSENT
+      hoop_stack_set_env EMBED_DIM 768
+      hoop_stack_write_dmr_model "ai/nomic-embed-text-v1.5"
+      PICK_SEMANTIC="Docker Model Runner"
+      _info "enabled Docker Model Runner (:12434) — ai/nomic-embed-text-v1.5 added to the compose stack; pulled on 'hoop start'."
+      return 0
+    fi
+  fi
+  hoop_stack_clear_dmr_model
+  PICK_SEMANTIC="skipped (BM25)"
+  _setup_note "Semantic search: Docker Model Runner unavailable — left BM25-only. Enable DMR, then re-run 'hoop setup model-runner'."
+}
+
+# GitHub default: queue the sandbox gh device-flow sign-in (run in _setup_auth
+# when a TTY is present). GitHub is the baked `gh` CLI — no `claude mcp add`.
+_setup_defaults_github() {
+  SETUP_AUTH_GH=1
+  PICK_PLATFORM="GitHub (gh)"
+  _info "GitHub: queued the sandbox 'gh' device-flow sign-in for the end of setup."
+}
+
+# Telemetry default: isolate. Sets the master switch; _setup_telemetry_components
+# then applies the known per-tool opt-outs (Serena etc.).
+_setup_defaults_telemetry() {
+  hoop_stack_set_env HOOP_DISABLE_TELEMETRY 1
+  PICK_TELEMETRY="isolated"
+  _info "telemetry isolation enabled (applied on next start)."
+}
+
+# Shared "you're done" hand-off banner, printed once the stack is up. Boxed
+# title + the dashboard URL + a compact stack list + next steps, with any
+# errors/notes appended. Unicode box art when colour is on, ASCII otherwise
+# (NO_COLOR / dumb terminals). Used by BOTH the default flow and the wizard.
+_setup_handoff_banner() {
+  local url="http://localhost:$HS_PORT/"
+  local tl tr bl br hz vt
+  if [ -n "$_B" ]; then tl='┌' tr='┐' bl='└' br='┘' hz='─' vt='│'
+  else                  tl='+' tr='+' bl='+' br='+' hz='-' vt='|'; fi
+  local title="  hoop is ready  " bar
+  bar="$(printf '%*s' "${#title}" '' | tr ' ' "$hz")"
+
+  # Compact stack list from the picks that actually landed.
+  local -a bits=(); local b stack=""
+  [ -n "$PICK_MEMORY" ]                                        && bits+=("$PICK_MEMORY")
+  [ -n "$PICK_CODEGRAPH" ] && [ "$PICK_CODEGRAPH" != "n/a (non-coding)" ] && bits+=("$PICK_CODEGRAPH")
+  [ -n "$PICK_DOCSRAG" ]                                       && bits+=("$PICK_DOCSRAG")
+  [ -n "$PICK_SEMANTIC" ]                                      && bits+=("semantic: $PICK_SEMANTIC")
+  [ -n "$PICK_PLATFORM" ]                                      && bits+=("$PICK_PLATFORM")
+  [ -n "$PICK_N8N" ]                                           && bits+=("$PICK_N8N")
+  [ -n "$PICK_OBS" ]                                           && bits+=("$PICK_OBS")
+  [ -n "$PICK_DESIGN" ]                                        && bits+=("$PICK_DESIGN")
+  [ -n "$PICK_BRAIN" ]                                         && bits+=("$PICK_BRAIN")
+  bits+=("telemetry: ${PICK_TELEMETRY}")
+  for b in "${bits[@]}"; do stack+="${stack:+  ·  }$b"; done
+
+  {
+    printf '\n  %s%s%s%s%s\n' "$_AC" "$tl" "$bar" "$tr" "$_RST"
+    printf '  %s%s%s%s%s%s%s%s%s\n' "$_AC" "$vt" "$_RST" "$_B$_AC" "$title" "$_RST" "$_AC" "$vt" "$_RST"
+    printf '  %s%s%s%s%s\n' "$_AC" "$bl" "$bar" "$br" "$_RST"
+    printf '\n  Dashboard:  %s%s%s\n' "$_B$_AC" "$url" "$_RST"
+    printf '  %shoop recognizes your own machine automatically — nothing to paste.%s\n' "$_DIM" "$_RST"
+    printf '\n  Stack:  %s\n' "$stack"
+    printf '\n  Next:\n'
+    _hs_sandbox_authenticated || \
+      printf '    %s•%s hoop login             sign the sandbox in (one-time)\n' "$_CY" "$_RST"
+    printf '    %s•%s hoop setup <section>   add or adjust one layer\n' "$_CY" "$_RST"
+    printf '    %s•%s hoop open              a throwaway sandbox shell over any folder\n' "$_CY" "$_RST"
+    printf '\n  Audit trail: %s/install-log.md\n' "$HS_SANDBOX_STATE"
+    [ -n "$SETUP_ERRORS" ] && printf '\n  %s✘ Some installs failed:%s\n%s' "$_RD" "$_RST" "$SETUP_ERRORS"
+    [ -n "$SETUP_NOTES" ]  && printf '\n  %sManual follow-ups:%s\n%s' "$_YL" "$_RST" "$SETUP_NOTES"
+  } >&2
+}
+
+# Telemetry as ONE counted step: flip the master switch, then apply the per-tool
+# opt-outs that depend on the other picks. Wrapped by _prog_run in _setup_defaults.
+_setup_defaults_telemetry_all() {
+  _setup_defaults_telemetry
+  _setup_telemetry_components
+}
+
+# The non-interactive default flow. Installs the default stack under a numbered
+# progress bar ([n/N] spinner per step), runs the sign-ins only when a TTY is
+# present (so `hoop install` still succeeds head-less / in CI), writes the
+# profile + audit log, brings the whole stack up, then prints the hand-off banner.
+#
+# The step count is fixed and every step is exactly ONE _prog_run call — even the
+# "already installed" / no-op branches run inside their step — so [n/N] never
+# drifts. Sign-ins + profile/log writes aren't spinner steps (interactive /
+# instant), so they sit between the counted steps.
+_setup_defaults() {
+  _info "hoop setup — installing the default stack (no menus). Use 'hoop setup --wizard' to choose each layer."
+  _prog_begin 8
+  _prog_run "Preparing the sandbox (first run builds the image ~2-3 min)" _setup_bootstrap || { _prog_end; return 1; }
+  _prog_run "Installing claude-mem (memory)"   _setup_memory
+  _prog_run "Installing Serena (code-graph)"   _setup_defaults_codegraph
+  _prog_run "Installing Context7 (docs)"       _setup_defaults_docsrag
+  _prog_run "Configuring semantic search"      _setup_defaults_semantic
+  _prog_run "Enabling GitHub access"           _setup_defaults_github
+  _prog_run "Applying telemetry isolation"     _setup_defaults_telemetry_all
+  if [ -t 0 ]; then
+    _setup_auth
+  else
+    _setup_note "Sign-in skipped (no TTY): run 'hoop login' to authenticate the sandbox; for GitHub, run 'gh auth login --web' inside 'hoop open'."
+  fi
+  _setup_write_profile
+  _setup_write_log
+  _prog_run "Building the dashboard + starting the stack" hoop_stack_start all
+  _prog_end
+  _setup_handoff_banner
+}
+
+# =============================================================================
+# Selective sections (`hoop setup <section> [<section>…]`).
+#
+# Runs ONLY the named wizard steps, interactively, in the order given — for
+# reconfiguring one layer without the whole wizard. Bootstraps first, completes
+# any sign-ins a selected step queued, then writes the profile + audit log.
+# =============================================================================
+
+# Map a section token (canonical or alias) to its step function, or empty if
+# unknown. Kept as a function so both the runner and validation share it.
+_setup_section_fn() {
+  case "$1" in
+    code-graph|codegraph)  echo _setup_codegraph ;;
+    automation|n8n)        echo _setup_n8n ;;
+    mcps|platform)         echo _setup_platform ;;
+    rag|docs)              echo _setup_docsrag ;;
+    model-runner|semantic) echo _setup_semantic ;;
+    telemetry)             echo _setup_telemetry ;;
+    observability|obs)     echo _setup_observability ;;
+    design)                echo _setup_design ;;
+    second-brain|brain)    echo _setup_secondbrain ;;
+    memory)                echo _setup_memory ;;
+    *)                     echo "" ;;
+  esac
+}
+
+_setup_sections() {
+  # Resolve + validate every token up front so a typo aborts before we touch the
+  # sandbox (no half-run).
+  local tok fn; local -a fns=()
+  for tok in "$@"; do
+    fn="$(_setup_section_fn "$tok")"
+    [ -n "$fn" ] || _die "unknown setup section: '$tok' (valid: code-graph automation mcps rag model-runner telemetry observability design second-brain memory)"
+    fns+=("$fn")
+  done
+  _setup_bootstrap || return 1
+  local ran_telemetry=false
+  for fn in "${fns[@]}"; do
+    "$fn"
+    [ "$fn" = "_setup_telemetry" ] && ran_telemetry=true
+  done
+  # Telemetry's per-tool opt-outs depend on other picks, so apply them after the
+  # selected steps ran (only meaningful if telemetry isolation is/was enabled).
+  $ran_telemetry && _setup_telemetry_components
+  # Finish any sign-ins a selected section queued (platform/observability/brain
+  # OAuth, GitHub device flow). Skipped when nothing needs auth.
+  if [ -n "${SETUP_AUTH_MCP:-}" ] || [ -n "${SETUP_AUTH_GH:-}" ]; then
+    _setup_auth
+  fi
+  _setup_write_profile
+  _setup_write_log
+  printf '\n  %shoop setup complete — sections: %s%s\n' "$_B" "$*" "$_RST" >&2
+  [ -n "$SETUP_ERRORS" ] && printf '\n  %s✘ Some installs failed:%s\n%s' "$_RD" "$_RST" "$SETUP_ERRORS" >&2
+  [ -n "$SETUP_NOTES" ]  && printf '\n  %sManual follow-ups:%s\n%s' "$_YL" "$_RST" "$SETUP_NOTES" >&2
+  printf '\n  Restart so new MCPs load:  hoop sandbox restart\n' >&2
 }
 
 # DESTRUCTIVE full reset (--reset-first). Returns the stack + host state to a
@@ -737,61 +976,89 @@ EOF
   _p_confirm "Wipe everything and start from a blank slate?" n || {
     echo "  Reset cancelled — nothing was deleted." >&2; return 1
   }
-  _info "tearing down the stack (containers, network, hoop-run volume)…"
-  "${HS_COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
-  _info "removing built images (hoop-sandbox, hoop-dashboard)…"
-  docker image rm -f hoop-sandbox hoop-dashboard >/dev/null 2>&1 || true
-  _info "deleting sandbox profile, hoop.env, tokens, and caches…"
-  rm -rf "$HS_SANDBOX_PROFILE_ROOT" 2>/dev/null || true
-  rm -f  "$HS_ENV_FILE" "$HS_HOST_GATEWAY_CACHE" \
-         "$HS_DASHBOARD_TOKEN_FILE" "$HS_PEER_SECRET_FILE" 2>/dev/null || true
-  # The generated compose overrides (mounts/plugin-dev/dmr) lived under the
-  # profile root we just deleted, but HS_COMPOSE still carries their `-f` paths
-  # from source time. Reload so the rebuild uses a clean base compose — otherwise
-  # every subsequent `docker compose` call fails on the missing override file and
-  # bootstrap aborts BEFORE the end-of-setup Claude login runs.
-  HS_DMR_OVERRIDE_ACTIVE=1
-  _hs_compose_reload
+  # Shared destructive teardown (containers, network, volume, images, profile,
+  # hoop.env, tokens, caches) lives in lib/stack.sh so `hoop uninstall` reuses it.
+  hoop_stack_purge
   _info "blank slate ready — continuing with a fresh setup."
   return 0
 }
 
+# Canonical section tokens, for validation help + tab-completion.
+_SETUP_SECTIONS="code-graph automation mcps rag model-runner telemetry observability design second-brain memory"
+
+#@flag --wizard SETUP_WIZARD "false" boolean ~ run the full interactive wizard (all menus) instead of installing the non-interactive default stack
 #@flag --reset-first SETUP_RESET "false" boolean ~ wipe ALL sandbox state (profile, credentials, MCPs, plugins, skills, images) for a blank slate before configuring
-#@protected ~ default entrypoint: run the interactive stack wizard
+#@protected ~ default entrypoint: install the default stack, or run the wizard / named sections
 function _run_setup() {
   _hs_require_host || return $?
   command -v jq >/dev/null 2>&1 || _die "jq is required for setup — install: brew install jq"
-  _p_require_tty || return 1
+  SETUP_TEMPLATES="$HS_PLUGIN_ROOT/templates"
+  SETUP_CATALOG="$HS_PLUGIN_ROOT/catalog"
+
+  # Validate any section tokens BEFORE the (destructive) reset, so a typo can't
+  # wipe all state and then abort. _setup_sections re-checks defensively.
+  local _t
+  for _t in "$@"; do
+    [ -n "$(_setup_section_fn "$_t")" ] || _die "unknown setup section: '$_t' (valid: $_SETUP_SECTIONS)"
+  done
+
+  # Reset (if requested) runs first in every mode; it confirms interactively and
+  # degrades to "cancelled" without a TTY, so it's safe to gate here uniformly.
   if [[ "${SETUP_RESET:-false}" == true ]]; then
     _setup_reset || { echo "Exited. Re-run 'hoop setup' any time."; return 0; }
   fi
-  SETUP_TEMPLATES="$HS_PLUGIN_ROOT/templates"
-  SETUP_CATALOG="$HS_PLUGIN_ROOT/catalog"
-  _setup_consent || { echo "Exited. Re-run 'hoop setup' any time."; return 0; }
-  _setup_bootstrap || return 1
-  # Memory (claude-mem) isn't a prompt — install it right after the image is
-  # built + the sandbox is up, before the interactive menus begin.
-  _setup_memory
-  _setup_telemetry
-  _setup_codegraph
-  _setup_n8n
-  _setup_platform
-  _setup_docsrag
-  _setup_semantic
-  _setup_observability
-  _setup_design
-  _setup_secondbrain
-  _setup_telemetry_components
-  _setup_auth
-  _setup_write_profile
-  _setup_write_log
-  _setup_summary
+
+  # Mode 1 — named sections: run only those steps, interactively.
+  if [[ $# -gt 0 ]]; then
+    _p_require_tty || return 1
+    _setup_sections "$@"
+    return $?
+  fi
+
+  # Mode 2 — full interactive wizard.
+  if [[ "${SETUP_WIZARD:-false}" == true ]]; then
+    _p_require_tty || return 1
+    _setup_consent || { echo "Exited. Re-run 'hoop setup' any time."; return 0; }
+    _setup_bootstrap || return 1
+    # Memory (claude-mem) isn't a prompt — install it right after the image is
+    # built + the sandbox is up, before the interactive menus begin.
+    _setup_memory
+    _setup_telemetry
+    _setup_codegraph
+    _setup_n8n
+    _setup_platform
+    _setup_docsrag
+    _setup_semantic
+    _setup_observability
+    _setup_design
+    _setup_secondbrain
+    _setup_telemetry_components
+    _setup_auth
+    _setup_write_profile
+    _setup_write_log
+    _setup_summary
+    return 0
+  fi
+
+  # Mode 3 (default) — non-interactive default stack. Only the sign-in step needs
+  # a TTY, and it's gated inside _setup_defaults, so this runs head-less too.
+  _setup_defaults
 }
 
-# Forward everything that isn't a built-in straight to the wizard, so `hoop
-# setup` and `hoop setup --reset-first` both work while help/shortlist/version
-# still resolve for tab-completion + help. (`--reset-first` is parsed out by
-# main() before we get here, so it never reaches _run_setup as a positional.)
+# Complete section tokens + flags for `hoop setup <TAB>`. The canonical tokens
+# (aliases still work when typed) are offered whenever we're not completing a
+# flag value; _default_shortlist adds --wizard / --reset-first / help.
+function _shortlist() {
+  local last="${@: -1}"
+  [[ "$last" =~ ^- ]] || echo "$_SETUP_SECTIONS"
+  _default_shortlist "$@"
+}
+
+# Forward everything that isn't a built-in straight to the runner, so `hoop
+# setup`, `hoop setup --wizard`, and `hoop setup <section>…` all work while
+# help/shortlist/version still resolve for tab-completion + help. (`--wizard` /
+# `--reset-first` are parsed out by main() before we get here, so only section
+# positionals reach _run_setup.)
 function _call() {
   case "${1:-}" in
     help|--help|-h|shortlist|version|--version|-V) _default_call "$@"; return ;;

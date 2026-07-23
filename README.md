@@ -17,9 +17,75 @@ The plugin **does not re-implement** any of the third-party MCPs or skills it in
 
 ## Install
 
-There are two ways in. Pick the one that matches your host.
+**You only need Docker and `jq`.** Everything else — Claude Code, Node, `gh`, and every other tool — runs *inside* hoop's containers, so your machine stays clean. If you can run `docker`, you can run hoop. (You do **not** need Claude Code, or even Node, installed on your machine.)
 
-### A · Inside Claude Code (you already run Claude Code)
+> **New to Docker?** Install **[Docker Desktop](https://www.docker.com/products/docker-desktop/)** (macOS / Windows) or, on Linux, your distro's Docker Engine with Compose v2. Launch it, then check it works: `docker run hello-world`.
+>
+> **Install `jq`** (a tiny JSON tool the setup step needs):
+> - macOS: `brew install jq`
+> - Debian / Ubuntu: `sudo apt-get install -y jq`
+> - Fedora / RHEL: `sudo dnf install -y jq`
+> - Windows: `winget install jqlang.jq` (or `choco install jq`)
+>
+> Check it works: `jq --version`.
+>
+> You'll also want **git** (to download hoop) and a **Claude account** on a paid plan (Pro / Max / Team / Enterprise) to sign in with.
+
+### Install in one line
+
+```bash
+git clone https://github.com/bruno-de-queiroz/hoop && cd hoop && ./plugins/hoop/cli/hoop.sh install
+```
+
+That single command clones hoop, adds the `hoop` command to your shell, and runs setup for you. The **first** run builds the sandbox image — a few minutes, so grab a coffee — installs a sensible default toolset, and then walks you through signing in.
+
+**The only parts that need you** (everything else is automatic):
+
+1. **Sign in to Claude.** hoop drops you into a `claude` prompt — type `/login`, open the URL it prints, approve it in your browser, paste the code back, then type `/exit`. hoop uses its **own** Claude account here; your personal Claude Code login is never read or touched. (A web browser is all you need, and it doesn't have to be on the same machine — handy for remote servers.)
+2. **Sign in to GitHub.** A one-time code appears with a URL — open it and paste the code.
+
+When it's done, open **[http://localhost:7842/](http://localhost:7842/)** in your browser. hoop recognizes your own machine automatically, so there's nothing to paste. (Remote access is deliberately locked down — see [Architecture](#architecture).)
+
+> **Want to choose each tool yourself?** Run the guided menu instead:
+> ```bash
+> ./plugins/hoop/cli/hoop.sh install --wizard
+> ```
+
+**What you get by default** (installed with zero questions):
+
+| Tool | What it does for you |
+|---|---|
+| **claude-mem** | Remembers context across sessions |
+| **Serena** | Code-graph search, for engineering work |
+| **Context7** | Fetches up-to-date docs for libraries & frameworks |
+| **Docker Model Runner** | Local semantic search (auto-falls back to keyword search if unavailable) |
+| **GitHub CLI** | Access to your repos, PRs, and issues |
+| **Telemetry isolation** | Blocks the bundled tools' analytics traffic |
+
+### Everyday commands
+
+- **Add or change one piece:** `hoop setup <section>` — e.g. `hoop setup mcps` to add integrations like Jira or Slack, or `hoop setup observability` for Sentry/Datadog. Sections: `code-graph`, `automation`, `mcps`, `rag`, `model-runner`, `telemetry`, `observability`, `design`, `second-brain`, `memory`.
+- **Just a terminal, no dashboard?** `hoop open` runs `claude` in a throwaway sandbox over your current folder.
+- **Update to the latest:** `git pull`, then `hoop rebuild`.
+- **Switch Claude accounts:** `hoop logout`, then `hoop login`.
+- **Remove everything:** `hoop uninstall` wipes the whole stack (containers, images, credentials, settings) and removes the `hoop` command. Your personal `~/.claude` and the cloned repo are left untouched.
+
+Stuck? Run **`hoop doctor`** any time — it checks your setup and tells you what's missing.
+
+<details>
+<summary><strong>Optional host tools</strong> (hoop runs fine without them)</summary>
+
+<br>
+
+- **curl** — used to probe Docker Model Runner; falls back to a built-in bash probe if it's missing.
+- **awk** — only needed by `hoop mount`.
+- **Docker Model Runner** (needs Docker Compose **v2.38+**) — powers local semantic search. If it isn't available, hoop automatically falls back to keyword (BM25) search, so nothing breaks. Ollama, OpenAI, or any OpenAI-compatible endpoint work too (pick them in `hoop setup --wizard`).
+</details>
+
+<details>
+<summary><strong>Already running Claude Code?</strong> You can install hoop as a plugin instead</summary>
+
+<br>
 
 ```text
 /plugin marketplace add bruno-de-queiroz/hoop
@@ -29,62 +95,12 @@ There are two ways in. Pick the one that matches your host.
 /hoop:setup
 ```
 
-(The `/plugin list` + `/reload-plugins` dance is required on Claude Code v2.1.138 to activate a freshly pre-seeded plugin in the current session. New sessions don't need it.)
-
-### B · Standalone — no Claude Code on the host
-
-You do **not** need Claude Code (or even Node) installed on the host. The sandbox ships its own `claude` binary and authenticates with its **own** Claude account, so a bare machine with Docker is enough.
-
-**Prerequisites**
-
-- **Docker** — Docker Desktop, or any Docker engine + Compose v2 (`docker compose`). This is the **only** hard dependency for `hoop start` — Claude Code, Node, gh, uv, gws, and the dashboard all live in containers, never on your host, and the sandbox seeds its own Claude profile on boot (so `hoop start` needs no host jq). A few *other* subcommands do shell out to small host tools — see the optional list below.
-- **git** and **bash** — to clone the repo and run the CLI.
-- **A web browser you can reach** — for the one-time login approval. It does **not** have to be on the same machine; you just need to open a URL and copy a code back (see step 4). Handy for headless servers.
-- **A Claude account with an active plan** (Pro / Max / Team / Enterprise) that can sign in via `/login`.
-- **jq** *(needed by some subcommands, not `hoop start`)* — **required** by `hoop setup` and `hoop logout`, which edit JSON on the host (the wizard reads your gh/Claude identity into `profile.md`; logout rewrites the sandbox credentials). `hoop open` uses it too but degrades with a warning if it's absent. Install: macOS `brew install jq`; Debian/Ubuntu `sudo apt-get install -y jq`.
-- **curl** *(optional — never strictly required)* — used by `hoop setup` to probe Docker Model Runner and by the dashboard health-wait; both fall back to a bash `/dev/tcp` probe when it's missing. Install: `brew install curl` / `sudo apt-get install -y curl`.
-- **awk** *(needed only for `hoop mount`)* — required by `hoop mount add`/`remove` to rewrite the mounts list; unused by every other command.
-- **Docker Model Runner** *(optional)* — for semantic-search embeddings. `hoop setup` enables it (Docker Desktop AI, or the `docker-model-plugin` on Docker Engine) and appends the embedding model to the compose stack via Compose's `models:` element (**Docker Compose v2.38+**), so `hoop start` auto-pulls it and wires the endpoint into the sandbox. If DMR is ever unreachable — or Compose is older than v2.38 — `hoop start` transparently drops the override and falls back to BM25 rather than failing. Skippable — Ollama, OpenAI, or a custom OpenAI-compatible endpoint also work.
-
-Run `hoop doctor` at any time to verify the host has everything and see how close you are to a clean Docker-only setup.
-
-**Steps**
-
-```bash
-# 1. Clone and enter the repo
-git clone https://github.com/bruno-de-queiroz/hoop && cd hoop
-
-# 2. (optional) Put `hoop` on your PATH + shell completion.
-#    Skip this and prefix every command with ./plugins/hoop/cli/hoop.sh instead.
-./plugins/hoop/cli/hoop.sh install      # then open a new shell so `hoop` resolves
-
-# 3. Bring up the whole stack. The FIRST run builds both images (a few minutes);
-#    later starts are fast. Serves the dashboard at http://localhost:7842/.
-hoop start
-
-# 4. (optional) Configure your stack interactively — memory, code-graph RAG,
-#    platform MCPs, docs RAG, semantic search, observability, second-brain, etc.
-#    This is the /hoop:setup wizard, native to the CLI (needs no host Claude Code).
-hoop setup
-
-# 5. One-time: authenticate the sandbox with its OWN Claude account.
-#    Drops you into `claude` inside the sandbox — type /login, open the printed
-#    URL in your browser, approve, paste the code back, then /exit.
-hoop login
-```
-
-Then open **[http://localhost:7842/](http://localhost:7842/)**. Because the dashboard only trusts localhost, your browser is recognized as the host automatically — the access token is minted for you, nothing to paste. (Remote access is deliberately gated; see [Architecture](#architecture).)
-
-That's the full loop: `hoop start` → `hoop setup` (optional) → `hoop login` → open the dashboard. A few notes for the standalone path:
-
-- **Configure your stack with `hoop setup`.** This is the interactive wizard (memory, code-graph RAG, automation, platform MCPs, docs RAG, semantic search, observability, design, second-brain, telemetry isolation) — the same one behind `/hoop:setup`, but native to the CLI so it needs no host Claude Code. It runs **before** `hoop login` (writing MCP config needs no auth). For one-off additions later, `hoop add mcp/plugin/skill` (see the [CLI](#cli-hoop) table) persists into the sandbox profile across rebuilds.
-- **Terminal-only?** `hoop open` runs an interactive `claude` in a throwaway sandbox over your current directory — no dashboard, no browser needed after login.
-- **Updating:** `git pull` then `hoop rebuild` picks up new code into both images.
-- **Signing out / switching accounts:** `hoop logout` clears the sandbox's Claude login so a different account can `hoop login`.
+(The `/plugin list` + `/reload-plugins` step is only needed on Claude Code v2.1.138 to activate a freshly pre-seeded plugin in the current session; new sessions don't need it.) `/hoop:setup` simply points you back to the `hoop setup` command above — the stack itself always runs in containers either way.
+</details>
 
 ## What the wizard does
 
-`hoop setup` (or `/hoop:setup`, which points you to it) walks you through these steps with one consent at the top, then installs each pick — auto-runnable and secret-taking MCPs run immediately (every command printed first); browser-login, plugin-marketplace, and host-CLI options are printed as guided steps to finish yourself:
+`hoop setup --wizard` (or `/hoop:setup`, which points you to it) walks you through these steps with one consent at the top, then installs each pick — auto-runnable and secret-taking MCPs run immediately (every command printed first); browser-login, plugin-marketplace, and host-CLI options are printed as guided steps to finish yourself. (Plain `hoop setup` skips the menus and installs the default stack; `hoop setup <section>` runs just the layers you name.)
 
 | # | Step | Pick |
 |---|---|---|
@@ -142,13 +158,14 @@ Two levels: **top-level verbs** act on the whole stack; **modules** scope a sing
 | `open` | *(default)* | Runs a **fresh, telemetry-isolated sandbox** over the current directory: mounts `$PWD` read-write into the agent workspace and launches `claude` interactively (`docker run --rm -it`, real tty for the TUI). Forces `HOOP_DISABLE_TELEMETRY=1` (add `-T\|--telemetry` to allow bundled-tool telemetry) and strips the dashboard-only hooks + the hoop plugin from an overlay `settings.json`, while keeping credentials, setup MCPs, skills, and other plugins. Extra args pass straight through, e.g. `hoop open --model opus` or `hoop open "fix the failing test"`. |
 | `add` | `mcp` · `plugin` · `skill` | Installs a component into the **sandbox profile** so it persists across rebuild/restart/recreate **and** is shared by both dashboard sessions and `hoop open` (the profile is bind-mounted into both). `mcp <name> [flags] [-- <cmd>]` → `claude mcp add`, defaulting to `--scope user` so the server is global (not stranded under one project — pass your own `-s\|--scope` to override); `plugin [-m\|--marketplace <spec>] <plugin[@marketplace]>` → `claude plugin install`; `skill -d\|--dir <dir> [-f\|--force]` copies a local skill directory (must contain `SKILL.md`) into `~/.claude/skills/<name>`, **dereferencing symlinks** so the real files resolve inside the container. `mcp`/`plugin` need the sandbox running; `skill` is host-only. |
 | `mount` | `add` · `list` · `remove` | Bind-mounts host folders into the sandbox workspace at `/home/agent/workspace/<name>`. `add -p\|--path <host-dir> [-n\|--name <name>]` adds one (the `-p` path tab-completes directories), `list` shows the configured mounts, `remove <name>` drops one. Mounts persist via a generated compose override; each `add`/`remove` **recreates the `agent-sandbox` container**. |
-| `install` | *(default)* | Bare `hoop install` symlinks `hoop` onto PATH + wires shell completion (`-f\|--force` reinstalls over an existing symlink). The repo itself is never modified; `hoop uninstall` removes the symlink and shell wiring. |
-| `setup` | *(default)* | Runs the **interactive stack wizard** (the native port of `/hoop:setup`): boots the sandbox, then walks memory / code-graph / automation / platform MCPs / docs RAG / semantic search / observability / design / second-brain / telemetry, installing each pick into the sandbox profile. Auto/secret MCPs run via `claude mcp add`; OAuth/plugin/host-CLI sign-ins complete at the end inside the sandbox. Needs a TTY (refuses head-less), runs before `hoop login`, writes `profile.md` + `install-log.md`. `--reset-first` wipes all sandbox state for a blank slate first. |
-| `doctor` | *(default)* | **Read-only health check** of the host + stack through a Docker-only-standalone lens: verifies Docker + Compose v2, reports which optional subcommand tools (`jq`/`curl`/`awk`) are present, checks the sandbox image/containers, Claude auth, and the semantic-search backend (incl. the DMR Compose `models:` override + reachability). Fails only on truly blocking problems; everything else is advisory. |
+| `install` | *(default)* | The **one-liner**: symlinks `hoop` onto PATH + wires shell completion (`-f\|--force` reinstalls over an existing symlink), then chains into `hoop setup` (add `--wizard` to run the full menus instead of the default stack). The repo itself is never modified. |
+| `uninstall` | *(default)* | The inverse of `install`: **purges the whole stack** (containers, network, hoop-run volume, both images, the sandbox profile + credentials, `hoop.env`, tokens, caches — the same teardown as `setup --reset-first`), then unlinks the `hoop` symlink + shell wiring. `-y\|--yes` skips the confirm. Your host `~/.claude` and the repo are untouched. |
+| `setup` | *(default)* | Configures the sandbox stack — the native port of `/hoop:setup`. Three modes: bare `hoop setup` installs the **non-interactive default stack** (claude-mem, Serena, Context7, semantic search, GitHub, telemetry isolation); `--wizard` runs the **full interactive wizard** (memory / code-graph / automation / platform MCPs / docs RAG / semantic search / observability / design / second-brain / telemetry); `hoop setup <section>…` runs just the named layers. Boots the sandbox, installs each pick into the profile, completes any sign-ins (TTY-gated), writes `profile.md` + `install-log.md`. `--reset-first` wipes all sandbox state for a blank slate first. |
+| `doctor` | *(default)* | **Read-only health check** of the host + stack through a Docker-only-standalone lens: verifies Docker + Compose v2, reports which subcommand tools are present (`jq` — required for `setup`/`logout`; `curl`/`awk` — optional), checks the sandbox image/containers, Claude auth, and the semantic-search backend (incl. the DMR Compose `models:` override + reachability). Fails only on truly blocking problems; everything else is advisory. |
 
 ```bash
 hoop start                    # bring up the whole stack at http://localhost:7842/
-hoop setup                    # interactive wizard: configure the sandbox stack (no host Claude Code needed)
+hoop setup                    # install the default stack (add --wizard for menus, or name sections)
 hoop login                    # one-time: authenticate the sandbox with its own Claude account
 hoop dashboard rebuild        # rebuild + recreate ONLY the dashboard container
 hoop sandbox rebuild          # rebuild + recreate ONLY the agent-sandbox container

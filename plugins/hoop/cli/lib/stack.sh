@@ -772,3 +772,29 @@ hoop_stack_logout() {
     return 1
   fi
 }
+
+# DESTRUCTIVE full teardown — return the stack + host state to a blank slate:
+#   • stop + remove containers, the compose network, and the hoop-run volume
+#   • remove the built images (hoop-sandbox, hoop-dashboard) → rebuilt next start
+#   • delete the sandbox profile: Claude credentials, MCP config, installed
+#     plugins & skills, chat sessions, and the events DB
+#   • delete hoop.env (embedding/telemetry/gh config) + the token/cache files
+# Scoped strictly to hoop's own dirs — the HOST ~/.claude (real Claude Code) is
+# never touched. Shared by `hoop setup --reset-first` and `hoop uninstall`; the
+# caller owns the confirmation prompt (this function just executes).
+hoop_stack_purge() {
+  _info "tearing down the stack (containers, network, hoop-run volume)…"
+  "${HS_COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
+  _info "removing built images (hoop-sandbox, hoop-dashboard)…"
+  docker image rm -f hoop-sandbox hoop-dashboard >/dev/null 2>&1 || true
+  _info "deleting sandbox profile, hoop.env, tokens, and caches…"
+  rm -rf "$HS_SANDBOX_PROFILE_ROOT" 2>/dev/null || true
+  rm -f  "$HS_ENV_FILE" "$HS_HOST_GATEWAY_CACHE" \
+         "$HS_DASHBOARD_TOKEN_FILE" "$HS_PEER_SECRET_FILE" 2>/dev/null || true
+  # The generated compose overrides (mounts/plugin-dev/dmr) lived under the
+  # profile root we just deleted, but HS_COMPOSE still carries their `-f` paths
+  # from source time. Reload so any subsequent `docker compose` call uses a clean
+  # base compose instead of failing on the now-missing override files.
+  HS_DMR_OVERRIDE_ACTIVE=1
+  _hs_compose_reload
+}
