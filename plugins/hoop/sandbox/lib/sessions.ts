@@ -52,6 +52,11 @@ export interface SessionInfo {
     };
     turnDurationMs?: number;
     turnEndedAt?: number;
+    // Context window this session's model runs against and the auto-compact
+    // trigger percentage, as configured by the sandbox at spawn. See LastStats
+    // in active-sessions.ts.
+    contextWindow?: number;
+    autoCompactPct?: number;
   };
 }
 

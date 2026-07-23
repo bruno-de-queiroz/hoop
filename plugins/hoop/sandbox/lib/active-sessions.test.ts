@@ -73,7 +73,7 @@ const shared = vi.hoisted(() => {
   return {
     children: [] as any[],
     reset() { this.children = []; },
-    make(args: string[] = []): any {
+    make(args: string[] = [], env: NodeJS.ProcessEnv = {}): any {
       const { EventEmitter } = require("node:events");
       const { Readable, Writable } = require("node:stream");
       const stdin = new Writable({ write(_c: any, _e: any, cb: any) { cb(); } });
@@ -87,6 +87,7 @@ const shared = vi.hoisted(() => {
         killed: false,
         kill: vi.fn(),
         spawnArgs: args,
+        spawnEnv: env,
       });
       this.children.push(child);
       return child;
@@ -95,7 +96,7 @@ const shared = vi.hoisted(() => {
 });
 
 vi.mock("node:child_process", () => {
-  const spawn = (_cmd: string, args: string[] = []) => shared.make(args);
+  const spawn = (_cmd: string, args: string[] = [], opts: any = {}) => shared.make(args, opts?.env ?? {});
   // execFile is imported (promisified) for git-clone-on-start; no test exercises
   // that path, so a stub is enough to satisfy the module-level promisify().
   const execFile = () => {};
@@ -116,12 +117,16 @@ beforeEach(async () => {
   fsMock.reset();
   ingestEventLineMock.mockReset();
   delete process.env.HOOP_CWD_ROOTS;
+  delete process.env.HOOP_AUTO_COMPACT;
+  delete process.env.HOOP_AUTO_COMPACT_PCT;
   mod = await import("./active-sessions");
 });
 
 afterEach(() => {
   if (originalEnv === undefined) delete process.env.HOOP_CWD_ROOTS;
   else process.env.HOOP_CWD_ROOTS = originalEnv;
+  delete process.env.HOOP_AUTO_COMPACT;
+  delete process.env.HOOP_AUTO_COMPACT_PCT;
 });
 
 describe("repoDirNameFromUrl", () => {
@@ -286,6 +291,124 @@ describe("stdout parser: synthetic frame ingestion", () => {
     await flush();
 
     expect(ingestEventLineMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("windowForModel / autoCompactPct", () => {
+  it("maps the 1M-context tier to 1,000,000", () => {
+    for (const m of [
+      "claude-opus-4-8", "claude-opus-4-8-20260528", "claude-opus-4-7",
+      "claude-sonnet-5", "claude-sonnet-4-6", "claude-fable-5",
+    ]) {
+      expect(mod.windowForModel(m)).toBe(1_000_000);
+    }
+  });
+
+  it("maps the 200k-context tier to 200,000", () => {
+    for (const m of ["claude-sonnet-4-5", "claude-haiku-4-5", "claude-haiku-4-4"]) {
+      expect(mod.windowForModel(m)).toBe(200_000);
+    }
+  });
+
+  it("defaults to 1M when the model is unknown or unset", () => {
+    expect(mod.windowForModel(null)).toBe(1_000_000);
+    expect(mod.windowForModel("claude-something-new-9")).toBe(1_000_000);
+  });
+
+  it("reads HOOP_AUTO_COMPACT_PCT (clamped) with an 85 default", () => {
+    expect(mod.autoCompactPct()).toBe(85);
+    process.env.HOOP_AUTO_COMPACT_PCT = "70";
+    expect(mod.autoCompactPct()).toBe(70);
+    process.env.HOOP_AUTO_COMPACT_PCT = "999";
+    expect(mod.autoCompactPct()).toBe(85); // out of range -> default
+  });
+});
+
+describe("spawn: auto-compaction env", () => {
+  it("hands claude a per-model window + trigger pct by default", async () => {
+    await mod.startNewConversation({ cwd: "/x", model: "claude-opus-4-8" });
+    const env = shared.children[0].spawnEnv as NodeJS.ProcessEnv;
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("1000000");
+    expect(env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe("85");
+  });
+
+  it("sizes the window to the model (200k for haiku)", async () => {
+    await mod.startNewConversation({ cwd: "/x", model: "claude-haiku-4-5" });
+    const env = shared.children[0].spawnEnv as NodeJS.ProcessEnv;
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("200000");
+  });
+
+  it("omits the env when HOOP_AUTO_COMPACT=0 (kill-switch)", async () => {
+    process.env.HOOP_AUTO_COMPACT = "0";
+    await mod.startNewConversation({ cwd: "/x", model: "claude-opus-4-8" });
+    const env = shared.children[0].spawnEnv as NodeJS.ProcessEnv;
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
+    expect(env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBeUndefined();
+  });
+
+  it("records the configured window + pct on lastStats", async () => {
+    const { meta } = await mod.startNewConversation({ cwd: "/x", model: "claude-opus-4-8" });
+    expect(meta.lastStats?.contextWindow).toBe(1_000_000);
+    expect(meta.lastStats?.autoCompactPct).toBe(85);
+  });
+});
+
+describe("stdout parser: compact_boundary", () => {
+  it("auto compaction ingests a kind=compaction row and zeroes usage", async () => {
+    const { sessionId } = await mod.startNewConversation({ cwd: "/x", model: "claude-opus-4-8" });
+    // Prime a non-zero usage via a result frame so we can see it reset.
+    (shared.children[0].stdout as any).pushLine({
+      type: "result",
+      usage: { input_tokens: 10, cache_read_input_tokens: 500_000, output_tokens: 20 },
+      session_id: sessionId,
+    });
+    await flush();
+    (shared.children[0].stdout as any).pushLine({
+      type: "system",
+      subtype: "compact_boundary",
+      session_id: sessionId,
+      compact_metadata: { trigger: "auto", pre_tokens: 850_000 },
+    });
+    await flush();
+
+    const payloads = ingestEventLineMock.mock.calls.map((c) => JSON.parse(c[0]));
+    const compaction = payloads.find((p) => p.ctx.kind === "compaction");
+    expect(compaction).toBeDefined();
+    expect(compaction.ctx.last_assistant_message).toContain("auto-compacted");
+    // The meter's numerator is derived from lastStats.usage; the boundary must
+    // have zeroed it so the bar drops immediately.
+    const usage = mod.getActiveSession(sessionId)?.lastStats?.usage;
+    expect(usage).toEqual({
+      input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      output_tokens: 0,
+    });
+  });
+
+  it("manual compaction zeroes usage without a duplicate transcript row", async () => {
+    const { sessionId } = await mod.startNewConversation({ cwd: "/x", model: "claude-opus-4-8" });
+    (shared.children[0].stdout as any).pushLine({
+      type: "result",
+      usage: { input_tokens: 10, cache_read_input_tokens: 500_000, output_tokens: 20 },
+      session_id: sessionId,
+    });
+    await flush();
+    ingestEventLineMock.mockClear();
+    (shared.children[0].stdout as any).pushLine({
+      type: "system",
+      subtype: "compact_boundary",
+      session_id: sessionId,
+      compact_metadata: { trigger: "manual", pre_tokens: 1200 },
+    });
+    await flush();
+
+    // Manual /compact already renders via its synthetic USER summary frame, so
+    // the boundary itself must NOT synthesize a second compaction row.
+    const compactionRows = ingestEventLineMock.mock.calls
+      .map((c) => JSON.parse(c[0]))
+      .filter((p) => p.ctx.kind === "compaction");
+    expect(compactionRows).toHaveLength(0);
   });
 });
 

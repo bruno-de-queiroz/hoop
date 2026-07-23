@@ -2,7 +2,7 @@
 import { useMemo } from "react";
 import type { EventRow } from "@/lib/sandbox-client";
 import type { SessionInfo } from "@/lib/types/session";
-import { contextWindowFor, totalInputTokens } from "@/lib/model-limits";
+import { contextWindowFor, totalInputTokens, AUTO_COMPACT_PCT } from "@/lib/model-limits";
 
 export interface SessionStats {
   /** ms between first and last event in the transcript; live-ticking while alive. */
@@ -36,6 +36,10 @@ export interface SessionStats {
   contextUsed: number;
   contextLimit: number;
   contextPct: number;
+  /** Percentage of the window at which auto-compaction is configured to fire.
+   * Drives the marker line and warning tone on the stats strip. Reported by
+   * the sandbox per session; falls back to AUTO_COMPACT_PCT. */
+  autoCompactPct: number;
 }
 
 const EMPTY_STATS: SessionStats = Object.freeze({
@@ -50,6 +54,7 @@ const EMPTY_STATS: SessionStats = Object.freeze({
   contextUsed: 0,
   contextLimit: 0,
   contextPct: 0,
+  autoCompactPct: AUTO_COMPACT_PCT,
   startedAtMs: 0,
   isAlive: false,
 });
@@ -90,11 +95,15 @@ export function useSessionStats(
     const usage = session?.lastStats?.usage;
     const model = session?.lastStats?.model ?? null;
     const contextUsed = totalInputTokens(usage);
-    const contextLimit = contextWindowFor(model);
+    // Prefer the window the sandbox actually configured for this session
+    // (it's the thing that sets claude's auto-compact env); fall back to the
+    // model table for historical rows that predate the reported field.
+    const contextLimit = session?.lastStats?.contextWindow ?? contextWindowFor(model);
     const contextPct =
       contextLimit > 0 && contextUsed > 0
         ? Math.min(100, Math.round((contextUsed / contextLimit) * 100))
         : 0;
+    const autoCompactPct = session?.lastStats?.autoCompactPct ?? AUTO_COMPACT_PCT;
     const startedAtMs = Number.isFinite(firstTs) ? firstTs : 0;
     const timeMs =
       Number.isFinite(firstTs) && Number.isFinite(lastTs) && lastTs >= firstTs
@@ -112,10 +121,11 @@ export function useSessionStats(
       contextUsed,
       contextLimit,
       contextPct,
+      autoCompactPct,
       startedAtMs,
       isAlive,
     };
-  }, [events, session?.lastStats?.totals, session?.lastStats?.usage, session?.lastStats?.model, isAlive]);
+  }, [events, session?.lastStats?.totals, session?.lastStats?.usage, session?.lastStats?.model, session?.lastStats?.contextWindow, session?.lastStats?.autoCompactPct, isAlive]);
 }
 
 // Re-exporting EMPTY_STATS lets the active-session provider hand

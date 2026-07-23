@@ -73,6 +73,15 @@ export interface LastStats {
   turnDurationMs?: number;
   turnEndedAt?: number;     // ms epoch — for relative-time rendering
 
+  // Context window (denominator for the dashboard's "ctx %") this session's
+  // model runs against, and the percentage of it at which auto-compaction is
+  // configured to fire. Computed at spawn from the model (windowForModel) and
+  // matched to the CLAUDE_CODE_AUTO_COMPACT_WINDOW / CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+  // env we hand claude. The dashboard prefers these over its own model table so
+  // the meter always agrees with what the sandbox actually configured.
+  contextWindow?: number;
+  autoCompactPct?: number;
+
   // Cumulative across all turns of this session, summed at end of each
   // turn. Survives dormant→alive (kept in the checkpoint). The dashboard's
   // stats strip renders these as "total tokens" — derived from registry
@@ -249,6 +258,71 @@ const IDLE_TTL_MS = (() => {
 })();
 const IDLE_SWEEP_INTERVAL_MS = 60 * 1000;
 let _idleSweeper: ReturnType<typeof setInterval> | null = null;
+
+// ---- Auto-compaction config ----------------------------------------------
+// hoop runs claude as a LOCAL (non-remote) `claude -p` subprocess. Since
+// Claude Code 2.1.159, auto-compaction is silently gated OFF for such
+// sessions unless CLAUDE_CODE_AUTO_COMPACT_WINDOW / autoCompactWindow /
+// CLAUDE_CODE_REMOTE is set (upstream issue #64520) — so long conversations
+// grow unbounded until the model errors with "Prompt is too long". We enable
+// it explicitly at spawn by handing claude a per-model window + trigger pct.
+//
+// The window MUST be per-model: one value can't serve both a 200k model
+// (where a large window means compaction never fires before the hard limit)
+// and a 1M model (where a small window compacts absurdly early). This table
+// mirrors plugins/hoop/dashboard/lib/model-limits.ts — keep them in sync.
+const CTX_1M = 1_000_000;
+const CTX_200K = 200_000;
+const MODEL_WINDOW_TABLE: Array<[string, number]> = [
+  ["claude-opus-4-8", CTX_1M],
+  ["claude-opus-4-7", CTX_1M],
+  ["claude-opus-4-6", CTX_1M],
+  ["claude-sonnet-4-6", CTX_1M],
+  ["claude-sonnet-5", CTX_1M],
+  ["claude-fable-5", CTX_1M],
+  ["claude-mythos-5", CTX_1M],
+  ["claude-opus-4-5", CTX_200K],
+  ["claude-sonnet-4-5", CTX_200K],
+  ["claude-haiku-4-5", CTX_200K],
+  ["claude-haiku-4-4", CTX_200K],
+  ["claude-opus", CTX_1M],
+  ["claude-haiku", CTX_200K],
+  ["claude-sonnet", CTX_200K],
+];
+
+// When --model is null (user's default), we don't yet know which model claude
+// will pick, so we can't size the window precisely. Default to 1M: the current
+// default-tier models (opus/sonnet-5) are 1M, and over-sizing only delays
+// compaction rather than breaking it. The dashboard denominator still
+// self-corrects from the init-frame model once known.
+export function windowForModel(model?: string | null): number {
+  if (!model) return CTX_1M;
+  const lower = model.toLowerCase();
+  for (const [prefix, size] of MODEL_WINDOW_TABLE) {
+    if (lower.startsWith(prefix)) return size;
+  }
+  return CTX_1M;
+}
+
+// Whether to enable auto-compaction at spawn. Off only when HOOP_AUTO_COMPACT
+// is explicitly "0"/"false" (kill-switch for users who prefer the model to run
+// to its hard limit and compact manually).
+export function autoCompactEnabled(): boolean {
+  const raw = (process.env.HOOP_AUTO_COMPACT ?? "").trim().toLowerCase();
+  return raw !== "0" && raw !== "false" && raw !== "off";
+}
+
+// Percentage of the window at which compaction fires. Tunable via
+// HOOP_AUTO_COMPACT_PCT (clamped to 1..100); defaults to 85, leaving headroom
+// under the model's hard context_window_exceeded ceiling.
+export function autoCompactPct(): number {
+  const raw = process.env.HOOP_AUTO_COMPACT_PCT;
+  if (raw != null && raw.trim() !== "") {
+    const n = Math.round(Number(raw));
+    if (Number.isFinite(n) && n >= 1 && n <= 100) return n;
+  }
+  return 85;
+}
 
 /**
  * Lifecycle events. Subscribers (SSE stream route) get notified when sessions
@@ -1570,10 +1644,23 @@ async function spawnControllable(opts: SpawnOpts): Promise<{ sessionId: string; 
     args.push("--session-id", sessionId);
   }
 
+  // Size the context window for this session's model and, unless disabled,
+  // hand claude the env that turns auto-compaction back on (see the
+  // MODEL_WINDOW_TABLE comment). We record the same figures on lastStats below
+  // so the dashboard meter agrees with what we configured here.
+  const ctxWindow = windowForModel(opts.model);
+  const compactPct = autoCompactPct();
+  const compactEnabled = autoCompactEnabled();
+  const childEnv: NodeJS.ProcessEnv = { ...process.env };
+  if (compactEnabled) {
+    childEnv.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(ctxWindow);
+    childEnv.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(compactPct);
+  }
+
   const child = spawn("claude", args, {
     cwd: opts.cwd,
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env },
+    env: childEnv,
   });
 
   if (!child.stdin || !child.stdout || !child.stderr) {
@@ -1601,6 +1688,18 @@ async function spawnControllable(opts: SpawnOpts): Promise<{ sessionId: string; 
     // reset the running totals; the dashboard's StatsStrip would
     // ratchet down to "turns: 0" on every reactivation.
     ...(opts.carryStats ? { lastStats: opts.carryStats } : {}),
+  };
+
+  // Record the context window + auto-compact threshold we just configured so
+  // the dashboard meter uses the exact denominator/trigger we handed claude
+  // (rather than re-deriving it from its own model table). Merge into any
+  // carried-over lastStats so a dormant→awake revive with a swapped model
+  // updates the window instead of keeping the previous incarnation's.
+  meta.lastStats = {
+    ...(meta.lastStats ?? { v: 1 as const }),
+    v: 1,
+    contextWindow: ctxWindow,
+    autoCompactPct: compactPct,
   };
 
   const slot: LiveSlot = {
@@ -1814,6 +1913,58 @@ async function spawnControllable(opts: SpawnOpts): Promise<{ sessionId: string; 
             }));
           } catch (err) {
             log.warn("active-sessions", "synthetic ingest failed", { err });
+          }
+        }
+
+        // Compaction boundary. Claude emits a `system`/`compact_boundary` frame
+        // AFTER it summarizes history to free context — shape (verified against
+        // the Agent SDK type SDKCompactBoundaryMessage):
+        //   { type:"system", subtype:"compact_boundary",
+        //     compact_metadata:{ trigger:"manual"|"auto", pre_tokens:number } }
+        // Some CLI builds use camelCase `compactMetadata`/`preTokens`, so read
+        // both defensively. Two effects:
+        //   1. Zero out lastStats.usage so the "ctx %" meter drops immediately
+        //      rather than waiting a full turn for the next result frame (which
+        //      will then refill it with the real post-compaction size).
+        //   2. For an AUTO compaction, surface a transcript row (manual /compact
+        //      already renders via its synthetic USER summary frame above, so we
+        //      only synthesize a row for auto to avoid a duplicate).
+        if (frame.type === "system" && frame.subtype === "compact_boundary") {
+          const cm = (frame.compact_metadata ?? frame.compactMetadata ?? {}) as Record<string, unknown>;
+          const trigger = cm.trigger === "manual" ? "manual" : "auto";
+          const preTokens =
+            typeof cm.pre_tokens === "number" ? cm.pre_tokens
+            : typeof cm.preTokens === "number" ? cm.preTokens
+            : undefined;
+          const existing = slot.meta.lastStats ?? { v: 1 as const };
+          slot.meta.lastStats = {
+            ...existing,
+            v: 1,
+            usage: {
+              input_tokens: 0,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              output_tokens: 0,
+            },
+          };
+          slot.meta.lastSeenAt = Date.now();
+          if (trigger === "auto") {
+            try {
+              const detail = preTokens != null ? ` (was ${preTokens.toLocaleString()} tokens)` : "";
+              ingestEventLine(JSON.stringify({
+                ts: new Date().toISOString(),
+                hook: "Stop",
+                ctx: {
+                  session_id: frame.session_id ?? sessionId,
+                  hook_event_name: "Stop",
+                  last_assistant_message: `Context auto-compacted${detail}.`,
+                  synthetic: true,
+                  kind: "compaction",
+                },
+              }));
+            } catch (err) {
+              log.warn("active-sessions", "compact_boundary ingest failed", { err });
+            }
           }
         }
 

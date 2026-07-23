@@ -5,11 +5,15 @@ import { cn } from "../ui/cn";
 
 // Center-pane stats sub-bar (Phase 3), matching the mockup's mono strip:
 // `model X · time Y · tokens A in / B out · turns N` with a right-aligned ctx
-// figure + fill bar (amber past 70%, rose past the 83% auto-compact line).
+// figure + fill bar. The bar turns amber as it approaches the auto-compact
+// line and rose once past it; that line sits at the session's configured
+// auto-compact trigger (`autoCompactPct`, reported by the sandbox) rather than
+// a hardcoded value, so it marks where compaction actually fires.
 
-function ctxTone(pct: number): { text: string; bar: string } {
-  if (pct >= 83) return { text: "text-fail", bar: "bg-fail" };
-  if (pct >= 70) return { text: "text-live", bar: "bg-live" };
+function ctxTone(pct: number, compactPct: number): { text: string; bar: string } {
+  if (pct >= compactPct) return { text: "text-fail", bar: "bg-fail" };
+  // Amber in the run-up to compaction (within ~15 points below the line).
+  if (pct >= compactPct - 15) return { text: "text-live", bar: "bg-live" };
   return { text: "text-ink-soft", bar: "bg-ink-mute" };
 }
 
@@ -20,7 +24,7 @@ export function ShellStatsStrip({
   stats: SessionStats;
   model: string | null;
 }) {
-  const tone = ctxTone(stats.contextPct);
+  const tone = ctxTone(stats.contextPct, stats.autoCompactPct);
   const sep = <span className="text-ink-hush">·</span>;
   return (
     <div className="px-3 sm:px-5 py-2 shrink-0 flex items-center gap-x-3 gap-y-1 flex-wrap border-b border-divider font-mono text-[11px] text-ink-faint tabular-nums">
@@ -56,8 +60,11 @@ export function ShellStatsStrip({
             )}
             style={{ width: `${Math.min(100, stats.contextPct)}%` }}
           />
-          {/* auto-compact line at 83% */}
-          <span className="absolute inset-y-0 w-px bg-ink-hush" style={{ left: "83%" }} />
+          {/* auto-compact line at the session's configured trigger */}
+          <span
+            className="absolute inset-y-0 w-px bg-ink-hush"
+            style={{ left: `${stats.autoCompactPct}%` }}
+          />
         </span>
       </span>
     </div>

@@ -51,6 +51,12 @@ export interface SessionInfo {
     };
     turnDurationMs?: number;
     turnEndedAt?: number;
+    // Context window (denominator for "ctx %") this session's model runs
+    // against, and the percentage at which auto-compaction is configured to
+    // fire. Reported by the sandbox at spawn; the dashboard prefers these over
+    // its own model-limits table so the meter agrees with the real config.
+    contextWindow?: number;
+    autoCompactPct?: number;
     // Cumulative tokens across the whole session. Computed sandbox-side
     // at end-of-turn; absent until the first turn completes.
     totals?: {
