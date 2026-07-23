@@ -1,5 +1,5 @@
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/fb83fe08-1ee2-4dca-b4d2-bf8800300f70" autoplay loop muted playsinline width="900">
+  <video src="https://github.com/user-attachments/assets/6e7dfedd-ff80-4966-80f3-ed194fef9964" autoplay loop muted playsinline width="900">
     <img src="docs/logo.svg" alt="hoop" width="224" height="88">
   </video>
 </p>
