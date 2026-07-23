@@ -8,12 +8,14 @@
 
 [![CI](https://github.com/bruno-de-queiroz/hoop/actions/workflows/ci.yml/badge.svg)](https://github.com/bruno-de-queiroz/hoop/actions/workflows/ci.yml)
 
-Being alone is not a requirement. A sandboxed and web harness on top of Claude Code. Two deliverables in one install:
+**hoop** runs Claude Code inside a disposable Docker sandbox and puts a live web dashboard in front of it — the agent works isolated from your machine, and you get to watch every move.
 
-1. **`/hoop:setup`** — an interactive wizard that wires a curated stack (memory, code-graph RAG, automation, platform MCPs, docs RAG, observability, design, second-brain).
-2. **`/hoop:dashboard`** — a containerized local web dashboard (Next.js, [http://localhost:7842/](http://localhost:7842/)) with live sessions, a skill browser with one-click triggers, a nested sub-agent tree, push-based event observability, and BM25 + optional semantic search across all events.
+One install, two things:
 
-The plugin **does not re-implement** any of the third-party MCPs or skills it installs. It picks, installs, documents, and observes them.
+1. **A curated agent stack** — `hoop setup` installs a sensible default toolset into the sandbox (memory, code-graph search, docs RAG, semantic search, GitHub, telemetry isolation). Add `--wizard` for the full menu: automation, platform MCPs, observability, design, second-brain, and more.
+2. **A live dashboard** — a containerized Next.js app at [http://localhost:7842/](http://localhost:7842/): live sessions, a skill browser with one-click triggers, a nested sub-agent tree, push-based event observability, and keyword (BM25) + optional semantic search across every event.
+
+hoop **doesn't re-implement** the MCPs or skills it installs — it picks them, installs them, documents them, and observes them.
 
 ## Install
 
