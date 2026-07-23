@@ -322,7 +322,10 @@ export const ShellComposer = memo(function ShellComposer({
           * textarea so they hold their on-screen position as a multi-line draft
           * grows upward (rather than drifting with a centered row). A single-line
           * draft still reads centered since every child shares the bottom edge. */}
-        <div className="flex items-end gap-2">
+        {/* suppressHydrationWarning: password-manager extensions (Proton Pass,
+          * etc.) tag this input container with data-protonpass-form before
+          * hydration, which would otherwise trip a dev-only mismatch here. */}
+        <div className="flex items-end gap-2" suppressHydrationWarning>
           {/* Avatar doubles as the mode indicator: your initials normally, the
             * op glyph (tinted red/green) while typing a `!` bash or `>` chat.
             * Wrapped in a send-button-height (h-9) box, centered, so the row's

@@ -101,7 +101,10 @@ export function SessionsRail() {
   }
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
+    // suppressHydrationWarning: password-manager extensions (Proton Pass, etc.)
+    // tag input containers with data-protonpass-form before hydration, which
+    // would otherwise trip a dev-only mismatch on this wrapper.
+    <div className="flex-1 min-h-0 flex flex-col" suppressHydrationWarning>
       <div className="px-3 pt-4 pb-3 shrink-0">
         <div className="relative">
           <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-ink-mute pointer-events-none" />
