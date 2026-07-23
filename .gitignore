@@ -13,6 +13,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Scratch / experiments
+tmp/
+
 # Build output
 node_modules/
 .next/
